@@ -9,7 +9,7 @@ from sim.units import UnitGroup, PlayerID
 from sim.orders import MoveOrder, Order
 from sim.map import GameMap
 from sim.pathfinding import bfs_path
-
+from sim.combat import collect_battles
 
 class InterceptionOutcome(Enum):
     STOP_AND_MARK_COMBAT = auto()
@@ -164,7 +164,7 @@ class GameState:
                 contested.add(hx)
         return contested
 
-    def resolve_exploration_phase(self) -> list[Hex]:
+    def resolve_exploration_phase(self, ended_hexes: set[Hex] | None = None) -> list[Hex]:
         """
         Base behavior requested:
           - enemy markers visible always (that’s rendering; not here)
@@ -174,14 +174,17 @@ class GameState:
           - any active-player group present at end of turn explores its hex if unexplored
         """
         explored_now: list[Hex] = []
-        for g in self.unit_groups.values():
-            if g.owner != self.active_player:
+        if ended_hexes is None:
+            ended_hexes = set()
+
+        for hx in ended_hexes:
+            # Only explore if active player still has a group here after combat
+            if not any(g.owner == self.active_player and g.location == hx for g in self.unit_groups.values()):
                 continue
-            hx = g.location
-            if hasattr(self, "game_map") and self.game_map is not None:
-                if not self.game_map.is_explored(hx):
-                    self.game_map.set_explored(hx)
-                    explored_now.append(hx)
+            if self.game_map and not self.game_map.is_explored(hx):
+                self.game_map.set_explored(hx)
+                explored_now.append(hx)
+
         return explored_now
 
     # -----------------------------
@@ -411,10 +414,14 @@ class GameState:
         combat_sites: set[Hex] = set()
         events.append("PHASE: Movement")
 
+        ended_hexes: set[Hex] = set()
+
         for idx, order in enumerate(list(orders), start=1):
             if isinstance(order, MoveOrder):
                 ok, msg, final_hex, sites = self.apply_move_movement_phase(order.group_id, order.dest)
                 combat_sites |= sites
+                if ok:
+                    ended_hexes.add(final_hex)
                 events.append(f"  {idx}. {order} -> {msg}")
 
         # Clear orders after movement application (boardgame style)
@@ -429,21 +436,21 @@ class GameState:
         # 2) COMBAT PHASE
         # --------------
         events.append("PHASE: Combat")
-        for hx in sorted(combat_sites, key=lambda h: (h.q, h.r)):
-            # Only resolve if still contested at resolution time
-            owners = {g.owner for g in self.groups_at(hx)}
-            if len(owners) < 2:
-                continue
-            events.append(f"  Combat at {hx}")
-            # resolve_combat_simple should do reveal + casualties
-            for e in self.resolve_combat_simple(self.active_player, hx):
-                events.append(f"    {e}")
+
+        battles = collect_battles(self, combat_sites)
+        if not battles:
+            events.append("  (no battles)")
+        else:
+            for b in battles:
+                events.append(f"  Combat at {b.location}")
+                for e in self.resolve_combat_simple(self.active_player, b.location):
+                    events.append(f"    {e}")
 
         # -------------------
         # 3) EXPLORATION PHASE
         # -------------------
         events.append("PHASE: Exploration")
-        explored_now = self.resolve_exploration_phase()
+        explored_now = self.resolve_exploration_phase(ended_hexes)
         for hx in explored_now:
             events.append(f"  Explored {hx}")
 

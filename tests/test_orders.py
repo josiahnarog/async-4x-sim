@@ -92,3 +92,30 @@ def test_submit_move_fails_if_no_path():
     # G1 should still be at (0,0)
     assert game.get_group("G1").location == Hex(0, 0)
     assert any("No path" in e or "blocked" in e for e in events)
+
+
+def test_exploration_only_on_ended_hexes():
+    game = build_game()
+    # Assume start hex (0,0) is unexplored at game start
+    start = Hex(0,0)
+    if hasattr(game, "game_map"):
+        assert not game.game_map.is_explored(start)
+
+    # Submit with NO move orders
+    events = game.submit_orders()
+    # Should not explore anything just because a ship exists somewhere
+    if hasattr(game, "game_map"):
+        assert not game.game_map.is_explored(start)
+
+
+def test_exploration_after_successful_move():
+    game = build_game()
+    dest = Hex(1,0)
+    if hasattr(game, "game_map"):
+        assert not game.game_map.is_explored(dest)
+
+    game.queue_move("G1", dest)
+    game.submit_orders()
+
+    if hasattr(game, "game_map"):
+        assert game.game_map.is_explored(dest)
