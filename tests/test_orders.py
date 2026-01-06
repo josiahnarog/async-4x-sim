@@ -77,3 +77,18 @@ def test_interception_removes_defender_on_submit():
     game.submit_orders()
 
     assert game.get_group("G2") is None
+
+
+def test_submit_move_fails_if_no_path():
+    game = build_game()
+    # Block a ring or specifically block the goal:
+    game.game_map.block(Hex(1, 0))
+    game.game_map.block(Hex(1, -1))
+    game.game_map.block(Hex(0, -1))
+    # try to reach (1,0) which is blocked
+    ok, _ = game.queue_move("G1", Hex(1, 0))
+    assert ok
+    events = game.submit_orders()
+    # G1 should still be at (0,0)
+    assert game.get_group("G1").location == Hex(0, 0)
+    assert any("No path" in e or "blocked" in e for e in events)

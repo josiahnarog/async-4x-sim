@@ -7,7 +7,8 @@ from typing import Dict, Set, Optional, List, Tuple
 from sim.hexgrid import Hex, hex_distance, greedy_path
 from sim.units import UnitGroup, PlayerID
 from sim.orders import MoveOrder, Order
-
+from sim.map import GameMap
+from sim.pathfinding import bfs_path
 
 class GameState:
     def __init__(self):
@@ -22,6 +23,7 @@ class GameState:
         self.next_marker_index: Dict[PlayerID, int] = {}  # viewer -> next int
         # --- Orders (per-player pending plan) ---
         self.pending_orders = {}  # PlayerID -> list[Order]
+        self.game_map = GameMap(q_min=-5, q_max=5, r_min=-5, r_max=5)
 
     # -----------------------------
     # Basic state helpers
@@ -201,16 +203,19 @@ class GameState:
         if dist > move_allowance:
             return False, f"Out of range (distance {dist}, movement {move_allowance})."
 
-        path = greedy_path(start, dest, max_steps=move_allowance)
-        if not path or path[-1] != dest:
-            return False, f"Could not find a path to {dest} (pathing is still prototype)."
+        path = bfs_path(self.game_map, start, dest)
+        if path is None:
+            return False, f"No path to {dest} (blocked or out of bounds)."
+
+        # path length is number of steps
+        if len(path) > move_allowance:
+            return False, f"Out of range via path (steps {len(path)}, movement {move_allowance})."
 
         # Walk the path
         for step_hex in path:
             g.location = step_hex
 
-            # Check interception AFTER entering the hex
-            enemies_here = self.groups_at_enemy_of(step_hex, g.owner)
+            enemies_here = [x for x in self.groups_at(step_hex) if x.owner != g.owner]
             if enemies_here:
                 self.log.append(f"{g.group_id} intercepts enemy at {step_hex}.")
                 for e in self.resolve_combat_simple(g.owner, step_hex):

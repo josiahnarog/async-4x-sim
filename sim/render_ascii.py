@@ -18,10 +18,15 @@ def render_map_ascii(game, viewer, padding: int = 2) -> str:
     if not groups:
         return "(no groups on map)"
 
-    qs = [g.location.q for g in groups]
-    rs = [g.location.r for g in groups]
-    min_q, max_q = min(qs) - padding, max(qs) + padding
-    min_r, max_r = min(rs) - padding, max(rs) + padding
+    if hasattr(game, "game_map") and game.game_map is not None:
+        min_q, max_q = game.game_map.q_min, game.game_map.q_max
+        min_r, max_r = game.game_map.r_min, game.game_map.r_max
+    else:
+        # fallback: derive from group positions + padding (your current behavior)
+        qs = [g.location.q for g in groups]
+        rs = [g.location.r for g in groups]
+        min_q, max_q = min(qs) - padding, max(qs) + padding
+        min_r, max_r = min(rs) - padding, max(rs) + padding
 
     # Build occupancy lists
     by_hex = {}
@@ -44,28 +49,39 @@ def render_map_ascii(game, viewer, padding: int = 2) -> str:
             occ = by_hex.get((q, r), [])
             cell = ".."
 
-            if occ:
-                # Separate into friendly/enemy for this viewer
-                friendly = [g for g in occ if g.owner == viewer]
-                enemy = [g for g in occ if g.owner != viewer]
+            h = Hex(q, r)
+            if hasattr(game, "game_map") and (not game.game_map.in_bounds(h)):
+                cell = "  "  # outside map; blank
+                row.append(cell)
+                continue
+            elif hasattr(game, "game_map") and game.game_map.is_blocked(h):
+                cell = "##"
+                row.append(cell)
+                continue
+            else:
 
-                if friendly and enemy:
-                    cell = "**"  # contested / mixed (combat should usually prevent this)
-                elif friendly:
-                    # If multiple friendly groups stacked, show "G*"
-                    cell = "G*" if len(friendly) > 1 else friendly[0].group_id[:2].rjust(2)
-                else:
-                    # Enemy only
-                    if len(enemy) > 1:
-                        cell = "M*"
+                if occ:
+                    # Separate into friendly/enemy for this viewer
+                    friendly = [g for g in occ if g.owner == viewer]
+                    enemy = [g for g in occ if g.owner != viewer]
+
+                    if friendly and enemy:
+                        cell = "**"  # contested / mixed (combat should usually prevent this)
+                    elif friendly:
+                        # If multiple friendly groups stacked, show "G*"
+                        cell = "G*" if len(friendly) > 1 else friendly[0].group_id[:2].rjust(2)
                     else:
-                        eg = enemy[0]
-                        if game.is_revealed(viewer, eg.group_id):
-                            cell = "R!"  # revealed enemy (placeholder)
+                        # Enemy only
+                        if len(enemy) > 1:
+                            cell = "M*"
                         else:
-                            m = game.get_marker_id(viewer, eg.group_id)
-                            cell = m[-2:].rjust(2)  # keep 2 chars; M1, M2, ...
-            row.append(cell)
+                            eg = enemy[0]
+                            if game.is_revealed(viewer, eg.group_id):
+                                cell = "R!"  # revealed enemy (placeholder)
+                            else:
+                                m = game.get_marker_id(viewer, eg.group_id)
+                                cell = m[-2:].rjust(2)  # keep 2 chars; M1, M2, ...
+                row.append(cell)
 
         lines.append(" ".join(row))
 

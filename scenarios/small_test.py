@@ -1,9 +1,11 @@
 from sim.hexgrid import Hex
 from sim.units import PlayerID, UnitType, UnitGroup
 from sim.turn_engine import GameState
+from sim.map import GameMap
 
 def build_game():
     game = GameState()
+    game.game_map = GameMap(q_min=-4, q_max=4, r_min=-4, r_max=4)
 
     # Players
     p1 = PlayerID("A")

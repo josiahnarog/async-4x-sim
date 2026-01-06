@@ -85,8 +85,54 @@ def run_repl(game):
             for e in events:
                 print(e)
 
+        elif cmd.startswith("block "):
+            parts = raw.split()
+            if len(parts) != 3:
+                print("Usage: block <q> <r>")
+            else:
+                q, r = int(parts[1]), int(parts[2])
+                from sim.hexgrid import Hex
+                h = Hex(q, r)
+                game.game_map.block(h)
+                print(f"Blocked {h}")
+
+        elif cmd.startswith("unblock "):
+            parts = raw.split()
+            if len(parts) != 3:
+                print("Usage: unblock <q> <r>")
+            else:
+                q, r = int(parts[1]), int(parts[2])
+                from sim.hexgrid import Hex
+                h = Hex(q, r)
+                game.game_map.unblock(h)
+                print(f"Unblocked {h}")
+
+        elif cmd.startswith("path "):
+            parts = raw.split()
+            if len(parts) != 4:
+                print("Usage: path <GROUP_ID> <q> <r>")
+            else:
+                gid = parts[1].upper()
+                q, r = int(parts[2]), int(parts[3])
+                from sim.hexgrid import Hex
+                from sim.pathfinding import bfs_path
+
+                g = game.get_group(gid)
+                if not g:
+                    print("No such group.")
+                else:
+                    dest = Hex(q, r)
+                    path = bfs_path(game.game_map, g.location, dest)
+                    if path is None:
+                        print("No path.")
+                    else:
+                        print("Path:", " -> ".join(str(h) for h in path))
+                        print(f"Steps: {len(path)}  Movement: {g.movement}")
+
+
         else:
             print("Unknown command")
+
 
 
 def show_mygroups(game):
