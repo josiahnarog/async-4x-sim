@@ -12,6 +12,7 @@ class GameMap:
     r_min: int
     r_max: int
     blocked: Set[Hex] = field(default_factory=set)
+    explored: Set[Hex] = field(default_factory=set)  # global explored tiles for now
 
     def in_bounds(self, h: Hex) -> bool:
         return self.q_min <= h.q <= self.q_max and self.r_min <= h.r <= self.r_max
@@ -28,6 +29,13 @@ class GameMap:
 
     def unblock(self, h: Hex) -> None:
         self.blocked.discard(h)
+
+    def is_explored(self, h: Hex) -> bool:
+        return h in self.explored
+
+    def set_explored(self, h: Hex) -> None:
+        if self.in_bounds(h):
+            self.explored.add(h)
 
     def neighbors_passable(self, h: Hex) -> Iterable[Hex]:
         for n in h.neighbors():
