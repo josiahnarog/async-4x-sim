@@ -436,8 +436,8 @@ class GameState:
         # 2) COMBAT PHASE
         # --------------
         events.append("PHASE: Combat")
-
         battles = collect_battles(self, combat_sites)
+
         if not battles:
             events.append("  (no battles)")
         else:

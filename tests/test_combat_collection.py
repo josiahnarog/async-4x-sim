@@ -2,8 +2,7 @@ from sim.hexgrid import Hex
 from sim.combat import collect_battles
 
 
-def test_collect_battles_finds_contested_hex(build_game):
-    game = build_game()
+def test_collect_battles_finds_contested_hex(game):
 
     # In your default scenario, enemy at (2,0), friendly at (0,0)
     # Move into enemy to create a combat site on submit
