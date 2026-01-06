@@ -1,8 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
-
+from typing import Dict, List, Optional, Tuple
 from sim.hexgrid import Hex
+from sim.units import PlayerID
 
 
 @dataclass(frozen=True)
@@ -13,72 +13,60 @@ class RenderBounds:
     r_max: int
 
 
-def _owner_char(owner_name: str) -> str:
-    # Display single-letter owner marker (A, B, C...)
-    if not owner_name:
-        return "?"
-    return owner_name.strip()[0].upper()
-
-
-def render_map_ascii(game, bounds: Optional[RenderBounds] = None) -> str:
-    """
-        Renders axial coords (q,r) as a simple offset grid:
-          - Rows are r
-          - Columns are q
-          - Odd/even row indentation gives a hex-ish feel
-
-        Cell content:
-          - Your groups: group_id (e.g. G1)
-          - Enemy groups: ?? (marker only)
-          - Multiple groups in one hex: *
-          - Empty: ..
-        """
+def render_map_ascii(game, viewer, padding: int = 2) -> str:
     groups = list(game.unit_groups.values())
+    if not groups:
+        return "(no groups on map)"
 
-    # Determine bounds around existing groups (or default bounds)
-    if groups:
-        qs = [g.location.q for g in groups]
-        rs = [g.location.r for g in groups]
-        min_q, max_q = min(qs) - 2, max(qs) + 2
-        min_r, max_r = min(rs) - 2, max(rs) + 2
-    else:
-        min_q, max_q = -3, 3
-        min_r, max_r = -3, 3
+    qs = [g.location.q for g in groups]
+    rs = [g.location.r for g in groups]
+    min_q, max_q = min(qs) - padding, max(qs) + padding
+    min_r, max_r = min(rs) - padding, max(rs) + padding
 
-    # Build lookup: (q,r) -> list[groups]
+    # Build occupancy lists
     by_hex = {}
     for g in groups:
         by_hex.setdefault((g.location.q, g.location.r), []).append(g)
 
-    print(f"Map bounds: q[{min_q}..{max_q}] r[{min_r}..{max_r}]")
-    print("Legend: your group_id | enemy ?? | multiple * | empty ..\n")
+    lines = []
+    lines.append(f"Map view for Player {viewer} (Turn {game.turn_number})")
+    lines.append("Legend: .. empty | G? your group | M# enemy marker | ** mixed/stack")
+    lines.append("")
 
-    # Header row (q labels)
-    header_cells = [f"{q:>2}" for q in range(min_q, max_q + 1)]
-    print("      " + " ".join(header_cells))
+    header = "      " + " ".join(f"{q:>2}" for q in range(min_q, max_q + 1))
+    lines.append(header)
 
     for r in range(min_r, max_r + 1):
         indent = "  " if (r - min_r) % 2 == 1 else ""
         row = [f"r={r:>2}  {indent}"]
 
         for q in range(min_q, max_q + 1):
+            occ = by_hex.get((q, r), [])
             cell = ".."
-            occupants = by_hex.get((q, r), [])
 
-            if occupants:
-                if len(occupants) >= 2:
-                    cell = " *"
+            if occ:
+                # Separate into friendly/enemy for this viewer
+                friendly = [g for g in occ if g.owner == viewer]
+                enemy = [g for g in occ if g.owner != viewer]
+
+                if friendly and enemy:
+                    cell = "**"  # contested / mixed (combat should usually prevent this)
+                elif friendly:
+                    # If multiple friendly groups stacked, show "G*"
+                    cell = "G*" if len(friendly) > 1 else friendly[0].group_id[:2].rjust(2)
                 else:
-                    g = occupants[0]
-                    if g.owner == game.active_player:
-                        # show group id, truncated/padded to 2 chars
-                        cell = f"{g.group_id[:2]:>2}"
+                    # Enemy only
+                    if len(enemy) > 1:
+                        cell = "M*"
                     else:
-                        cell = "??"
-
+                        eg = enemy[0]
+                        if game.is_revealed(viewer, eg.group_id):
+                            cell = "R!"  # revealed enemy (placeholder)
+                        else:
+                            m = game.get_marker_id(viewer, eg.group_id)
+                            cell = m[-2:].rjust(2)  # keep 2 chars; M1, M2, ...
             row.append(cell)
 
-        print(" ".join(row))
+        lines.append(" ".join(row))
 
-    print("")  # trailing newline for REPL readability
-
+    return "\n".join(lines)

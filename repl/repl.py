@@ -1,11 +1,10 @@
-from sim.render_ascii import render_map_ascii, RenderBounds
+from sim.render_ascii import render_map_ascii
 from sim.hexgrid import Hex
-from sim.movement import move_group
 
 
 def run_repl(game):
     print("Async 4X Simulator")
-    print("Type 'help' for commands.\n")
+    print("Type 'help' for commands. Type 'exit' to quit.\n")
 
     while True:
         prompt = f"[Turn {game.turn_number} | Player {game.active_player}]> "
@@ -16,14 +15,17 @@ def run_repl(game):
 
         elif cmd == "help":
             print("Commands:")
-            print("  map                 - show visible map")
-            print("  mygroups            - list your groups")
-            print("  move G1 q r         - move group to axial hex (q,r)")
-            print("  log                 - show recent game log")
-            print("  end                 - end your turn")
+            print("  map                         - show ascii map (fog-aware)")
+            print("  mygroups                     - list your groups (full info)")
+            print("  inspect <group_id>           - inspect a group you own (full) or enemy marker (limited)")
+            print("  stack <q> <r>                - list groups at a hex (fog-aware)")
+            print("  move <group_id> <q> <r>      - move one group (range + interception)")
+            print("  movefleet <q> <r> <q2> <r2>  - move all your groups from one hex (range + interception)")
+            print("  log                          - show recent game log")
+            print("  end                          - end your turn")
 
         elif cmd == "map":
-            render_map_ascii(game)
+            print(render_map_ascii(game, game.active_player))
 
         elif cmd == "mygroups":
             show_mygroups(game)
@@ -38,60 +40,78 @@ def run_repl(game):
             else:
                 inspect_group(game, parts[1].upper())
 
+        elif cmd.startswith("stack "):
+            handle_stack(game, cmd)
+
+        elif cmd.startswith("movefleet "):
+            handle_movefleet(game, cmd)
+
         elif cmd.startswith("move "):
             handle_move(game, cmd)
 
         elif cmd == "log":
-            # show last ~20 messages
-            for line in game.log[-20:]:
-                print(" ", line)
+            if not game.log:
+                print("(no events)")
+            else:
+                for line in game.log[-20:]:
+                    print(" ", line)
 
         else:
             print("Unknown command")
 
 
-def show_map(game):
-    bounds = RenderBounds(-3, 3, -3, 3)
-    print(render_map_ascii(game, bounds=bounds))
-
-
 def show_mygroups(game):
+    found = False
     for g in game.unit_groups.values():
         if g.owner == game.active_player:
+            found = True
             print(f"  {g.group_id} ({g.unit_type.name}, {g.count}) at {g.location}")
+    if not found:
+        print("  (none)")
 
 
-def inspect_group(game, group_id):
-    group = game.unit_groups.get(group_id)
-
-    if not group:
-        print("No such group.")
+def inspect_group(game, token: str):
+    gid = game.resolve_group_id_from_token(game.active_player, token)
+    if not gid:
+        print("No such group (or unknown marker).")
         return
 
-    # Fog-of-war rule:
-    # You may inspect if you own it
-    if group.owner == game.active_player:
-        print(f"Group {group.group_id}")
-        print(f"  Owner: {group.owner}")
-        print(f"  Type: {group.unit_type.name}")
-        print(f"  Count: {group.count}")
-        print(f"  Tech level: {group.tech_level}")
-        print(f"  Location: {group.location}")
+    g = game.unit_groups.get(gid)
+    if not g:
+        print("That group no longer exists.")
+        return
+
+    if g.owner == game.active_player:
+        print(f"{g.group_id} (OWNER VIEW)")
+        print(f"  Type: {g.unit_type.name}")
+        print(f"  Count: {g.count}")
+        print(f"  Tech level: {g.tech_level}")
+        print(f"  Location: {g.location}")
+        return
+
+    # Enemy group:
+    if game.is_revealed(game.active_player, g.group_id):
+        print(f"{g.group_id} (REVEALED ENEMY)")
+        print(f"  Owner: {g.owner}")
+        print(f"  Type: {g.unit_type.name}")
+        print(f"  Count: {g.count}")
+        print(f"  Tech level: {g.tech_level}")
+        print(f"  Location: {g.location}")
     else:
-        print(f"Group {group.group_id}")
-        print(f"  Owner: {group.owner}")
-        print("  Details unknown (fog of war)")
+        mid = game.get_marker_id(game.active_player, g.group_id)
+        print(f"{mid} (ENEMY MARKER)")
+        print(f"  Location: {g.location}")
+        print("  Details hidden until revealed")
 
 
 def handle_move(game, cmd: str) -> None:
-    # Usage: move G1 1 0
     parts = cmd.split()
     if len(parts) != 4:
         print("Usage: move <GROUP_ID> <q> <r>")
         return
 
     _, group_id, q_str, r_str = parts
-    group_id = group_id.upper()  # normalize so "g1" works too
+    group_id = group_id.upper()
 
     try:
         q = int(q_str)
@@ -100,6 +120,70 @@ def handle_move(game, cmd: str) -> None:
         print("q and r must be integers. Example: move G1 1 0")
         return
 
-    from sim.hexgrid import Hex
     ok, msg = game.move_group(group_id, Hex(q, r))
     print(msg)
+
+
+def handle_movefleet(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 5:
+        print("Usage: movefleet <q> <r> <q2> <r2>")
+        return
+
+    _, q1s, r1s, q2s, r2s = parts
+    try:
+        q1, r1, q2, r2 = int(q1s), int(r1s), int(q2s), int(r2s)
+    except ValueError:
+        print("All coordinates must be integers. Example: movefleet 0 0 2 0")
+        return
+
+    msgs = game.move_fleet(Hex(q1, r1), Hex(q2, r2))
+    for m in msgs:
+        print(m)
+
+
+def handle_stack(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 3:
+        print("Usage: stack <q> <r>")
+        return
+
+    _, qs, rs = parts
+    try:
+        q, r = int(qs), int(rs)
+    except ValueError:
+        print("q and r must be integers. Example: stack 0 0")
+        return
+
+    hx = Hex(q, r)
+    groups = game.groups_at(hx)
+    if not groups:
+        print(f"(no groups at {hx})")
+        return
+
+    print(f"Groups at {hx}:")
+    for g in groups:
+        if g.owner == game.active_player:
+            print(f"  {g.group_id} ({g.unit_type.name}, {g.count}, tech {g.tech_level}) owner {g.owner}")
+        else:
+            print(f"  ?? (enemy marker) owner {g.owner}")
+
+
+def show_stack(game, q: int, r: int):
+    from sim.hexgrid import Hex
+    h = Hex(q, r)
+    occ = game.groups_at(h)
+    if not occ:
+        print("(empty)")
+        return
+
+    print(f"Stack at {h}:")
+    for g in occ:
+        if g.owner == game.active_player:
+            print(f"  {g.group_id}: {g.unit_type.name} x{g.count} (t{g.tech_level})")
+        else:
+            if game.is_revealed(game.active_player, g.group_id):
+                print(f"  {g.group_id} (revealed): {g.unit_type.name} x{g.count} (t{g.tech_level}) owner={g.owner}")
+            else:
+                mid = game.get_marker_id(game.active_player, g.group_id)
+                print(f"  {mid}: enemy group (hidden)")
