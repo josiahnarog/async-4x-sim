@@ -28,6 +28,7 @@ def run_repl(game):
             print("  undo                         - remove most recent order from queue")
             print("  submit                       - submit all orders and end turn")
             print("  move!                        - immediately execute move as server command")
+            print("  explored                     - print explored hexes")
 
         elif cmd == "map":
             print(render_map_ascii(game, game.active_player))
@@ -129,6 +130,16 @@ def run_repl(game):
                         print("Path:", " -> ".join(str(h) for h in path))
                         print(f"Steps: {len(path)}  Movement: {g.movement}")
 
+        elif cmd == "explored":
+            if hasattr(game, "game_map") and game.game_map is not None and hasattr(game.game_map, "explored"):
+                xs = sorted(game.game_map.explored, key=lambda h: (h.q, h.r))
+                print(f"Explored tiles: {len(xs)}")
+                for h in xs[:30]:
+                    print(" ", h)
+                if len(xs) > 30:
+                    print("  ...")
+            else:
+                print("No exploration state on map.")
 
         else:
             print("Unknown command")
