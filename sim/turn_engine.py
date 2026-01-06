@@ -1,7 +1,7 @@
 # sim/turn_engine.py
 
 from __future__ import annotations
-
+from enum import Enum, auto
 from typing import Dict, Set, Optional, List, Tuple
 
 from sim.hexgrid import Hex, hex_distance, greedy_path
@@ -9,6 +9,13 @@ from sim.units import UnitGroup, PlayerID
 from sim.orders import MoveOrder, Order
 from sim.map import GameMap
 from sim.pathfinding import bfs_path
+
+
+class InterceptionOutcome(Enum):
+    STOP_AND_MARK_COMBAT = auto()
+    PASS_THROUGH = auto()
+    PASS_THROUGH_DESTROY_NONCOMBAT = auto()
+
 
 class GameState:
     def __init__(self):
@@ -24,6 +31,15 @@ class GameState:
         # --- Orders (per-player pending plan) ---
         self.pending_orders = {}  # PlayerID -> list[Order]
         self.game_map = GameMap(q_min=-5, q_max=5, r_min=-5, r_max=5)
+
+    def interception_policy(self, mover, enemy_groups, at_hex: Hex) -> InterceptionOutcome:
+        """
+        Hook for later rules:
+          - if enemy groups are all non-combat -> destroy them and pass through
+          - if mover cloak > enemy sensors -> pass through
+        For now: always stop and mark combat.
+        """
+        return InterceptionOutcome.STOP_AND_MARK_COMBAT
 
     # -----------------------------
     # Basic state helpers
@@ -138,6 +154,36 @@ class GameState:
         if self.active_player == self.players[0]:
             self.turn_number += 1
 
+    def find_contested_hexes(self) -> set[Hex]:
+        contested: set[Hex] = set()
+        by_hex: dict[Hex, set] = {}
+        for g in self.unit_groups.values():
+            by_hex.setdefault(g.location, set()).add(g.owner)
+        for hx, owners in by_hex.items():
+            if len(owners) >= 2:
+                contested.add(hx)
+        return contested
+
+    def resolve_exploration_phase(self) -> list[Hex]:
+        """
+        Base behavior requested:
+          - enemy markers visible always (that’s rendering; not here)
+          - exploration applies to tiles, triggered when a ship ends its turn in the tile
+        For now:
+          - global explored tiles
+          - any active-player group present at end of turn explores its hex if unexplored
+        """
+        explored_now: list[Hex] = []
+        for g in self.unit_groups.values():
+            if g.owner != self.active_player:
+                continue
+            hx = g.location
+            if hasattr(self, "game_map") and self.game_map is not None:
+                if not self.game_map.is_explored(hx):
+                    self.game_map.set_explored(hx)
+                    explored_now.append(hx)
+        return explored_now
+
     # -----------------------------
     # Combat (placeholder)
     # -----------------------------
@@ -249,6 +295,62 @@ class GameState:
             # keep it simple for now and continue.
         return msgs
 
+    def apply_move_movement_phase(self, group_id: str, dest: Hex) -> tuple[bool, str, Hex, set[Hex]]:
+        """
+        Movement phase move:
+          - Uses BFS path
+          - May STOP on enemy contact (policy)
+          - NEVER resolves combat here
+        Returns:
+          (ok, message, final_hex, combat_sites)
+        """
+        g = self.get_group(group_id)
+        if not g:
+            return False, "No such group.", dest, set()
+
+        if g.owner != self.active_player:
+            return False, "You don't control that group.", g.location, set()
+
+        start = g.location
+        if start == dest:
+            return False, f"{g.group_id} is already at {dest}.", start, set()
+
+        path = bfs_path(self.game_map, start, dest)
+        if path is None:
+            return False, f"No path to {dest} (blocked or out of bounds).", start, set()
+
+        if len(path) > g.movement:
+            return False, f"Out of range via path (steps {len(path)}, movement {g.movement}).", start, set()
+
+        combat_sites: set[Hex] = set()
+
+        for step_hex in path:
+            # Move 1 step
+            g.location = step_hex
+
+            # Enemy contact check at this hex
+            enemies_here = [x for x in self.groups_at(step_hex) if x.owner != g.owner]
+            if enemies_here:
+                outcome = self.interception_policy(g, enemies_here, step_hex)
+
+                if outcome == InterceptionOutcome.PASS_THROUGH:
+                    # allow continuing through; no combat site
+                    continue
+
+                if outcome == InterceptionOutcome.PASS_THROUGH_DESTROY_NONCOMBAT:
+                    # Stub: later, filter non-combat and destroy them.
+                    # For now, treat same as STOP (so nothing surprising happens).
+                    outcome = InterceptionOutcome.STOP_AND_MARK_COMBAT
+
+                # Default: stop and mark combat
+                combat_sites.add(step_hex)
+                self.log.append(f"{g.group_id} halted by enemy contact at {step_hex} (combat pending).")
+                return True, f"{g.group_id} halted at {step_hex} (combat pending).", step_hex, combat_sites
+
+        # Completed full path without contact
+        self.log.append(f"{g.group_id} moved from {start} to {dest}.")
+        return True, f"Moved {g.group_id} to {dest}.", dest, combat_sites
+
     # -----------------------------
     # Orders (step-by-step + interception)
     # -----------------------------
@@ -295,10 +397,6 @@ class GameState:
         return True, f"Cleared {n} order(s)."
 
     def submit_orders(self) -> list[str]:
-        """
-        Resolve all queued orders for the active player in order.
-        Returns list of event strings (also appended to game.log).
-        """
         self._ensure_order_queue(self.active_player)
         orders = self.pending_orders[self.active_player]
         if not orders:
@@ -307,21 +405,54 @@ class GameState:
         events: list[str] = []
         events.append(f"SUBMIT: {self.active_player} ({len(orders)} order(s))")
 
-        # Resolve in order. If a group is destroyed mid-plan, later orders referencing it will fail.
+        # -----------------
+        # 1) MOVEMENT PHASE
+        # -----------------
+        combat_sites: set[Hex] = set()
+        events.append("PHASE: Movement")
+
         for idx, order in enumerate(list(orders), start=1):
             if isinstance(order, MoveOrder):
-                ok, msg = self.move_group(order.group_id, order.dest)
-                # move_group already updates state + may append to log; we still return a clean summary here.
+                ok, msg, final_hex, sites = self.apply_move_movement_phase(order.group_id, order.dest)
+                combat_sites |= sites
                 events.append(f"  {idx}. {order} -> {msg}")
 
-        # Clear after resolution
+        # Clear orders after movement application (boardgame style)
         orders.clear()
 
-        # Append to global log
+        # Determine additional combat sites (convergence):
+        # Any hex that is contested after movement becomes a combat site.
+        contested = self.find_contested_hexes()
+        combat_sites |= contested
+
+        # --------------
+        # 2) COMBAT PHASE
+        # --------------
+        events.append("PHASE: Combat")
+        for hx in sorted(combat_sites, key=lambda h: (h.q, h.r)):
+            # Only resolve if still contested at resolution time
+            owners = {g.owner for g in self.groups_at(hx)}
+            if len(owners) < 2:
+                continue
+            events.append(f"  Combat at {hx}")
+            # resolve_combat_simple should do reveal + casualties
+            for e in self.resolve_combat_simple(self.active_player, hx):
+                events.append(f"    {e}")
+
+        # -------------------
+        # 3) EXPLORATION PHASE
+        # -------------------
+        events.append("PHASE: Exploration")
+        explored_now = self.resolve_exploration_phase()
+        for hx in explored_now:
+            events.append(f"  Explored {hx}")
+
+        # Append to log
         for e in events:
             self.log.append(e)
 
-        # End turn after submit (this is the key async behavior)
+        # End turn
         self.end_turn()
         events.append(f"Now active: {self.active_player}")
         return events
+
