@@ -6,6 +6,7 @@ from typing import Dict, Set, Optional, List, Tuple
 
 from sim.hexgrid import Hex, hex_distance, greedy_path
 from sim.units import UnitGroup, PlayerID
+from sim.orders import MoveOrder, Order
 
 
 class GameState:
@@ -19,6 +20,8 @@ class GameState:
         self.marker_for_viewer: Dict[PlayerID, Dict[str, str]] = {}  # viewer -> {group_id: "M1"}
         self.group_for_viewer_marker: Dict[PlayerID, Dict[str, str]] = {}  # viewer -> {"M1": group_id}
         self.next_marker_index: Dict[PlayerID, int] = {}  # viewer -> next int
+        # --- Orders (per-player pending plan) ---
+        self.pending_orders = {}  # PlayerID -> list[Order]
 
     # -----------------------------
     # Basic state helpers
@@ -168,12 +171,6 @@ class GameState:
 
         return events
 
-        for d in defenders:
-            events.append(f"Defender {d.group_id} destroyed.")
-            self.remove_group(d.group_id)
-
-        return events
-
     # -----------------------------
     # Movement (step-by-step + interception)
     # -----------------------------
@@ -247,3 +244,79 @@ class GameState:
             # keep it simple for now and continue.
         return msgs
 
+    # -----------------------------
+    # Orders (step-by-step + interception)
+    # -----------------------------
+
+    def _ensure_order_queue(self, player):
+        if player not in self.pending_orders:
+            self.pending_orders[player] = []
+
+    def queue_move(self, group_id: str, dest: Hex) -> tuple[bool, str]:
+        """
+        Queue a move order for the active player. Does NOT change game state.
+        Validation here is intentionally light; the authoritative validation
+        happens on submit (so future rules changes don't break old queues).
+        """
+        self._ensure_order_queue(self.active_player)
+
+        group_id = group_id.upper()
+        g = self.get_group(group_id)
+        if not g:
+            return False, "No such group."
+        if g.owner != self.active_player:
+            return False, "You don't control that group."
+
+        self.pending_orders[self.active_player].append(MoveOrder(group_id=group_id, dest=dest))
+        return True, f"Queued: move {group_id} to {dest}"
+
+    def list_orders(self, player=None) -> list[Order]:
+        if player is None:
+            player = self.active_player
+        self._ensure_order_queue(player)
+        return list(self.pending_orders[player])
+
+    def undo_last_order(self) -> tuple[bool, str]:
+        self._ensure_order_queue(self.active_player)
+        if not self.pending_orders[self.active_player]:
+            return False, "No orders to undo."
+        last = self.pending_orders[self.active_player].pop()
+        return True, f"Undid: {last}"
+
+    def clear_orders(self) -> tuple[bool, str]:
+        self._ensure_order_queue(self.active_player)
+        n = len(self.pending_orders[self.active_player])
+        self.pending_orders[self.active_player].clear()
+        return True, f"Cleared {n} order(s)."
+
+    def submit_orders(self) -> list[str]:
+        """
+        Resolve all queued orders for the active player in order.
+        Returns list of event strings (also appended to game.log).
+        """
+        self._ensure_order_queue(self.active_player)
+        orders = self.pending_orders[self.active_player]
+        if not orders:
+            return ["No orders to submit."]
+
+        events: list[str] = []
+        events.append(f"SUBMIT: {self.active_player} ({len(orders)} order(s))")
+
+        # Resolve in order. If a group is destroyed mid-plan, later orders referencing it will fail.
+        for idx, order in enumerate(list(orders), start=1):
+            if isinstance(order, MoveOrder):
+                ok, msg = self.move_group(order.group_id, order.dest)
+                # move_group already updates state + may append to log; we still return a clean summary here.
+                events.append(f"  {idx}. {order} -> {msg}")
+
+        # Clear after resolution
+        orders.clear()
+
+        # Append to global log
+        for e in events:
+            self.log.append(e)
+
+        # End turn after submit (this is the key async behavior)
+        self.end_turn()
+        events.append(f"Now active: {self.active_player}")
+        return events

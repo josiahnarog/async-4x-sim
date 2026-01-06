@@ -8,7 +8,8 @@ def run_repl(game):
 
     while True:
         prompt = f"[Turn {game.turn_number} | Player {game.active_player}]> "
-        cmd = input(prompt).strip().lower()
+        raw = input(prompt).strip()
+        cmd = raw.lower()
 
         if cmd in ("quit", "exit"):
             break
@@ -23,6 +24,10 @@ def run_repl(game):
             print("  movefleet <q> <r> <q2> <r2>  - move all your groups from one hex (range + interception)")
             print("  log                          - show recent game log")
             print("  end                          - end your turn")
+            print("  orders                       - display current order queue")
+            print("  undo                         - remove most recent order from queue")
+            print("  submit                       - submit all orders and end turn")
+            print("  move!                        - immediately execute move as server command")
 
         elif cmd == "map":
             print(render_map_ascii(game, game.active_player))
@@ -46,8 +51,11 @@ def run_repl(game):
         elif cmd.startswith("movefleet "):
             handle_movefleet(game, cmd)
 
+        elif cmd.startswith("move! "):
+            handle_move(game, cmd.replace("move!", "move", 1).strip(), execute_immediately=True)
+
         elif cmd.startswith("move "):
-            handle_move(game, cmd)
+            handle_move(game, cmd, execute_immediately=False)
 
         elif cmd == "log":
             if not game.log:
@@ -55,6 +63,27 @@ def run_repl(game):
             else:
                 for line in game.log[-20:]:
                     print(" ", line)
+
+        elif cmd == "orders":
+            orders = game.list_orders()
+            if not orders:
+                print("(no pending orders)")
+            else:
+                for i, o in enumerate(orders, start=1):
+                    print(f"  {i}. {o}")
+
+        elif cmd == "undo":
+            ok, msg = game.undo_last_order()
+            print(msg)
+
+        elif cmd == "clearorders":
+            ok, msg = game.clear_orders()
+            print(msg)
+
+        elif cmd == "submit":
+            events = game.submit_orders()
+            for e in events:
+                print(e)
 
         else:
             print("Unknown command")
@@ -104,23 +133,28 @@ def inspect_group(game, token: str):
         print("  Details hidden until revealed")
 
 
-def handle_move(game, cmd: str) -> None:
+def handle_move(game, cmd: str, execute_immediately: bool = False) -> None:
     parts = cmd.split()
     if len(parts) != 4:
         print("Usage: move <GROUP_ID> <q> <r>")
         return
 
     _, group_id, q_str, r_str = parts
-    group_id = group_id.upper()
-
+    group_id = group_id.strip().upper()
     try:
-        q = int(q_str)
-        r = int(r_str)
+        q = int(q_str); r = int(r_str)
     except ValueError:
-        print("q and r must be integers. Example: move G1 1 0")
+        print("q and r must be integers.")
         return
 
-    ok, msg = game.move_group(group_id, Hex(q, r))
+    dest = Hex(q, r)
+
+    if execute_immediately:
+        ok, msg = game.move_group(group_id, dest)
+        print(msg)
+        return
+
+    ok, msg = game.queue_move(group_id, dest)
     print(msg)
 
 
