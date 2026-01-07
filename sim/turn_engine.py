@@ -11,6 +11,7 @@ from sim.map import GameMap
 from sim.pathfinding import bfs_path
 from sim.combat import collect_battles
 
+
 class InterceptionOutcome(Enum):
     STOP_AND_MARK_COMBAT = auto()
     PASS_THROUGH = auto()
@@ -34,11 +35,17 @@ class GameState:
 
     def interception_policy(self, mover, enemy_groups, at_hex: Hex) -> InterceptionOutcome:
         """
-        Hook for later rules:
-          - if enemy groups are all non-combat -> destroy them and pass through
-          - if mover cloak > enemy sensors -> pass through
-        For now: always stop and mark combat.
+        Decide what happens when mover enters a hex with enemy groups.
         """
+        # Rule 1: all enemies are non-combatants → destroy & pass through
+        if self._all_noncombat(enemy_groups):
+            return InterceptionOutcome.PASS_THROUGH_DESTROY_NONCOMBAT
+
+        # Rule 2 (future): cloak vs sensors
+        # if mover.cloak_level > max(enemy.sensor_level):
+        #     return InterceptionOutcome.PASS_THROUGH
+
+        # Default: stop and fight later
         return InterceptionOutcome.STOP_AND_MARK_COMBAT
 
     # -----------------------------
@@ -196,7 +203,6 @@ class GameState:
           1) reveal all groups in the combat hex to all involved players
           2) attacker wins
           3) all defender groups in the hex are destroyed
-        Later: implement your boardgame's real combat and reveal logic.
         """
         events: List[str] = []
 
@@ -209,8 +215,8 @@ class GameState:
         for g in defenders:
             involved_players.add(g.owner)
 
-        # Reveal all groups in this hex to all involved players (before casualties)
-        events.extend(self.reveal_hex_to_players(hex_, viewers=list(involved_players)))
+        reveal_events = self.reveal_hex_to_players(hex_, viewers=list(involved_players)) or []
+        events.extend(reveal_events)
 
         if not defenders:
             events.append(f"Combat at {hex_} had no defenders (unexpected).")
@@ -221,6 +227,9 @@ class GameState:
             self.remove_group(d.group_id)
 
         return events
+
+    def _all_noncombat(self, groups) -> bool:
+        return all(not g.unit_type.is_combatant for g in groups)
 
     # -----------------------------
     # Movement (step-by-step + interception)
@@ -341,11 +350,16 @@ class GameState:
                     continue
 
                 if outcome == InterceptionOutcome.PASS_THROUGH_DESTROY_NONCOMBAT:
-                    # Stub: later, filter non-combat and destroy them.
-                    # For now, treat same as STOP (so nothing surprising happens).
-                    outcome = InterceptionOutcome.STOP_AND_MARK_COMBAT
+                    for e in enemies_here:
+                        if not e.unit_type.is_combatant:
+                            self.log.append(
+                                f"{e.group_id} ({e.unit_type.name}) destroyed during interception at {step_hex}."
+                            )
+                            self.remove_group(e.group_id)
+                    # continue moving
+                    continue
 
-                # Default: stop and mark combat
+                # STOP_AND_MARK_COMBAT
                 combat_sites.add(step_hex)
                 self.log.append(f"{g.group_id} halted by enemy contact at {step_hex} (combat pending).")
                 return True, f"{g.group_id} halted at {step_hex} (combat pending).", step_hex, combat_sites
@@ -462,4 +476,3 @@ class GameState:
         self.end_turn()
         events.append(f"Now active: {self.active_player}")
         return events
-

@@ -15,10 +15,11 @@ class PlayerID:
 
 
 class UnitType:
-    def __init__(self, name: str, max_groups: int, movement: int = 3):
+    def __init__(self, name, max_groups, movement, is_combatant: bool = True):
         self.name = name
         self.max_groups = max_groups
         self.movement = movement
+        self.is_combatant = is_combatant
 
 
 class UnitGroup:
