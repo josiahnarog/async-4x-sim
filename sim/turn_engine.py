@@ -1,16 +1,60 @@
 # sim/turn_engine.py
 
 from __future__ import annotations
+
+import random
+from collections import defaultdict
 from enum import Enum, auto
 from typing import Dict, Set, Optional, List, Tuple
 
 from sim.hexgrid import Hex, hex_distance, greedy_path
+from sim.targeting import focus_fire
 from sim.units import UnitGroup, PlayerID
 from sim.orders import MoveOrder, Order
 from sim.map import GameMap
 from sim.pathfinding import bfs_path
-from sim.combat import collect_battles
+from sim.combat import collect_battles, INIT_ORDER
 
+
+def _init_rank(letter: str) -> int:
+    return INIT_ORDER.get(letter, 99)
+
+
+def _volley_sort_key(g) -> Tuple[int, int, str]:
+    """
+    Global firing order key:
+      1) initiative bucket (A earliest)
+      2) tactics descending (higher tactics earlier within bucket)
+      3) stable tie-break (group_id)
+    """
+    return (_init_rank(getattr(g, "initiative", "Z")), -int(getattr(g, "tactics", 0)), str(g.group_id))
+
+
+def _ensure_damage_attr(g) -> None:
+    if not hasattr(g, "damage"):
+        setattr(g, "damage", 0)
+
+
+def _apply_hits_to_group(g, hits: int) -> Tuple[int, int]:
+    """
+    Apply 'hits' to a UnitGroup modeled as 'count' identical ships with hull points.
+    We track partial damage on the *current* ship in g.damage [0..hull-1].
+    Returns (ships_destroyed, remaining_hits_unused).
+    """
+    _ensure_damage_attr(g)
+
+    destroyed = 0
+    hull = max(1, int(g.hull))
+
+    while hits > 0 and g.count > 0:
+        g.damage += 1
+        hits -= 1
+        if g.damage >= hull:
+            g.count -= 1
+            destroyed += 1
+            g.damage = 0
+
+    return destroyed, hits
 
 class InterceptionOutcome(Enum):
     STOP_AND_MARK_COMBAT = auto()
@@ -32,6 +76,7 @@ class GameState:
         # --- Orders (per-player pending plan) ---
         self.pending_orders = {}  # PlayerID -> list[Order]
         self.game_map = GameMap(q_min=-5, q_max=5, r_min=-5, r_max=5)
+        self.targeting_policy = focus_fire
 
     def interception_policy(self, mover, enemy_groups, at_hex: Hex) -> InterceptionOutcome:
         # 1) All enemies non-combatants => destroy and pass through
@@ -98,7 +143,7 @@ class GameState:
             # Optional: add a summary event line (useful for debugging)
             if groups:
                 summary = ", ".join(
-                    f"{g.group_id}:{g.unit_type.name}x{g.count} t{g.tech_level}"
+                    f"{g.group_id}:{g.unit_type.name}x{g.count}"
                     for g in groups
                 )
                 events.append(f"REVEAL to {v} at {hex_}: {summary}")
@@ -213,35 +258,167 @@ class GameState:
     # -----------------------------
     # Combat (placeholder)
     # -----------------------------
-    def resolve_combat_simple(self, attacker_owner: PlayerID, hex_: Hex) -> List[str]:
+
+    def resolve_combat(self, attacker_owner, hex_) -> List[str]:
         """
-        Placeholder combat with fog-of-war reveal:
-          1) reveal all groups in the combat hex to all involved players
-          2) attacker wins
-          3) all defender groups in the hex are destroyed
+        Multi-round D10 combat with initiative+tactics volleys until <=1 owner remains.
+
+        Round structure:
+          - Each round, every currently-alive group is eligible to fire once (unless destroyed before its volley).
+          - Within the round: volleys resolved by (initiative asc, tactics desc).
+          - Combat repeats rounds until the hex is no longer contested.
+          - Hook point for retreats: between rounds.
         """
         events: List[str] = []
 
-        attackers = self.groups_at_owned_by(hex_, attacker_owner)
-        defenders = self.groups_at_enemy_of(hex_, attacker_owner)
+        def alive_groups() -> List:
+            return [g for g in self.groups_at(hex_) if getattr(g, "count", 0) > 0]
 
-        involved_players = {attacker_owner}
-        for g in attackers:
-            involved_players.add(g.owner)
-        for g in defenders:
-            involved_players.add(g.owner)
+        def owners_present(gs: List) -> Set:
+            return {g.owner for g in gs}
 
-        reveal_events = self.reveal_hex_to_players(hex_, viewers=list(involved_players)) or []
-        events.extend(reveal_events)
-
-        if not defenders:
-            events.append(f"Combat at {hex_} had no defenders (unexpected).")
+        groups_now = alive_groups()
+        owners_now = owners_present(groups_now)
+        if len(owners_now) < 2:
+            events.append(f"Combat at {hex_} had no opposing sides.")
             return events
 
-        for d in list(defenders):
-            events.append(f"Defender {d.group_id} destroyed.")
-            self.remove_group(d.group_id)
+        # Reveal once at combat start
+        reveal_events = self.reveal_hex_to_players(hex_, viewers=list(owners_now)) or []
+        events.extend(reveal_events)
 
+        # Deterministic RNG per battle instance (debuggable)
+        seed_material = f"{getattr(self, 'turn_number', 0)}|{hex_.q},{hex_.r}|{str(attacker_owner)}"
+        rng = random.Random(seed_material)
+
+        def choose_target(attacker, enemies) -> Optional[object]:
+            pol = getattr(self, "targeting_policy", None)
+            if callable(pol):
+                return pol(attacker, enemies)
+
+            # fallback: remaining hull, then lowest defense, then highest attack, then id
+            def remaining_hull(g) -> int:
+                _ensure_damage_attr(g)
+                return max(0, int(g.hull) - int(g.damage))
+
+            return min(enemies, key=lambda g: (remaining_hull(g), int(g.defense), -int(g.attack), str(g.group_id)))
+
+        max_rounds = 50  # safety against infinite loops if something weird happens
+        round_num = 0
+
+        while True:
+            groups_now = alive_groups()
+            owners_now = owners_present(groups_now)
+            if len(owners_now) < 2:
+                break
+
+            round_num += 1
+            if round_num > max_rounds:
+                events.append(f"Combat at {hex_} aborted after {max_rounds} rounds (safety stop).")
+                break
+
+            events.append(f"Round {round_num} begins.")
+
+            # Round roster: groups eligible to fire this round (by id). Dead groups removed as we go.
+            roster: Set[str] = {g.group_id for g in groups_now}
+
+            volley_num = 0
+            while True:
+                # Remove dead from roster
+                roster = {gid for gid in roster if self.get_group(gid) is not None and self.get_group(gid).count > 0}
+                if not roster:
+                    break
+
+                # If combat ended mid-round, stop
+                groups_now = alive_groups()
+                owners_now = owners_present(groups_now)
+                if len(owners_now) < 2:
+                    roster.clear()
+                    break
+
+                # Next volley is the minimum (initiative, -tactics) among roster members
+                roster_groups = [self.get_group(gid) for gid in roster]
+                roster_groups = [g for g in roster_groups if g is not None and g.count > 0]
+
+                roster_groups.sort(key=_volley_sort_key)
+                g0 = roster_groups[0]
+                next_key = (_init_rank(g0.initiative), -int(getattr(g0, "tactics", 0)))
+
+                volley_groups = [
+                    g for g in roster_groups
+                    if (_init_rank(g.initiative), -int(getattr(g, "tactics", 0))) == next_key
+                ]
+
+                # They will fire now (or die before applying, but that's fine)
+                for g in volley_groups:
+                    roster.discard(g.group_id)
+
+                volley_num += 1
+                init_letter = volley_groups[0].initiative
+                tactics_level = int(getattr(volley_groups[0], "tactics", 0))
+                events.append(
+                    f"  Volley {volley_num}: Initiative {init_letter}, Tactics {tactics_level} ({len(volley_groups)} group(s))")
+
+                # Snapshot targets at start-of-volley (simultaneous)
+                snapshot = alive_groups()
+
+                hits_map: Dict[str, int] = defaultdict(int)
+
+                for attacker in volley_groups:
+                    # attacker might have died earlier in round from higher initiatives; guard
+                    attacker_live = self.get_group(attacker.group_id)
+                    if attacker_live is None or attacker_live.count <= 0:
+                        continue
+                    attacker = attacker_live
+
+                    enemies = [g for g in snapshot if g.owner != attacker.owner and g.count > 0]
+                    if not enemies:
+                        continue
+
+                    target = choose_target(attacker, enemies)
+                    if target is None:
+                        continue
+
+                    to_hit = max(1, int(attacker.attack) - int(target.defense))
+
+                    hits = 0
+                    for _ in range(int(attacker.count)):
+                        roll = rng.randint(1, 10)
+                        if roll >= to_hit:
+                            hits += 1
+
+                    hits_map[target.group_id] += hits
+                    events.append(
+                        f"    {attacker.group_id} -> {target.group_id}: {attacker.count} shot(s), "
+                        f"to-hit {to_hit} on d10, hits={hits}"
+                    )
+
+                # Apply hits
+                for target_id, hits in hits_map.items():
+                    target = self.get_group(target_id)
+                    if target is None or target.count <= 0:
+                        continue
+
+                    before_count = target.count
+                    _ensure_damage_attr(target)
+                    before_damage = target.damage
+
+                    destroyed, _unused = _apply_hits_to_group(target, int(hits))
+                    events.append(
+                        f"    {target.group_id} takes {hits} hit(s): ships {before_count}->{target.count}, "
+                        f"damage {before_damage}->{target.damage}"
+                    )
+
+                    if target.count <= 0:
+                        events.append(f"    {target.group_id} destroyed.")
+                        self.remove_group(target.group_id)
+
+            # Hook point for future retreats (between rounds)
+            # e.g., if self.should_retreat(owner, hex_): ...
+
+            events.append(f"Round {round_num} ends.")
+
+        events.append(f"Combat at {hex_} ends.")
         return events
 
     def _all_noncombat(self, groups) -> bool:
@@ -292,7 +469,7 @@ class GameState:
             enemies_here = [x for x in self.groups_at(step_hex) if x.owner != g.owner]
             if enemies_here:
                 self.log.append(f"{g.group_id} intercepts enemy at {step_hex}.")
-                for e in self.resolve_combat_simple(g.owner, step_hex):
+                for e in self.resolve_combat(g.owner, step_hex):
                     self.log.append(e)
                 return True, f"{g.group_id} moved to {step_hex} and engaged the enemy!"
 
@@ -477,7 +654,7 @@ class GameState:
         else:
             for b in battles:
                 events.append(f"  Combat at {b.location}")
-                for e in self.resolve_combat_simple(self.active_player, b.location):
+                for e in self.resolve_combat(self.active_player, b.location):
                     events.append(f"    {e}")
 
         # -------------------

@@ -55,6 +55,7 @@ class UnitGroup:
         self.sensors_bonus = int(sensors_bonus)
         self.attack_bonus = int(attack_bonus)
         self.defense_bonus = int(defense_bonus)
+        self.damage = 0
 
     @property
     def initiative(self) -> str:

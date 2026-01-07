@@ -1,12 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Set
+from collections import defaultdict
+import random
+from typing import Dict, List, Set, Tuple, Optional
 
 from sim.hexgrid import Hex
-from sim.units import UnitGroup
+from sim.units import UnitGroup, PlayerID
 
 INIT_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
-
 
 @dataclass
 class Battle:
