@@ -1,4 +1,6 @@
 # sim/units.py
+from sim.hexgrid import Hex
+
 
 class PlayerID:
     def __init__(self, name: str):
@@ -39,15 +41,14 @@ class UnitType:
 
 class UnitGroup:
     def __init__(self, group_id: str, owner: PlayerID, unit_type: UnitType,
-                 count: int, tech_level: int, location,
+                 count: int, location,
                  tactics: int = 0, cloak_bonus: int = 0, sensors_bonus: int = 0,
                  attack_bonus: int = 0, defense_bonus: int = 0):
         self.group_id = group_id
         self.owner = owner
         self.unit_type = unit_type
         self.count = count
-        self.tech_level = tech_level
-        self.location = location
+        self.location = location if isinstance(location, Hex) else Hex(*location)
 
         self.tactics = int(tactics)
         self.cloak_bonus = int(cloak_bonus)

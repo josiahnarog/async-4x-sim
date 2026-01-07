@@ -20,7 +20,7 @@ def test_collect_battles_finds_contested_hex(game):
         from sim.units import UnitType, UnitGroup, PlayerID
         B = game.players[1]
         decoy = UnitType("Decoy", max_groups=10, movement=3)
-        g2 = UnitGroup("G2", B, decoy, count=1, tech_level=0, location=Hex(1, 0))
+        g2 = UnitGroup("G2", B, decoy, count=1, location=Hex(1, 0))
         game.add_group(g2)
     else:
         game.get_group("G2").location = Hex(1, 0)

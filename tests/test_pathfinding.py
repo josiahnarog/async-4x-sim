@@ -2,6 +2,11 @@ from sim.hexgrid import Hex
 from sim.map import GameMap
 from sim.pathfinding import bfs_path
 
+def test_bfs_path_includes_intermediate_steps():
+    m = GameMap(q_min=-4, q_max=4, r_min=-4, r_max=4)
+    p = bfs_path(m, Hex(0,0), Hex(3,0))
+    assert p == [Hex(1,0), Hex(2,0), Hex(3,0)]
+
 
 def test_bfs_path_empty_grid():
     m = GameMap(-3, 3, -3, 3)

@@ -40,13 +40,13 @@ def test_collect_battles_is_deterministic_order(game):
     from sim.units import UnitType, UnitGroup
     B = game.players[1]
     decoy = UnitType("Decoy", max_groups=10, movement=3)
-    g3 = UnitGroup("G3", B, decoy, count=1, tech_level=0, location=hx2)
+    g3 = UnitGroup("G3", B, decoy, count=1, location=hx2)
     game.add_group(g3)
 
     # Add a friendly group at hx2 too
     A = game.players[0]
     scout = UnitType("Scout", max_groups=10, movement=3)
-    g4 = UnitGroup("G4", A, scout, count=1, tech_level=0, location=hx2)
+    g4 = UnitGroup("G4", A, scout, count=1, location=hx2)
     game.add_group(g4)
 
     battles = collect_battles(game, combat_sites={hx2, hx1})

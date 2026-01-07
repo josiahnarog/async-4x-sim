@@ -15,30 +15,22 @@ def ordered_neighbors(h: Hex) -> List[Hex]:
     return [Hex(h.q + dq, h.r + dr) for dq, dr in DIRS]
 
 
-def bfs_path(game_map: GameMap, start: Hex, goal: Hex) -> Optional[List[Hex]]:
-    """
-    Returns a path as a list of hexes EXCLUDING start and INCLUDING goal.
-    Returns None if no path exists or goal not passable.
-    Deterministic due to fixed neighbor order.
-    """
+def bfs_path(game_map, start: Hex, goal: Hex):
     if start == goal:
         return []
 
-    if not game_map.is_passable(start):
-        return None
-    if not game_map.is_passable(goal):
-        return None
-
     frontier = deque([start])
-    came_from: Dict[Hex, Optional[Hex]] = {start: None}
+    came_from = {start: None}
 
     while frontier:
         current = frontier.popleft()
         if current == goal:
             break
 
-        for nxt in ordered_neighbors(current):
-            if not game_map.is_passable(nxt):
+        for nxt in current.neighbors():
+            if not game_map.in_bounds(nxt):
+                continue
+            if game_map.is_blocked(nxt):
                 continue
             if nxt in came_from:
                 continue
@@ -48,13 +40,11 @@ def bfs_path(game_map: GameMap, start: Hex, goal: Hex) -> Optional[List[Hex]]:
     if goal not in came_from:
         return None
 
-    # Reconstruct backwards from goal -> start
-    path_rev: List[Hex] = []
+    # Reconstruct: from goal back to start
+    path = []
     cur = goal
     while cur != start:
-        path_rev.append(cur)
+        path.append(cur)
         cur = came_from[cur]
-        assert cur is not None  # for type checkers
-
-    path_rev.reverse()
-    return path_rev
+    path.reverse()
+    return path

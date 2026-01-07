@@ -9,7 +9,7 @@
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
 
 from repl.repl import run_repl
-from scenarios.small_test import build_game
+from scenarios.simple_scenario import build_game
 
 if __name__ == "__main__":
     game = build_game()

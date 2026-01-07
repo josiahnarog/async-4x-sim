@@ -1,11 +1,4 @@
 from sim.hexgrid import Hex
-import pytest
-from tests.test_orders import build_game as _build_game
-
-
-@pytest.fixture
-def game():
-    return _build_game()
 
 
 def test_submit_runs_movement_then_combat_then_exploration(game):

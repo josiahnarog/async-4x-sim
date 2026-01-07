@@ -34,18 +34,16 @@ class GameState:
         self.game_map = GameMap(q_min=-5, q_max=5, r_min=-5, r_max=5)
 
     def interception_policy(self, mover, enemy_groups, at_hex: Hex) -> InterceptionOutcome:
-        """
-        Decide what happens when mover enters a hex with enemy groups.
-        """
-        # Rule 1: all enemies are non-combatants → destroy & pass through
+        # 1) All enemies non-combatants => destroy and pass through
         if self._all_noncombat(enemy_groups):
             return InterceptionOutcome.PASS_THROUGH_DESTROY_NONCOMBAT
 
-        # Rule 2 (future): cloak vs sensors
-        # if mover.cloak_level > max(enemy.sensor_level):
-        #     return InterceptionOutcome.PASS_THROUGH
+        # 2) Cloak beats sensors => pass through (no destruction)
+        max_enemy_sensors = max((g.sensor_level for g in enemy_groups), default=0)
+        if mover.cloak_level > max_enemy_sensors:
+            return InterceptionOutcome.PASS_THROUGH
 
-        # Default: stop and fight later
+        # 3) Otherwise stop and fight
         return InterceptionOutcome.STOP_AND_MARK_COMBAT
 
     # -----------------------------
@@ -146,8 +144,26 @@ class GameState:
         # marker
         return self.group_for_viewer_marker[viewer].get(t.upper())
 
-    def groups_at(self, hex_: Hex) -> List[UnitGroup]:
-        return [g for g in self.unit_groups.values() if g.location == hex_]
+    from sim.hexgrid import Hex
+
+    def groups_at(self, loc) -> list:
+        # Accept Hex or (q,r)
+        if isinstance(loc, Hex):
+            q, r = loc.q, loc.r
+        else:
+            q, r = loc  # assume tuple-like
+
+        out = []
+        for g in self.unit_groups.values():
+            gloc = g.location
+            if isinstance(gloc, Hex):
+                if gloc.q == q and gloc.r == r:
+                    out.append(g)
+            else:
+                # If some older groups still store tuples
+                if gloc[0] == q and gloc[1] == r:
+                    out.append(g)
+        return out
 
     def groups_at_owned_by(self, hex_: Hex, owner: PlayerID) -> List[UnitGroup]:
         return [g for g in self.groups_at(hex_) if g.owner == owner]
@@ -307,7 +323,7 @@ class GameState:
             # keep it simple for now and continue.
         return msgs
 
-    def apply_move_movement_phase(self, group_id: str, dest: Hex) -> tuple[bool, str, Hex, set[Hex]]:
+    def apply_move_movement_phase(self, group_id: str, dest: Hex) -> tuple[bool, str, Hex, set[Hex], list[str]]:
         """
         Movement phase move:
           - Uses BFS path
@@ -316,29 +332,32 @@ class GameState:
         Returns:
           (ok, message, final_hex, combat_sites)
         """
+        notes: list[str] = []
         g = self.get_group(group_id)
         if not g:
-            return False, "No such group.", dest, set()
+            return False, "No such group.", dest, set(), notes
 
         if g.owner != self.active_player:
-            return False, "You don't control that group.", g.location, set()
+            return False, "You don't control that group.", g.location, set(), notes
 
         start = g.location
         if start == dest:
-            return False, f"{g.group_id} is already at {dest}.", start, set()
+            return False, f"{g.group_id} is already at {dest}.", start, set(), notes
 
         path = bfs_path(self.game_map, start, dest)
         if path is None:
-            return False, f"No path to {dest} (blocked or out of bounds).", start, set()
+            return False, f"No path to {dest} (blocked or out of bounds).", start, set(), notes
 
         if len(path) > g.movement:
-            return False, f"Out of range via path (steps {len(path)}, movement {g.movement}).", start, set()
+            return False, f"Out of range via path (steps {len(path)}, movement {g.movement}).", start, set(), notes
 
         combat_sites: set[Hex] = set()
 
         for step_hex in path:
             # Move 1 step
             g.location = step_hex
+            self.log.append(f"DEBUG path {g.group_id}: {path}")
+            self.log.append(f"DEBUG step={step_hex} occ={[g.group_id for g in self.groups_at(step_hex)]}")
 
             # Enemy contact check at this hex
             enemies_here = [x for x in self.groups_at(step_hex) if x.owner != g.owner]
@@ -350,23 +369,22 @@ class GameState:
                     continue
 
                 if outcome == InterceptionOutcome.PASS_THROUGH_DESTROY_NONCOMBAT:
-                    for e in enemies_here:
-                        if not e.unit_type.is_combatant:
-                            self.log.append(
-                                f"{e.group_id} ({e.unit_type.name}) destroyed during interception at {step_hex}."
-                            )
-                            self.remove_group(e.group_id)
-                    # continue moving
+
+                    for e in list(enemies_here):
+                        note = f"{e.group_id} destroyed during interception at {step_hex}."
+                        self.log.append(note)
+                        notes.append(note)
+                        self.remove_group(e.group_id)
                     continue
 
                 # STOP_AND_MARK_COMBAT
                 combat_sites.add(step_hex)
                 self.log.append(f"{g.group_id} halted by enemy contact at {step_hex} (combat pending).")
-                return True, f"{g.group_id} halted at {step_hex} (combat pending).", step_hex, combat_sites
+                return True, f"{g.group_id} halted at {step_hex} (combat pending).", step_hex, combat_sites, notes
 
         # Completed full path without contact
         self.log.append(f"{g.group_id} moved from {start} to {dest}.")
-        return True, f"Moved {g.group_id} to {dest}.", dest, combat_sites
+        return True, f"Moved {g.group_id} to {dest}.", dest, combat_sites, notes
 
     # -----------------------------
     # Orders (step-by-step + interception)
@@ -432,11 +450,13 @@ class GameState:
 
         for idx, order in enumerate(list(orders), start=1):
             if isinstance(order, MoveOrder):
-                ok, msg, final_hex, sites = self.apply_move_movement_phase(order.group_id, order.dest)
+                ok, msg, final_hex, sites, notes = self.apply_move_movement_phase(order.group_id, order.dest)
                 combat_sites |= sites
                 if ok:
                     ended_hexes.add(final_hex)
                 events.append(f"  {idx}. {order} -> {msg}")
+                for n in notes:
+                    events.append(f"     {n}")
 
         # Clear orders after movement application (boardgame style)
         orders.clear()
