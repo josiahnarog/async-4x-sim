@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Set
 
 from sim.hexgrid import Hex
+from sim.units import UnitGroup
+
+INIT_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
 
 
 @dataclass
@@ -28,3 +31,13 @@ def collect_battles(game, combat_sites: Set[Hex]) -> List[Battle]:
         battles.append(Battle(location=hx, owners=owners, groups_by_owner=groups_by_owner))
 
     return battles
+
+
+def firing_key(g: UnitGroup) -> tuple[int, int, str]:
+    """
+    Lower is earlier:
+      initiative bucket (A earliest)
+      -tactics (higher tactics earlier within bucket)
+      stable tie-breaker (group_id)
+    """
+    return (INIT_ORDER[g.initiative], -g.tactics, g.group_id)
