@@ -648,3 +648,79 @@ class GameState:
         n = self.next_group_id.get(owner, 1)
         self.next_group_id[owner] = n + 1
         return f"{owner}{n}"
+
+    from sim.hexgrid import Hex
+    from sim.map_content import HexContent
+
+    def debug_reveal_hex(self, h: Hex) -> list[str]:
+        """
+        Debug-only: marks a hex explored and reports its stored content.
+        Does NOT trigger exploration side effects (horror/supernova), because this
+        is intended as a REPL testing tool.
+        """
+        if not hasattr(self, "game_map") or self.game_map is None:
+            return ["No map present."]
+
+        if not self.game_map.in_bounds(h):
+            return [f"{h} is out of bounds."]
+
+        if self.game_map.is_explored(h):
+            content = self.game_map.get_hex_content(h)
+            return [f"{h} already explored: {content.name}"]
+
+        self.game_map.set_explored(h)
+        content = self.game_map.get_hex_content(h)
+        return [f"Revealed {h}: {content.name}"]
+
+    def debug_reveal_all_hexes(self) -> list[str]:
+        """
+        Debug-only: marks every in-bounds hex explored.
+        """
+        if not hasattr(self, "game_map") or self.game_map is None:
+            return ["No map present."]
+
+        gm = self.game_map
+        count = 0
+        for r in range(gm.r_min, gm.r_max + 1):
+            for q in range(gm.q_min, gm.q_max + 1):
+                h = Hex(q, r)
+                if not gm.in_bounds(h):
+                    continue
+                if not gm.is_explored(h):
+                    gm.set_explored(h)
+                    count += 1
+        return [f"Revealed all hexes ({count} newly explored)."]
+
+    def manual_colonize(self, group_id: str) -> list[str]:
+        g = self.get_group(group_id)
+        if not g:
+            return ["No such group."]
+
+        if g.owner != self.active_player:
+            return ["You don't control that group."]
+
+        h = g.location
+        if not self.game_map.is_explored(h):
+            return ["Cannot colonize an unexplored hex."]
+
+        content = self.game_map.get_hex_content(h)
+        events = self.try_colonize(g, h, content)
+
+        return events or ["No colonization possible here."]
+
+    def manual_mine(self, group_id: str) -> list[str]:
+        g = self.get_group(group_id)
+        if not g:
+            return ["No such group."]
+
+        if g.owner != self.active_player:
+            return ["You don't control that group."]
+
+        h = g.location
+        if not self.game_map.is_explored(h):
+            return ["Cannot mine an unexplored hex."]
+
+        content = self.game_map.get_hex_content(h)
+        events = self.try_pickup_minerals(g, h, content)
+
+        return events or ["No mining possible here."]

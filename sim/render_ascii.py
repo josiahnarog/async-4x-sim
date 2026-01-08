@@ -1,8 +1,5 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
-from sim.hexgrid import Hex
-from sim.units import PlayerID
 from sim.map_content import HexContent
 
 HEX_SYMBOLS = {
