@@ -5,8 +5,10 @@ from __future__ import annotations
 from enum import Enum, auto
 from typing import Dict, Set, Optional, List, Tuple
 
+from sim.colonies import Colony
 from sim.hexgrid import Hex, hex_distance
 from sim.combat.targeting import focus_fire
+from sim.map_content import HexContent
 from sim.units import UnitGroup, PlayerID
 from sim.orders import MoveOrder, Order
 from sim.map import GameMap
@@ -25,6 +27,7 @@ class GameState:
         self.players: List[PlayerID] = []
         self.active_player: Optional[PlayerID] = None
         self.unit_groups: Dict[str, UnitGroup] = {}  # group_id -> UnitGroup
+        self.colonies: dict[Hex, Colony] = {}
         self.turn_number: int = 1
         self.log: List[str] = []
         self.revealed_to: Dict[PlayerID, Set[str]] = {}  # viewer -> set(group_id)
@@ -174,6 +177,12 @@ class GameState:
     def groups_at_enemy_of(self, hex_: Hex, owner: PlayerID) -> List[UnitGroup]:
         return [g for g in self.groups_at(hex_) if g.owner != owner]
 
+    def has_colony(self, h: Hex) -> bool:
+        return h in self.colonies
+
+    def get_colony(self, h: Hex):
+        return self.colonies.get(h)
+
     def end_turn(self) -> None:
         idx = self.players.index(self.active_player)
         self.active_player = self.players[(idx + 1) % len(self.players)]
@@ -189,29 +198,6 @@ class GameState:
             if len(owners) >= 2:
                 contested.add(hx)
         return contested
-
-    def resolve_exploration_phase(self, ended_hexes: set[Hex] | None = None) -> list[Hex]:
-        """
-        Base behavior requested:
-          - enemy markers visible always (that’s rendering; not here)
-          - exploration applies to tiles, triggered when a ship ends its turn in the tile
-        For now:
-          - global explored tiles
-          - any active-player group present at end of turn explores its hex if unexplored
-        """
-        explored_now: list[Hex] = []
-        if ended_hexes is None:
-            ended_hexes = set()
-
-        for hx in ended_hexes:
-            # Only explore if active player still has a group here after combat
-            if not any(g.owner == self.active_player and g.location == hx for g in self.unit_groups.values()):
-                continue
-            if self.game_map and not self.game_map.is_explored(hx):
-                self.game_map.set_explored(hx)
-                explored_now.append(hx)
-
-        return explored_now
 
     # -----------------------------
     # Combat (placeholder)
@@ -363,6 +349,182 @@ class GameState:
         return True, f"Moved {g.group_id} to {dest}.", dest, combat_sites, notes
 
     # -----------------------------
+    # Exploration
+    # -----------------------------
+
+    from sim.map_content import HexContent  # wherever you defined it
+
+    def resolve_exploration_phase(self) -> list[Hex]:
+        explored_hexes: list[Hex] = []
+
+        # IMPORTANT: copy list because we may mutate unit_groups (remove groups)
+        for g in list(self.unit_groups.values()):
+            # group might have been removed earlier in the phase
+            if self.get_group(g.group_id) is None:
+                continue
+
+            h = g.location
+
+            # 1) If unexplored, reveal content (this may destroy units / block hex / etc.)
+            if not self.game_map.is_explored(h):
+                events = self.resolve_exploration_hex(h, g)
+                explored_hexes.append(h)
+                self.game_map.set_explored(h)
+                for e in events:
+                    self.log.append(e)
+
+            # group might have been destroyed by exploration (e.g. HORROR)
+            g_live = self.get_group(g.group_id)
+            if g_live is None:
+                continue
+
+            # 2) Post-exploration actions on explored hexes (colonize/mine/etc.)
+            post_events = self.resolve_end_of_turn_hex_actions(g_live)
+            for e in post_events:
+                self.log.append(e)
+
+        return explored_hexes
+
+    def resolve_exploration_hex(self, hex_, explorer):
+        events = []
+        content = self.game_map.get_hex_content(hex_)
+
+        events.append(f"Exploration at {hex_}: {content.name}")
+
+        if content == HexContent.HOMEWORLD:
+            # Already handled at setup
+            pass
+
+        elif content == HexContent.PLANET_STANDARD:
+            events.append("  Discovered habitable planet.")
+
+        elif content == HexContent.PLANET_BARREN:
+            events.append("  Discovered barren planet.")
+
+        elif content == HexContent.SUPERNOVA:
+            events.append("  Supernova! Ship forced to retreat.")
+            prev = self.get_previous_hex(explorer)
+            explorer.location = prev
+            self.game_map.block_hex(hex_)
+
+        elif content == HexContent.MINERALS:
+            events.append("  Mineral deposit discovered.")
+
+        elif content == HexContent.HORROR:
+            events.append("  HORROR! All units destroyed.")
+            for g in list(self.groups_at(hex_)):
+                self.remove_group(g.group_id)
+            self.game_map.set_hex_content(hex_, HexContent.CLEAR)
+
+        elif content == HexContent.CLEAR:
+            events.append("  Empty space.")
+
+        return events
+
+    def resolve_end_of_turn_hex_actions(self, g) -> list[str]:
+        """
+        End-of-turn actions that occur on *already explored* hexes.
+        Designed for: colonization, mining pickup, later: refit, scan, salvage, etc.
+        """
+        h = g.location
+
+        # If not explored, do nothing here (exploration reveal handles it)
+        if not self.game_map.is_explored(h):
+            return []
+
+        content = self.game_map.get_hex_content(h)
+        events: list[str] = []
+
+        # Colonization (optional hook)
+        if self.should_auto_colonize(g, h, content):
+            events.extend(self.try_colonize(g, h, content))
+
+        # Mining pickup (optional hook)
+        if self.should_auto_mine(g, h, content):
+            events.extend(self.try_pickup_minerals(g, h, content))
+
+        return events
+
+    def should_auto_colonize(self, g, h, content) -> bool:
+        # Hook point: later return False unless player submitted a colonize order.
+        return True
+
+    def should_auto_mine(self, g, h, content) -> bool:
+        # Hook point: later return False unless player submitted a mine order.
+        return True
+
+    def try_colonize(self, g, h, content) -> list[str]:
+        events: list[str] = []
+
+        # Only colony-capable noncombatant ships should do this
+        if not getattr(g.unit_type, "can_colonize", False):
+            return events
+
+        # Must be a colonizable planet type
+        if content not in (HexContent.HOMEWORLD, HexContent.PLANET_STANDARD, HexContent.PLANET_BARREN):
+            return events
+
+        # Homeworld colony usually exists from setup; don't auto-colonize it
+        if content == HexContent.HOMEWORLD:
+            return events
+
+        # Must not already have a colony
+        if self.has_colony(h):
+            return events
+
+        # Barren requires terraforming tech (hook for later)
+        if content == HexContent.PLANET_BARREN and not self.player_has_terraforming(g.owner):
+            return events
+
+        # Establish colony level 0
+        # You can use a Colony object or a simple dict, depending on what you have.
+        self.colonies[h] = Colony(owner=g.owner, level=0, homeworld=False)
+
+        # Consume ONE ship from the group
+        g.count -= 1
+        events.append(f"{g.group_id} colonized {h}: colony established (Level 0), 1 ship consumed.")
+
+        # Remove group if no ships remain
+        if g.count <= 0:
+            self.remove_group(g.group_id)
+            events.append(f"{g.group_id} removed (no ships remain).")
+
+        return events
+
+    def player_has_terraforming(self, player) -> bool:
+        # Stub / hook for later tech system
+        return False
+
+    from sim.map_content import HexContent
+
+    def try_pickup_minerals(self, g, h, content) -> list[str]:
+        events: list[str] = []
+
+        if not getattr(g.unit_type, "can_mine", False):
+            return events
+
+        if content != HexContent.MINERALS:
+            return events
+
+        # Ensure cargo attribute exists
+        if not hasattr(g, "cargo_minerals"):
+            g.cargo_minerals = 0
+
+        # Capacity: one load per ship in the group
+        capacity = max(0, int(g.count))
+        if g.cargo_minerals >= capacity:
+            return events  # already full
+
+        # For now: minerals hex represents a single load.
+        g.cargo_minerals += 1
+        events.append(f"{g.group_id} picked up minerals at {h} (cargo {g.cargo_minerals}/{capacity}).")
+
+        # After pickup, the hex becomes clear
+        self.game_map.set_hex_content(h, HexContent.CLEAR)
+
+        return events
+
+    # -----------------------------
     # Orders (step-by-step + interception)
     # -----------------------------
 
@@ -459,8 +621,9 @@ class GameState:
         # -------------------
         # 3) EXPLORATION PHASE
         # -------------------
+
         events.append("PHASE: Exploration")
-        explored_now = self.resolve_exploration_phase(ended_hexes)
+        explored_now = self.resolve_exploration_phase()
         for hx in explored_now:
             events.append(f"  Explored {hx}")
 

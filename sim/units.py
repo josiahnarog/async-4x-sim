@@ -24,7 +24,9 @@ class UnitType:
                  defense: int = 0,
                  hull: int = 1,
                  builtin_cloak: int = 0,
-                 builtin_sensors: int = 0):
+                 builtin_sensors: int = 0,
+                 can_colonize: bool = False,
+                 can_mine: bool = False):
         self.name = name
         self.max_groups = max_groups
         self.movement = movement
@@ -37,6 +39,8 @@ class UnitType:
 
         self.builtin_cloak = builtin_cloak
         self.builtin_sensors = builtin_sensors
+        self.can_colonize = can_colonize
+        self.can_mine = can_mine
 
 
 class UnitGroup:

@@ -35,3 +35,25 @@ DECOY = UnitType(
     defense=0,
     hull=1,
 )
+
+COLONY_SHIP = UnitType(
+    name="Colony Ship",
+    max_groups=6,
+    movement=1,
+    attack=0,
+    defense=0,
+    hull=1,
+    is_combatant=False,
+)
+COLONY_SHIP.can_colonize = True
+
+MINING_SHIP = UnitType(
+    name="Mining Ship",
+    max_groups=6,
+    movement=1,
+    attack=0,
+    defense=0,
+    hull=1,
+    is_combatant=False,
+)
+MINING_SHIP.can_mine = True

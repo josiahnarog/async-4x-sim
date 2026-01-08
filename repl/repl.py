@@ -1,7 +1,6 @@
 from sim.render_ascii import render_map_ascii
 from sim.hexgrid import Hex
 
-
 def run_repl(game):
     print("Async 4X Simulator")
     print("Type 'help' for commands. Type 'exit' to quit.\n")
@@ -171,7 +170,6 @@ def inspect_group(game, token: str):
         print(f"{g.group_id} (OWNER VIEW)")
         print(f"  Type: {g.unit_type.name}")
         print(f"  Count: {g.count}")
-        print(f"  Tech level: {g.tech_level}")
         print(f"  Location: {g.location}")
         return
 
@@ -181,7 +179,6 @@ def inspect_group(game, token: str):
         print(f"  Owner: {g.owner}")
         print(f"  Type: {g.unit_type.name}")
         print(f"  Count: {g.count}")
-        print(f"  Tech level: {g.tech_level}")
         print(f"  Location: {g.location}")
     else:
         mid = game.get_marker_id(game.active_player, g.group_id)

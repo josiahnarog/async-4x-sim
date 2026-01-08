@@ -3,6 +3,29 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from sim.hexgrid import Hex
 from sim.units import PlayerID
+from sim.map_content import HexContent
+
+HEX_SYMBOLS = {
+    HexContent.HOMEWORLD: "HW",
+    HexContent.PLANET_STANDARD: "P ",
+    HexContent.PLANET_BARREN: "Pb",
+    HexContent.SUPERNOVA: "SN",
+    HexContent.MINERALS: "Mn",
+    HexContent.HORROR: "Hr",
+    HexContent.CLEAR: "..",
+}
+def render_hex_content_symbol(game, h: "Hex") -> str:
+    """
+    Returns a 2-char symbol for the hex's explored content.
+    Falls back to '..' if content system not present.
+    """
+    if not hasattr(game, "game_map") or game.game_map is None:
+        return ".."
+    gm = game.game_map
+    if not hasattr(gm, "get_hex_content"):
+        return ".."
+    content = gm.get_hex_content(h)
+    return HEX_SYMBOLS.get(content, "..")
 
 
 @dataclass(frozen=True)
@@ -35,7 +58,8 @@ def render_map_ascii(game, viewer, padding: int = 2) -> str:
 
     lines = [
         f"Map view for Player {viewer} (Turn {game.turn_number})",
-        "Legend: ?? unexplored empty | .. explored empty | ## blocked | G* friendly stack | M# enemy marker | R! revealed",
+        "Legend: ?? unexplored | .. clear | ## blocked | HW homeworld | P  planet | Pb barren | SN supernova | Mn "
+        "minerals | Hr horror | G* friendly | M# enemy | R! revealed",
         ""
     ]
 
@@ -45,34 +69,31 @@ def render_map_ascii(game, viewer, padding: int = 2) -> str:
     has_map = hasattr(game, "game_map") and game.game_map is not None
     has_explore = has_map and hasattr(game.game_map, "is_explored")
 
-    for r in range(min_r, max_r + 1):
-        indent = "  " if (r - min_r) % 2 == 1 else ""
+    for r in range(max_r, min_r - 1, -1):
+        indent = "  " if (r % 2) != 0 else ""
         row = [f"r={r:>2}  {indent}"]
 
         for q in range(min_q, max_q + 1):
             h = Hex(q, r)
             occ = by_hex.get((q, r), [])
 
-            # Out of bounds (only meaningful if we have a map)
             if has_map and not game.game_map.in_bounds(h):
                 row.append("  ")
                 continue
 
-            # Blocked always visible
             if has_map and game.game_map.is_blocked(h):
                 row.append("##")
                 continue
 
-            # Occupants render regardless of exploration
             if occ:
                 row.append(render_occupants(game, viewer, occ))
                 continue
 
-            # Empty: show exploration fog (if supported), else normal empty
+            # Empty: show exploration fog (if supported). If explored, show terrain symbol.
             if has_explore and not game.game_map.is_explored(h):
                 row.append("??")
             else:
-                row.append("..")
+                row.append(render_hex_content_symbol(game, h) if has_map else "..")
 
         lines.append(" ".join(row))
 
