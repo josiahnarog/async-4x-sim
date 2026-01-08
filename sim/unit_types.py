@@ -2,6 +2,17 @@
 
 from sim.units import UnitType
 
+SCOUT = UnitType(
+    name="Scout",
+    max_groups=6,
+    movement=1,
+    is_combatant=True,
+    initiative="E",
+    attack=3,
+    defense=0,
+    hull=1,
+)
+
 BATTLESHIP = UnitType(
     name="Battleship",
     max_groups=6,
@@ -38,22 +49,25 @@ DECOY = UnitType(
 
 COLONY_SHIP = UnitType(
     name="Colony Ship",
-    max_groups=6,
+    max_groups=99,
     movement=1,
+    is_combatant=False,
+    initiative="E",
     attack=0,
     defense=0,
     hull=1,
-    is_combatant=False,
 )
 COLONY_SHIP.can_colonize = True
 
 MINING_SHIP = UnitType(
     name="Mining Ship",
-    max_groups=6,
+    max_groups=99,
     movement=1,
+    is_combatant=False,
+    initiative="E",
     attack=0,
     defense=0,
     hull=1,
-    is_combatant=False,
 )
 MINING_SHIP.can_mine = True
+

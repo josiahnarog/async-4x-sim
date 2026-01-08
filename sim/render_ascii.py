@@ -93,7 +93,12 @@ def render_map_ascii(game, viewer, padding: int = 2) -> str:
             if has_explore and not game.game_map.is_explored(h):
                 row.append("??")
             else:
-                row.append(render_hex_content_symbol(game, h) if has_map else "..")
+                # show colony if present and no units are present
+                if hasattr(game, "colonies") and h in game.colonies:
+                    owner = game.colonies[h].owner
+                    row.append(f"C{str(owner)[:1]}")  # CA, CB, ...
+                else:
+                    row.append(render_hex_content_symbol(game, h) if has_map else "..")
 
         lines.append(" ".join(row))
 

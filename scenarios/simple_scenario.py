@@ -1,7 +1,7 @@
 from sim.colonies import Colony
 from sim.hexgrid import Hex
 from sim.map_content import HexContent
-from sim.unit_types import BATTLESHIP, DECOY
+from sim.unit_types import BATTLESHIP, DECOY, SCOUT, COLONY_SHIP, MINING_SHIP
 from sim.units import PlayerID, UnitType, UnitGroup
 from sim.turn_engine import GameState
 from sim.map import GameMap
@@ -20,14 +20,16 @@ def build_game():
     game.players = [p1, p2]
     game.active_player = p1
 
-    # Units
-    g1 = UnitGroup("G1", p1, BATTLESHIP, count=3, location=Hex(0, 0))
-    g2 = UnitGroup("G2", p2, BATTLESHIP, count=5, location=Hex(1, 0))
+    for player, home in [(p1, p1_home_hex), (p2, p2_home_hex)]:
+        _set_player_homeworld(game, player, home)
+        for unit in [COLONY_SHIP, MINING_SHIP, SCOUT]:
+            ug = UnitGroup(game.allocate_group_id(player), player, unit, count=1, location=home)
+            game.add_group(ug)
 
-    game.add_group(g1)
-    game.add_group(g2)
-    _set_player_homeworld(game, p1, p1_home_hex)
-    _set_player_homeworld(game, p2, p2_home_hex)
+    game.game_map.set_hex_content(Hex(-4, -3), HexContent.PLANET_STANDARD)
+    game.game_map.set_hex_content(Hex(4, 3), HexContent.PLANET_STANDARD)
+    game.game_map.set_hex_content(Hex(-3, -4), HexContent.MINERALS)
+    game.game_map.set_hex_content(Hex(3, 4), HexContent.MINERALS)
 
     return game
 

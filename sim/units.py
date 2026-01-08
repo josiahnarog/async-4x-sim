@@ -41,6 +41,7 @@ class UnitType:
         self.builtin_sensors = builtin_sensors
         self.can_colonize = can_colonize
         self.can_mine = can_mine
+        self.cargo_minerals = 0
 
 
 class UnitGroup:
