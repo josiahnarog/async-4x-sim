@@ -1,6 +1,7 @@
 from sim.render_ascii import render_map_ascii
 from sim.hexgrid import Hex
 
+
 def run_repl(game):
     print("Async 4X Simulator")
     print("Type 'help' for commands. Type 'exit' to quit.\n")
@@ -140,9 +141,21 @@ def run_repl(game):
             else:
                 print("No exploration state on map.")
 
+        elif cmd == "colonize":
+            handle_colonize(game, cmd)
+
+        elif cmd == "mine":
+            handle_mine(game, cmd)
+
+        elif cmd == "reveal":
+            handle_reveal(game, cmd)
+
+        elif cmd == "revealall":
+            handle_revealall(game, cmd)
+
+
         else:
             print("Unknown command")
-
 
 
 def show_mygroups(game):
@@ -196,7 +209,8 @@ def handle_move(game, cmd: str, execute_immediately: bool = False) -> None:
     _, group_id, q_str, r_str = parts
     group_id = group_id.strip().upper()
     try:
-        q = int(q_str); r = int(r_str)
+        q = int(q_str);
+        r = int(r_str)
     except ValueError:
         print("q and r must be integers.")
         return
@@ -255,6 +269,51 @@ def handle_stack(game, cmd: str) -> None:
             print(f"  {g.group_id} ({g.unit_type.name}, {g.count}, tech {g.tech_level}) owner {g.owner}")
         else:
             print(f"  ?? (enemy marker) owner {g.owner}")
+
+
+def handle_colonize(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 2:
+        print("Usage: colonize <group_id>")
+        return
+    gid = parts[1]
+    for e in game.manual_colonize(gid):
+        print(e)
+
+
+def handle_mine(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 2:
+        print("Usage: mine <group_id>")
+        return
+    gid = parts[1]
+    for e in game.manual_mine(gid):
+        print(e)
+
+
+def handle_reveal(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 3:
+        print("Usage: reveal <q> <r>")
+        return
+    try:
+        q = int(parts[1])
+        r = int(parts[2])
+    except ValueError:
+        print("q and r must be integers.")
+        return
+
+    for e in game.debug_reveal_hex(Hex(q, r)):
+        print(e)
+
+
+def handle_revealall(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 1:
+        print("Usage: revealall")
+        return
+    for e in game.debug_reveal_all_hexes():
+        print(e)
 
 
 def show_stack(game, q: int, r: int):
