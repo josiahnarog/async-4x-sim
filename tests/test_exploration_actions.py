@@ -6,6 +6,7 @@ from sim.hexgrid import Hex
 from sim.map_content import HexContent
 from sim.units import PlayerID, UnitType, UnitGroup
 from sim.colonies import Colony
+from tests.conftest import dump_log
 
 
 def mk_unit_type(name: str, movement=1, is_combatant=False):
@@ -154,3 +155,12 @@ def test_debug_reveal_all_hexes_marks_many_explored():
     events = game.debug_reveal_all_hexes()
     assert game.game_map.is_explored(h)
     assert any("revealed all" in e.lower() for e in events)
+
+
+def test_exploration_happens_on_destination_hex(game):
+    dest = Hex(1, 0)
+    assert not game.game_map.is_explored(dest)
+    game.queue_move("A1", dest)
+    game.submit_orders()
+    dump_log(game)
+    assert game.game_map.is_explored(dest)

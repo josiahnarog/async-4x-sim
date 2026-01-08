@@ -4,26 +4,26 @@ from sim.units import PlayerID, UnitType, UnitGroup
 
 
 def test_queue_move_does_not_change_location(game):
-    start = game.get_group("G1").location
-    ok, _ = game.queue_move("G1", Hex(1, 0))
+    start = game.get_group("A1").location
+    ok, _ = game.queue_move("A1", Hex(1, 0))
     assert ok
 
     # Still at start until submit
-    assert game.get_group("G1").location == start
+    assert game.get_group("A1").location == start
 
 
 def test_submit_applies_move(game):
-    game.queue_move("G1", Hex(1, 0))
+    game.queue_move("A1", Hex(1, 0))
     events = game.submit_orders()
 
-    assert game.get_group("G1").location == Hex(1, 0)
+    assert game.get_group("A1").location == Hex(1, 0)
     assert any("SUBMIT" in e for e in events)
 
 
 def test_undo_removes_last_order(game):
 
-    game.queue_move("G1", Hex(1, 0))
-    game.queue_move("G1", Hex(2, 0))
+    game.queue_move("A1", Hex(1, 0))
+    game.queue_move("A1", Hex(2, 0))
     assert len(game.list_orders()) == 2
 
     ok, _ = game.undo_last_order()
@@ -36,7 +36,7 @@ def test_submit_ends_turn(game):
     A = game.active_player
     B = game.players[1]
 
-    game.queue_move("G1", Hex(1, 0))
+    game.queue_move("A1", Hex(1, 0))
     game.submit_orders()
 
     assert game.active_player == B
@@ -44,8 +44,8 @@ def test_submit_ends_turn(game):
 
 def test_interception_removes_defender_on_submit(game):
 
-    # Move G1 onto G2's hex; should trigger combat and remove G2
-    game.queue_move("G1", Hex(2, 0))
+    # Move A1 onto G2's hex; should trigger combat and remove G2
+    game.queue_move("A1", Hex(2, 0))
     game.submit_orders()
 
     assert game.get_group("G2") is None
@@ -57,11 +57,11 @@ def test_submit_move_fails_if_no_path(game):
     game.game_map.block(Hex(1, -1))
     game.game_map.block(Hex(0, -1))
     # try to reach (1,0) which is blocked
-    ok, _ = game.queue_move("G1", Hex(1, 0))
+    ok, _ = game.queue_move("A1", Hex(1, 0))
     assert ok
     events = game.submit_orders()
-    # G1 should still be at (0,0)
-    assert game.get_group("G1").location == Hex(0, 0)
+    # A1 should still be at (0,0)
+    assert game.get_group("A1").location == Hex(0, 0)
     assert any("No path" in e or "blocked" in e for e in events)
 
 
@@ -83,8 +83,15 @@ def test_exploration_after_successful_move(game):
     if hasattr(game, "game_map"):
         assert not game.game_map.is_explored(dest)
 
-    game.queue_move("G1", dest)
+    game.queue_move("A1", dest)
     game.submit_orders()
 
     if hasattr(game, "game_map"):
         assert game.game_map.is_explored(dest)
+
+
+def test_queue_move_actually_queues_order(game):
+    ok, msg = game.queue_move("A1", Hex(1, 0))
+    assert ok, msg
+    orders = game.pending_orders[game.active_player]
+    assert len(orders) == 1

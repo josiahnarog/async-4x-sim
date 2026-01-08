@@ -17,22 +17,49 @@ class Battle:
     groups_by_owner: Dict  # Dict[PlayerID, List[UnitGroup]]
 
 
+from dataclasses import dataclass
+from typing import Dict, List, Set
+from sim.hexgrid import Hex
+
+
+from dataclasses import dataclass
+from typing import Dict, List, Set
+from sim.hexgrid import Hex
+
+@dataclass(frozen=True)
+class Battle:
+    location: Hex
+    owners: List          # combatant owners (deterministic order)
+    groups_by_owner: Dict # all groups present, including noncombatants
+
+
 def collect_battles(game, combat_sites: Set[Hex]) -> List[Battle]:
     battles: List[Battle] = []
 
     for hx in sorted(combat_sites, key=lambda h: (h.q, h.r)):
-        groups = game.groups_at(hx)
-        owners = {g.owner for g in groups}
-        if len(owners) < 2:
+        groups = list(game.groups_at(hx))
+        if not groups:
             continue
 
-        groups_by_owner = {}
+        groups_by_owner: Dict = {}
         for g in groups:
             groups_by_owner.setdefault(g.owner, []).append(g)
 
-        battles.append(Battle(location=hx, owners=owners, groups_by_owner=groups_by_owner))
+        # Only owners with at least one COMBATANT count for triggering a battle
+        combatant_owners = {
+            owner
+            for owner, gs in groups_by_owner.items()
+            if any(getattr(x.unit_type, "is_combatant", True) for x in gs)
+        }
+
+        if len(combatant_owners) < 2:
+            continue
+
+        battles.append(Battle(location=hx, owners=combatant_owners, groups_by_owner=groups_by_owner))
 
     return battles
+
+
 
 
 def firing_key(g: UnitGroup) -> tuple[int, int, str]:

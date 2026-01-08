@@ -31,6 +31,9 @@ def build_game():
     game.game_map.set_hex_content(Hex(-3, -4), HexContent.MINERALS)
     game.game_map.set_hex_content(Hex(3, 4), HexContent.MINERALS)
 
+    game.credits[p1] = 0
+    game.credits[p2] = 0
+
     return game
 
 

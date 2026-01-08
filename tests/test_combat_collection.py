@@ -6,17 +6,17 @@ def test_collect_battles_finds_contested_hex(game):
 
     # In your default scenario, enemy at (2,0), friendly at (0,0)
     # Move into enemy to create a combat site on submit
-    game.queue_move("G1", Hex(2, 0))
+    game.queue_move("A1", Hex(2, 0))
     game.submit_orders()
 
     # After submit, combat likely resolved and defender removed (placeholder)
     # So instead, directly construct a contested situation for test:
     # Put both owners in same hex.
-    g1 = game.get_group("G1")
-    g1.location = Hex(1, 0)
+    a1 = game.get_group("A1")
+    a1.location = Hex(1, 0)
 
     # Create a new enemy group at same hex if G2 might have been destroyed
-    if game.get_group("G2") is None:
+    if game.get_group("B2") is None:
         from sim.units import UnitType, UnitGroup, PlayerID
         B = game.players[1]
         decoy = UnitType("Decoy", max_groups=10, movement=3)

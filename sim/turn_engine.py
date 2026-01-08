@@ -39,6 +39,8 @@ class GameState:
         self.game_map = GameMap(q_min=-5, q_max=5, r_min=-5, r_max=5)
         self.targeting_policy = focus_fire
         self.next_group_id: dict[PlayerID, int] = {}
+        self.credits: dict[PlayerID, int] = {}
+        self.round_number: int = 1  # full “everyone played” rounds
 
     def interception_policy(self, mover, enemy_groups, at_hex: Hex) -> InterceptionOutcome:
         # 1) All enemies non-combatants => destroy and pass through
@@ -355,32 +357,44 @@ class GameState:
 
     from sim.map_content import HexContent  # wherever you defined it
 
-    def resolve_exploration_phase(self) -> list[Hex]:
+    def resolve_exploration_phase(self, ended_hexes: set[Hex] | None = None) -> list[Hex]:
+        """
+        Explore only hexes where at least one group ENDED movement this turn.
+        If ended_hexes is None, falls back to old behavior (explore all groups).
+        """
         explored_hexes: list[Hex] = []
 
-        # copy because we may remove groups during actions
-        for g in list(self.unit_groups.values()):
-            if self.get_group(g.group_id) is None:
+        # Backward-compat: if not provided, behave as before
+        if ended_hexes is None:
+            ended_hexes = {g.location for g in self.unit_groups.values()}
+
+        # We'll explore each ended hex at most once
+        for h in sorted(ended_hexes, key=lambda x: (x.q, x.r)):
+            if not self.game_map.in_bounds(h):
                 continue
 
-            h = g.location
-
-            # 1) Exploration reveal (only if unexplored)
+            # Only if it's currently unexplored
             if not self.game_map.is_explored(h):
-                events = self.resolve_exploration_hex(h, g)
+                # Pick any group currently at that hex as the "explorer"
+                occ = self.groups_at(h)
+                if not occ:
+                    continue
+
+                explorer = occ[0]
+                events = self.resolve_exploration_hex(h, explorer)
                 explored_hexes.append(h)
                 self.game_map.set_explored(h)
                 for e in events:
                     self.log.append(e)
 
-            # might have been destroyed by exploration (e.g., horror)
-            g_live = self.get_group(g.group_id)
-            if g_live is None:
-                continue
-
-            # 2) End-of-turn actions on explored hex (colonize/mine/deliver)
-            for e in self.resolve_end_of_turn_hex_actions(g_live):
-                self.log.append(e)
+            # Regardless of whether it was newly explored, allow end-of-turn actions
+            # for groups that ended here (colonize/mine/etc.)
+            for g in list(self.groups_at(h)):
+                g_live = self.get_group(g.group_id)
+                if g_live is None:
+                    continue
+                for e in self.resolve_end_of_turn_hex_actions(g_live):
+                    self.log.append(e)
 
         return explored_hexes
 
@@ -419,9 +433,6 @@ class GameState:
             events.append("  Empty space.")
 
         return events
-
-    from sim.map_content import HexContent
-    from sim.colonies import Colony  # if you have it
 
     def resolve_end_of_turn_hex_actions(self, g) -> list[str]:
         """
@@ -536,27 +547,22 @@ class GameState:
     # Orders (step-by-step + interception)
     # -----------------------------
 
-    def _ensure_order_queue(self, player):
-        if player not in self.pending_orders:
-            self.pending_orders[player] = []
+    def _ensure_order_queue(self, player: PlayerID) -> None:
+        if not hasattr(self, "pending_orders") or self.pending_orders is None:
+            self.pending_orders = {}
+        self.pending_orders.setdefault(player, [])
 
     def queue_move(self, group_id: str, dest: Hex) -> tuple[bool, str]:
-        """
-        Queue a move order for the active player. Does NOT change game state.
-        Validation here is intentionally light; the authoritative validation
-        happens on submit (so future rules changes don't break old queues).
-        """
         self._ensure_order_queue(self.active_player)
 
-        group_id = group_id.upper()
         g = self.get_group(group_id)
         if not g:
             return False, "No such group."
         if g.owner != self.active_player:
             return False, "You don't control that group."
 
-        self.pending_orders[self.active_player].append(MoveOrder(group_id=group_id, dest=dest))
-        return True, f"Queued: move {group_id} to {dest}"
+        self.pending_orders[self.active_player].append(MoveOrder(group_id, dest))
+        return True, f"Queued move {group_id} -> {dest}"
 
     def list_orders(self, player=None) -> list[Order]:
         if player is None:
@@ -580,8 +586,7 @@ class GameState:
     def submit_orders(self) -> list[str]:
         self._ensure_order_queue(self.active_player)
         orders = self.pending_orders[self.active_player]
-        if not orders:
-            return ["No orders to submit."]
+        prev_active = self.active_player
 
         events: list[str] = []
         events.append(f"SUBMIT: {self.active_player} ({len(orders)} order(s))")
@@ -594,21 +599,23 @@ class GameState:
 
         ended_hexes: set[Hex] = set()
 
-        for idx, order in enumerate(list(orders), start=1):
-            if isinstance(order, MoveOrder):
-                ok, msg, final_hex, sites, notes = self.apply_move_movement_phase(order.group_id, order.dest)
-                combat_sites |= sites
-                if ok:
-                    ended_hexes.add(final_hex)
-                events.append(f"  {idx}. {order} -> {msg}")
-                for n in notes:
-                    events.append(f"     {n}")
+        if not orders:
+            events.append("  (no moves)")
+        else:
+            for idx, order in enumerate(list(orders), start=1):
+                if isinstance(order, MoveOrder):
+                    ok, msg, final_hex, sites, notes = self.apply_move_movement_phase(order.group_id, order.dest)
+                    combat_sites |= sites
+                    if ok:
+                        ended_hexes.add(final_hex)
+                    events.append(f"  {idx}. {order} -> {msg}")
+                    for n in notes:
+                        events.append(f"     {n}")
 
-        # Clear orders after movement application (boardgame style)
-        orders.clear()
+            # Clear orders after movement application (boardgame style)
+            orders.clear()
 
         # Determine additional combat sites (convergence):
-        # Any hex that is contested after movement becomes a combat site.
         contested = self.find_contested_hexes()
         combat_sites |= contested
 
@@ -629,9 +636,8 @@ class GameState:
         # -------------------
         # 3) EXPLORATION PHASE
         # -------------------
-
         events.append("PHASE: Exploration")
-        explored_now = self.resolve_exploration_phase()
+        explored_now = self.resolve_exploration_phase(ended_hexes)
         for hx in explored_now:
             events.append(f"  Explored {hx}")
 
@@ -640,8 +646,16 @@ class GameState:
             self.log.append(e)
 
         # End turn
+        prev_active = self.active_player
         self.end_turn()
         events.append(f"Now active: {self.active_player}")
+        self.log.append(f"Now active: {self.active_player}")
+
+        econ_events = self.maybe_run_economic_phase(prev_active)
+        for e in econ_events:
+            self.log.append(e)
+        events.extend(econ_events)
+
         return events
 
     def allocate_group_id(self, owner: PlayerID) -> str:
@@ -724,3 +738,88 @@ class GameState:
         events = self.try_pickup_minerals(g, h, content)
 
         return events or ["No mining possible here."]
+
+    def is_last_player_in_round(self) -> bool:
+        # assumes self.players order is stable and active_player is one of them
+        return self.players and self.active_player == self.players[-1]
+
+    def maybe_run_economic_phase(self, prev_active=None) -> list[str]:
+        """
+        Run economic phase every 3 full rounds.
+        Call this AFTER end_turn(), passing the player who just finished their turn.
+        """
+        if not self.players:
+            return []
+
+        # Only trigger after the last player in the order finishes a turn
+        if prev_active != self.players[-1]:
+            return []
+
+        # end_turn() has already advanced active_player and incremented turn_number on wrap
+        if self.turn_number % 3 != 0:
+            return []
+
+        return self.run_economic_phase()
+
+    def run_economic_phase(self) -> list[str]:
+        events: list[str] = []
+        events.append(f"PHASE: Economic (Round {self.round_number})")
+
+        # Ensure credits entries exist
+        for p in self.players:
+            self.credits.setdefault(p, 0)
+
+        # Income + upkeep per player
+        for p in self.players:
+            income = self._econ_income_for_player(p)
+            upkeep = self._econ_upkeep_for_player(p)
+
+            net = income - upkeep
+            self.credits[p] += net
+
+            events.append(f"  Player {p}: income {income}, upkeep {upkeep}, net {net}, credits {self.credits[p]}")
+
+        # Colony growth happens after payouts (boardgame-style step ordering can change later)
+        grown = 0
+        for hx, col in self.colonies.items():
+            before = col.level
+            col.advance_econ()
+            if col.level != before:
+                grown += 1
+
+            # if using minerals_delivered, clear it each econ turn (or incorporate it into income)
+            if hasattr(col, "minerals_delivered"):
+                col.minerals_delivered = 0
+
+        if grown:
+            events.append(f"  Colonies advanced: {grown}")
+
+        return events
+
+    def _econ_income_for_player(self, p) -> int:
+        total = 0
+        for hx, col in self.colonies.items():
+            if col.owner != p:
+                continue
+            total += col.production()
+
+            # OPTIONAL: minerals delivery as a bonus; adjust later if you want a different conversion rate
+            if hasattr(col, "minerals_delivered"):
+                total += int(col.minerals_delivered)
+
+        return total
+
+    def _econ_upkeep_for_player(self, p) -> int:
+        total = 0
+        for g in self.unit_groups.values():
+            if g.owner != p:
+                continue
+
+            per_hull = int(getattr(g.unit_type, "upkeep_per_hull", 0))
+            if per_hull <= 0:
+                continue
+
+            hull = max(1, int(g.hull))
+            total += int(g.count) * hull * per_hull
+
+        return total
