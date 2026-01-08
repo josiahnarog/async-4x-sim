@@ -1,4 +1,4 @@
-from sim.targeting import focus_fire
+from sim.combat.targeting import focus_fire
 from sim.units import PlayerID, UnitType, UnitGroup
 from sim.hexgrid import Hex
 

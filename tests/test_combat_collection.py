@@ -1,5 +1,5 @@
 from sim.hexgrid import Hex
-from sim.combat import collect_battles
+from sim.combat.resolver import collect_battles
 
 
 def test_collect_battles_finds_contested_hex(game):

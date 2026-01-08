@@ -1,9 +1,8 @@
-import pytest
 from sim.turn_engine import GameState
 from sim.map import GameMap
 from sim.hexgrid import Hex
 from sim.units import PlayerID, UnitType, UnitGroup
-from sim.targeting import focus_fire
+from sim.combat.targeting import focus_fire
 
 
 def make_game_with_groups(groups, active_name="A"):
