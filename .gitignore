@@ -13,3 +13,4 @@ venv/
 .DS_Store
 Thumbs.db
 /async_4x_sim.zip
+/saves/test1.json
