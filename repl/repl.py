@@ -39,6 +39,8 @@ def run_repl(game):
             print("  mine! <group_id>              - execute mine immediately (debug/manual)")
             print("  save <name>                   - save game to saves/<name>.json")
             print("  load <name>                   - load game from saves/<name>.json")
+            print("  list-saves                    - list saved games in saves/")
+            print("  delete-save <name>            - delete saves/<name>.json")
 
         elif cmd == "map":
             print(render_map_ascii(game, game.active_player))
@@ -139,6 +141,12 @@ def run_repl(game):
                     else:
                         print("Path:", " -> ".join(str(h) for h in path))
                         print(f"Steps: {len(path)}  Movement: {g.movement}")
+
+        elif cmd == "list-saves":
+            handle_list_saves()
+
+        elif cmd.startswith("delete-save "):
+            handle_delete_save(cmd)
 
         elif cmd.startswith("save "):
             name = cmd.split(" ", 1)[1].strip()
@@ -401,3 +409,30 @@ def show_stack(game, q: int, r: int):
             else:
                 mid = game.get_marker_id(game.active_player, g.group_id)
                 print(f"  {mid}: enemy group (hidden)")
+
+
+def handle_list_saves() -> None:
+    if not SAVE_DIR.exists():
+        print("(no saves directory)")
+        return
+    saves = sorted(SAVE_DIR.glob("*.json"), key=lambda p: p.name.lower())
+    if not saves:
+        print("(no saves)")
+        return
+    for p in saves:
+        # print without extension as the save "name"
+        print(p.stem)
+
+
+def handle_delete_save(cmd: str) -> None:
+    name = cmd.split(" ", 1)[1].strip()
+    if not name:
+        print("Usage: delete-save <name>")
+        return
+    path = SAVE_DIR / f"{name}.json"
+    if not path.exists():
+        print(f"No such save: {path}")
+        return
+    path.unlink()
+    print(f"Deleted save '{name}' ({path})")
+
