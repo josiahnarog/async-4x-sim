@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Async 4X Sim (MVP)</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 16px; align-items: flex-start; }
+    .col { flex: 1; min-width: 300px; }
+    pre { background: #f6f6f6; padding: 12px; border-radius: 8px; overflow: auto; }
+    input[type=text] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; }
+    select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; }
+    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #333; background: white; cursor: pointer; }
+    .meta { color: #444; margin-bottom: 8px; }
+    .small { font-size: 0.9em; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Async 4X Sim (MVP)</h1>
+  <div class="meta">
+    <b>Game:</b> {{ game_id }} |
+    <b>Viewer:</b> {{ viewer }} |
+    <b>Active:</b> {{ active_player }} |
+    <b>Turn:</b> {{ turn_number }}
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <h2>Map</h2>
+      <pre>{{ map_text }}</pre>
+      <div class="small">Commands: <code>move A1 q r</code>, <code>colonize A1</code>, <code>mine A1</code>, <code>submit</code>, <code>pass</code></div>
+      <br/>
+      <form method="post" action="/ui/command">
+        <label>Game</label><br/>
+        <select name="game_id">
+          {% for gid in games %}
+            <option value="{{ gid }}" {% if gid == game_id %}selected{% endif %}>{{ gid }}</option>
+          {% endfor %}
+        </select>
+        <br/><br/>
+        <label>Viewer</label><br/>
+        <input type="text" name="viewer" value="{{ viewer }}"/>
+        <br/><br/>
+        <label>Command</label><br/>
+        <input type="text" name="command" autofocus placeholder="e.g. move A1 1 0"/>
+        <br/><br/>
+        <button type="submit">Send</button>
+      </form>
+      {% if last_events %}
+        <h3>Last events</h3>
+        <pre>{{ last_events }}</pre>
+      {% endif %}
+    </div>
+
+    <div class="col">
+      <h2>Orders</h2>
+      {% if orders and orders|length > 0 %}
+        <pre>{% for o in orders %}{{ o }}{% if not loop.last %}\n{% endif %}{% endfor %}</pre>
+      {% else %}
+        <pre>(no queued orders)</pre>
+      {% endif %}
+
+      <h2>Log (tail)</h2>
+      <pre>{{ log_tail }}</pre>
+    </div>
+  </div>
+</body>
+</html>
