@@ -184,17 +184,24 @@ def _ui_state(game_id: str, viewer: str) -> dict[str, Any]:
         "map_text": map_txt,
         "log_tail": "\n".join(log_tail),
         "orders": [str(o) for o in game.list_orders(viewer_player) ] if hasattr(game, "list_orders") else [],
+        "snapshots": db.list_snapshots(game_id),
     }
 
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, game_id: Optional[str] = None, viewer: str = "A"):
-    # If no game exists yet, create one and redirect to it.
+    # If no game_id is provided:
+    # - Prefer the most recently updated existing game (so restarts feel persistent)
+    # - Otherwise create a new game and redirect to it.
     if game_id is None:
-        new_id = str(uuid.uuid4())
-        g = build_game()
-        db.create_game(new_id, game_to_json(g))
-        return RedirectResponse(url=f"/?game_id={new_id}&viewer={viewer}", status_code=302)
+        existing = db.list_game_ids()
+        if existing:
+            return RedirectResponse(url=f"/?game_id={existing[0]}&viewer={viewer}", status_code=302)
+        else:
+            new_id = str(uuid.uuid4())
+            g = build_game()
+            db.create_game(new_id, game_to_json(g))
+            return RedirectResponse(url=f"/?game_id={new_id}&viewer={viewer}", status_code=302)
 
     state = _ui_state(game_id, viewer)
     return templates.TemplateResponse(

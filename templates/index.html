@@ -61,6 +61,16 @@
         <pre>(no queued orders)</pre>
       {% endif %}
 
+      <h2>Snapshots</h2>
+      {% if snapshots and snapshots|length > 0 %}
+        <pre>{% for s in snapshots %}{{ s }}{% if not loop.last %}\n{% endif %}{% endfor %}</pre>
+      {% else %}
+        <pre>(no snapshots)</pre>
+      {% endif %}
+      <div class="small">
+        Use commands: <code>save NAME</code>, <code>load NAME</code>, <code>delete-save NAME</code>, <code>list-saves</code>
+      </div>
+
       <h2>Log (tail)</h2>
       <pre>{{ log_tail }}</pre>
     </div>
