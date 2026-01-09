@@ -12,3 +12,4 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+/async_4x_sim.zip
