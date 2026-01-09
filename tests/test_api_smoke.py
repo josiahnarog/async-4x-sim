@@ -1,3 +1,4 @@
+import os
 import pytest
 
 
@@ -6,6 +7,13 @@ def test_api_create_and_state_smoke():
     pytest.importorskip("starlette")
 
     from fastapi.testclient import TestClient
+
+    # Ensure app uses a temp sqlite file for this test.
+    # Must be set before importing app module.
+    # (pytest tmp_path fixture isn't available here, so use tmp_path_factory via env+tempdir.)
+    # We'll use a simple temp file name in cwd under .pytest_tmp if available.
+    os.environ["ASYNC4X_DB_PATH"] = os.path.join(os.getcwd(), ".pytest_games.db")
+
     from app import app
 
     client = TestClient(app)

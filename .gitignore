@@ -15,3 +15,5 @@ Thumbs.db
 /async_4x_sim.zip
 /saves/test1.json
 saves/
+/games.db
+/tests/.pytest_games.db

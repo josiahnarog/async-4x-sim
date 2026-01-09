@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+import db
 from sim.hexgrid import Hex
 from sim.persistence import game_from_json, game_to_json
 from sim.render_ascii import render_map_ascii
@@ -21,23 +21,15 @@ app = FastAPI(title="Async 4X Sim (MVP)")
 templates = Jinja2Templates(directory="templates")
 
 
-@dataclass
-class StoredGame:
-    game_json: str
-
-
-# In-memory store for MVP. Swap this for SQLite later.
-GAMES: Dict[str, StoredGame] = {}
-
-
 def _load_game(game_id: str):
-    if game_id not in GAMES:
+    s = db.get_game_json(game_id)
+    if s is None:
         raise HTTPException(status_code=404, detail="No such game")
-    return game_from_json(GAMES[game_id].game_json)
+    return game_from_json(s)
 
 
 def _save_game(game_id: str, game) -> None:
-    GAMES[game_id] = StoredGame(game_json=game_to_json(game))
+    db.save_game_json(game_id, game_to_json(game))
 
 
 def _tail(lines: list[str], n: int = 50) -> list[str]:
@@ -159,23 +151,26 @@ def index(request: Request, game_id: Optional[str] = None, viewer: str = "A"):
     if game_id is None:
         new_id = str(uuid.uuid4())
         g = build_game()
-        _save_game(new_id, g)
+        db.create_game(new_id, game_to_json(g))
         return RedirectResponse(url=f"/?game_id={new_id}&viewer={viewer}", status_code=302)
 
     state = _ui_state(game_id, viewer)
-    return templates.TemplateResponse("index.html", {"request": request, **state, "games": sorted(GAMES.keys())})
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, **state, "games": db.list_game_ids()},
+    )
 
 
 @app.get("/games")
 def list_games():
-    return {"games": sorted(GAMES.keys())}
+    return {"games": db.list_game_ids()}
 
 
 @app.post("/games")
 def create_game():
     game_id = str(uuid.uuid4())
     g = build_game()
-    _save_game(game_id, g)
+    db.create_game(game_id, game_to_json(g))
     return {"game_id": game_id}
 
 
@@ -212,5 +207,5 @@ def ui_command(
     # For immediate feedback, we also show the returned events in the page.
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, **state, "games": sorted(GAMES.keys()), "last_events": "\n".join(events)},
+        {"request": request, **state, "games": db.list_game_ids(), "last_events": "\n".join(events)},
     )
