@@ -14,6 +14,7 @@
     button { padding: 10px 14px; border-radius: 8px; border: 1px solid #333; background: white; cursor: pointer; }
     .meta { color: #444; margin-bottom: 8px; }
     .small { font-size: 0.9em; color: #666; }
+    .warn { background: #fff3cd; border: 1px solid #ffeeba; padding: 10px; border-radius: 8px; }
   </style>
 </head>
 <body>
@@ -24,6 +25,13 @@
     <b>Active:</b> {{ active_player }} |
     <b>Turn:</b> {{ turn_number }}
   </div>
+
+  {% if viewer != active_player %}
+    <div class="warn">
+      Not your turn. You are viewing as <b>{{ viewer }}</b>. Active player is <b>{{ active_player }}</b>.
+    </div>
+    <br/>
+  {% endif %}
 
   <div class="row">
     <div class="col">
@@ -60,8 +68,8 @@
         </div>
         <br/>
         <div class="btnrow">
-          <button type="button" onclick="sendCmd('submit')">Submit</button>
-          <button type="button" onclick="sendCmd('pass')">Pass</button>
+          <button type="button" onclick="sendCmd('submit')" {% if viewer != active_player %}disabled{% endif %}>Submit</button>
+          <button type="button" onclick="sendCmd('pass')" {% if viewer != active_player %}disabled{% endif %}>Pass</button>
         </div>
         <br/>
 

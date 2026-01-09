@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+dist/
+build/
+saves/
+games.db
+.pytest_games.db
+*.sqlite
+*.sqlite3
+*.db-journal

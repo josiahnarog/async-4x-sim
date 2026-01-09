@@ -26,7 +26,7 @@ def test_api_save_and_load_snapshot_smoke(tmp_path):
     r = client.post(f"/games/{game_id}/command", json={"viewer": "A", "command": "pass"})
     assert r.status_code == 200
 
-    # Load snapshot
-    r = client.post(f"/games/{game_id}/command", json={"viewer": "A", "command": "load s1"})
+    # After passing, active player should be B; snapshot load is state-mutating and must be done by active.
+    r = client.post(f"/games/{game_id}/command", json={"viewer": "B", "command": "load s1"})
     assert r.status_code == 200
     assert "Loaded snapshot" in "\n".join(r.json()["events"])

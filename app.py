@@ -38,6 +38,22 @@ def _tail(lines: list[str], n: int = 50) -> list[str]:
     return lines[-n:]
 
 
+def _requires_active_player(cmd_head: str) -> bool:
+    """
+    Commands that mutate game state (or mutate server-side persistence like snapshots)
+    require viewer == active player.
+
+    Read-only commands can be run by anyone.
+    """
+    cmd_head = (cmd_head or "").lower()
+    if cmd_head in ("", "help"):
+        return False
+    if cmd_head in ("list-saves",):
+        return False
+    # Everything else is treated as stateful/mutating for MVP safety.
+    return True
+
+
 def _apply_command(game_id: str, game, viewer: str, command: str) -> list[str]:
     """
     Minimal command surface for MVP UI.
@@ -52,6 +68,9 @@ def _apply_command(game_id: str, game, viewer: str, command: str) -> list[str]:
     if not viewer:
         raise HTTPException(status_code=400, detail="viewer is required")
 
+    # Determine active player name (server authority)
+    active_name = getattr(getattr(game, "active_player", None), "name", None) or ""
+
     # Set active player if viewer matches a player name (simple MVP behavior).
     # If viewer doesn't match, we still let them view but command may fail.
     try:
@@ -64,6 +83,16 @@ def _apply_command(game_id: str, game, viewer: str, command: str) -> list[str]:
 
     parts = cmd.split()
     head = parts[0].lower()
+
+    # Turn enforcement: only active player may run mutating commands
+    if _requires_active_player(head):
+        if not active_name:
+            raise HTTPException(status_code=500, detail="active player is not set")
+        if viewer != active_name:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Not your turn. Active player is '{active_name}'.",
+            )
 
     # Core loop commands
     if head == "submit":
@@ -248,8 +277,12 @@ def ui_command(
     command: str = Form(""),
 ):
     game = _load_game(game_id)
-    events = _apply_command(game_id, game, viewer, command)
-    _save_game(game_id, game)
+    try:
+        events = _apply_command(game_id, game, viewer, command)
+        _save_game(game_id, game)
+    except HTTPException as e:
+        # For the HTML UI we render the error as a message instead of 500-ing.
+        events = [f"ERROR: {e.detail}"]
 
     # Append UI-visible events into log tail by relying on game.log updates.
     state = _ui_state(game_id, viewer)
