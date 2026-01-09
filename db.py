@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Optional
+from pathlib import Path
 
-
-DEFAULT_DB_PATH = "games.db"
+DEFAULT_DB_PATH = str((Path(__file__).parent / "games.db").resolve())
 
 
 def db_path() -> str:
@@ -31,7 +30,7 @@ def init_db() -> None:
             """
         )
         con.execute(
-                """
+            """
             CREATE TABLE IF NOT EXISTS snapshots (
                 game_id TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -127,3 +126,6 @@ def delete_snapshot(game_id: str, name: str) -> bool:
         )
         con.commit()
         return cur.rowcount > 0
+
+
+print("Using DB path:", db_path())

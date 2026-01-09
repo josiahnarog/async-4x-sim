@@ -148,6 +148,17 @@ def _apply_command(game_id: str, game, viewer: str, command: str) -> list[str]:
             return ["(no snapshots)"]
         return ["Snapshots: " + ", ".join(snaps)]
 
+    if head == "delete-save":
+        if len(parts) != 2:
+            return ["Usage: delete-save <name>"]
+        name = parts[1].strip()
+        if not name:
+            return ["Usage: delete-save <name>"]
+        ok = db.delete_snapshot(game_id, name)
+        if not ok:
+            return [f"ERROR: no such snapshot '{name}'"]
+        return [f"Deleted snapshot '{name}'"]
+
     return [f"Unknown command: {cmd}"]
 
 
