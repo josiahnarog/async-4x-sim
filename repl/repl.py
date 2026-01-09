@@ -1,5 +1,9 @@
 from sim.render_ascii import render_map_ascii
 from sim.hexgrid import Hex
+from pathlib import Path
+from sim.persistence import game_from_json, game_to_json
+
+SAVE_DIR = Path("saves")
 
 
 def run_repl(game):
@@ -33,6 +37,8 @@ def run_repl(game):
             print("  mine <group_id>               - queue mine action (resolves on submit)")
             print("  colonize! <group_id>          - execute colonize immediately (debug/manual)")
             print("  mine! <group_id>              - execute mine immediately (debug/manual)")
+            print("  save <name>                   - save game to saves/<name>.json")
+            print("  load <name>                   - load game from saves/<name>.json")
 
         elif cmd == "map":
             print(render_map_ascii(game, game.active_player))
@@ -133,6 +139,33 @@ def run_repl(game):
                     else:
                         print("Path:", " -> ".join(str(h) for h in path))
                         print(f"Steps: {len(path)}  Movement: {g.movement}")
+
+        elif cmd.startswith("save "):
+            name = cmd.split(" ", 1)[1].strip()
+            if not name:
+                print("Usage: save <name>")
+                return
+
+            SAVE_DIR.mkdir(exist_ok=True)
+            path = SAVE_DIR / f"{name}.json"
+            path.write_text(game_to_json(game), encoding="utf-8")
+            print(f"Saved game as '{name}' ({path})")
+
+        elif cmd.startswith("load "):
+            name = cmd.split(" ", 1)[1].strip()
+            if not name:
+                print("Usage: load <name>")
+                return
+
+            path = SAVE_DIR / f"{name}.json"
+            if not path.exists():
+                print(f"No such save: {path}")
+                return
+
+            loaded = game_from_json(path.read_text(encoding="utf-8"))
+            game.__dict__.clear()
+            game.__dict__.update(loaded.__dict__)
+            print(f"Loaded game '{name}' ({path})")
 
         elif cmd == "explored":
             if hasattr(game, "game_map") and game.game_map is not None and hasattr(game.game_map, "explored"):
