@@ -38,7 +38,7 @@ def _tail(lines: list[str], n: int = 50) -> list[str]:
     return lines[-n:]
 
 
-def _apply_command(game, viewer: str, command: str) -> list[str]:
+def _apply_command(game_id: str, game, viewer: str, command: str) -> list[str]:
     """
     Minimal command surface for MVP UI.
     Reuses GameState methods; supports both queued-actions and manual-actions variants.
@@ -117,6 +117,37 @@ def _apply_command(game, viewer: str, command: str) -> list[str]:
             return list(game.manual_deliver(gid))
         return ["(deliver not implemented in this build)"]
 
+    # --- Web-specific persistence helpers (SQLite snapshots) ---
+    if head == "save":
+        if len(parts) != 2:
+            return ["Usage: save <name>"]
+        name = parts[1].strip()
+        if not name:
+            return ["Usage: save <name>"]
+        db.save_snapshot(game_id, name, game_to_json(game))
+        return [f"Saved snapshot '{name}'"]
+
+    if head == "load":
+        if len(parts) != 2:
+            return ["Usage: load <name>"]
+        name = parts[1].strip()
+        if not name:
+            return ["Usage: load <name>"]
+        s = db.load_snapshot(game_id, name)
+        if s is None:
+            return [f"ERROR: no such snapshot '{name}'"]
+        loaded = game_from_json(s)
+        # Replace current game state object in-place
+        game.__dict__.clear()
+        game.__dict__.update(loaded.__dict__)
+        return [f"Loaded snapshot '{name}'"]
+
+    if head == "list-saves":
+        snaps = db.list_snapshots(game_id)
+        if not snaps:
+            return ["(no snapshots)"]
+        return ["Snapshots: " + ", ".join(snaps)]
+
     return [f"Unknown command: {cmd}"]
 
 
@@ -185,7 +216,7 @@ def post_command(game_id: str, payload: Dict[str, Any]):
     command = str(payload.get("command", ""))
     game = _load_game(game_id)
 
-    out = _apply_command(game, viewer, command)
+    out = _apply_command(game_id, game, viewer, command)
     _save_game(game_id, game)
 
     return {"events": out, "state": _ui_state(game_id, viewer)}
@@ -199,7 +230,7 @@ def ui_command(
     command: str = Form(""),
 ):
     game = _load_game(game_id)
-    events = _apply_command(game, viewer, command)
+    events = _apply_command(game_id, game, viewer, command)
     _save_game(game_id, game)
 
     # Append UI-visible events into log tail by relying on game.log updates.

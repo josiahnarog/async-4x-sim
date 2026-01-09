@@ -30,6 +30,17 @@ def init_db() -> None:
             )
             """
         )
+        con.execute(
+                """
+            CREATE TABLE IF NOT EXISTS snapshots (
+                game_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (game_id, name)
+            )
+            """
+        )
         con.commit()
 
 
@@ -75,3 +86,44 @@ def save_game_json(game_id: str, state_json: str) -> None:
                 (game_id, state_json, _now_iso()),
             )
         con.commit()
+
+
+def save_snapshot(game_id: str, name: str, state_json: str) -> None:
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO snapshots(game_id, name, state_json, created_at) VALUES(?,?,?,?)",
+            (game_id, name, state_json, _now_iso()),
+        )
+        con.commit()
+
+
+def load_snapshot(game_id: str, name: str) -> Optional[str]:
+    init_db()
+    with _connect() as con:
+        row = con.execute(
+            "SELECT state_json FROM snapshots WHERE game_id = ? AND name = ?",
+            (game_id, name),
+        ).fetchone()
+    return None if row is None else row[0]
+
+
+def list_snapshots(game_id: str) -> list[str]:
+    init_db()
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT name FROM snapshots WHERE game_id = ? ORDER BY created_at DESC",
+            (game_id,),
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def delete_snapshot(game_id: str, name: str) -> bool:
+    init_db()
+    with _connect() as con:
+        cur = con.execute(
+            "DELETE FROM snapshots WHERE game_id = ? AND name = ?",
+            (game_id, name),
+        )
+        con.commit()
+        return cur.rowcount > 0
