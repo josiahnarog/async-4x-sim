@@ -348,6 +348,14 @@ def handle_mine(game, cmd: str) -> None:
         return
 
 
+def handle_mine_now(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 2:
+        print("Usage: mine! <group_id>")
+        return
+    gid = parts[1]
+    for e in game.manual_mine(gid):
+        print(e)
 
 
 def handle_reveal(game, cmd: str) -> None:
