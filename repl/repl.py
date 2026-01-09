@@ -2,6 +2,7 @@ from sim.render_ascii import render_map_ascii
 from sim.hexgrid import Hex
 from pathlib import Path
 from sim.persistence import game_from_json, game_to_json
+import json
 
 SAVE_DIR = Path("saves")
 
@@ -420,8 +421,20 @@ def handle_list_saves() -> None:
         print("(no saves)")
         return
     for p in saves:
-        # print without extension as the save "name"
-        print(p.stem)
+        name = p.stem
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            turn_number = data.get("turn_number", "?")
+            active_player = data.get("active_player", "?")
+            # round_number is optional depending on schema evolution
+            round_number = data.get("round_number", None)
+            if round_number is None:
+                print(f"{name} — turn {turn_number} — active {active_player}")
+            else:
+                print(f"{name} — round {round_number} — turn {turn_number} — active {active_player}")
+        except Exception:
+            # If a save is corrupted or not JSON, still show the filename.
+            print(name)
 
 
 def handle_delete_save(cmd: str) -> None:
