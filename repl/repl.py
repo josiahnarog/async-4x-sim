@@ -29,6 +29,10 @@ def run_repl(game):
             print("  submit                       - submit all orders and end turn")
             print("  move!                        - immediately execute move as server command")
             print("  explored                     - print explored hexes")
+            print("  colonize <group_id>           - queue colonize action (resolves on submit)")
+            print("  mine <group_id>               - queue mine action (resolves on submit)")
+            print("  colonize! <group_id>          - execute colonize immediately (debug/manual)")
+            print("  mine! <group_id>              - execute mine immediately (debug/manual)")
 
         elif cmd == "map":
             print(render_map_ascii(game, game.active_player))
@@ -141,11 +145,17 @@ def run_repl(game):
             else:
                 print("No exploration state on map.")
 
-        elif cmd == "colonize":
-            handle_colonize(game, cmd)
+        elif cmd.startswith("colonize! "):
+            handle_colonize_now(game, raw)
 
-        elif cmd == "mine":
-            handle_mine(game, cmd)
+        elif cmd.startswith("mine! "):
+            handle_mine_now(game, raw)
+
+        elif cmd.startswith("colonize "):
+            handle_colonize(game, raw)
+
+        elif cmd.startswith("mine "):
+            handle_mine(game, raw)
 
         elif cmd == "reveal":
             handle_reveal(game, cmd)
@@ -277,6 +287,18 @@ def handle_colonize(game, cmd: str) -> None:
         print("Usage: colonize <group_id>")
         return
     gid = parts[1]
+    ok, msg = game.queue_colonize(gid)
+    print(msg)
+    if not ok:
+        return
+
+
+def handle_colonize_now(game, cmd: str) -> None:
+    parts = cmd.split()
+    if len(parts) != 2:
+        print("Usage: colonize! <group_id>")
+        return
+    gid = parts[1]
     for e in game.manual_colonize(gid):
         print(e)
 
@@ -287,8 +309,12 @@ def handle_mine(game, cmd: str) -> None:
         print("Usage: mine <group_id>")
         return
     gid = parts[1]
-    for e in game.manual_mine(gid):
-        print(e)
+    ok, msg = game.queue_mine(gid)
+    print(msg)
+    if not ok:
+        return
+
+
 
 
 def handle_reveal(game, cmd: str) -> None:

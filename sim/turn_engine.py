@@ -10,7 +10,7 @@ from sim.hexgrid import Hex, hex_distance
 from sim.combat.targeting import focus_fire
 from sim.map_content import HexContent
 from sim.units import UnitGroup, PlayerID
-from sim.orders import MoveOrder, Order
+from sim.orders import MoveOrder, Order, MineOrder, ColonizeOrder
 from sim.map import GameMap
 from sim.pathfinding import bfs_path
 from sim.combat.resolver import resolve_combat as resolve_combat_impl, collect_battles
@@ -387,15 +387,6 @@ class GameState:
                 for e in events:
                     self.log.append(e)
 
-            # Regardless of whether it was newly explored, allow end-of-turn actions
-            # for groups that ended here (colonize/mine/etc.)
-            for g in list(self.groups_at(h)):
-                g_live = self.get_group(g.group_id)
-                if g_live is None:
-                    continue
-                for e in self.resolve_end_of_turn_hex_actions(g_live):
-                    self.log.append(e)
-
         return explored_hexes
 
     def resolve_exploration_hex(self, hex_, explorer):
@@ -436,8 +427,8 @@ class GameState:
 
     def resolve_end_of_turn_hex_actions(self, g) -> list[str]:
         """
-        Actions that can occur on already-explored hexes.
-        Hooked so you can make them optional later.
+        Deprecated: end-of-turn actions are now explicit (manual commands / orders).
+        Kept for backward compatibility, but intentionally does nothing.
         """
         h = g.location
         if not self.game_map.is_explored(h):
@@ -459,10 +450,10 @@ class GameState:
         return events
 
     def should_auto_colonize(self, g, h, content) -> bool:
-        return True  # later: check a queued "colonize" order
+        return False  # explicit actions only
 
     def should_auto_mine(self, g, h, content) -> bool:
-        return True  # later: check a queued "mine" order
+        return False  # explicit actions only
 
     def player_has_terraforming(self, player) -> bool:
         return False  # hook for later tech system
@@ -564,6 +555,30 @@ class GameState:
         self.pending_orders[self.active_player].append(MoveOrder(group_id, dest))
         return True, f"Queued move {group_id} -> {dest}"
 
+    def queue_colonize(self, group_id: str) -> tuple[bool, str]:
+        self._ensure_order_queue(self.active_player)
+
+        g = self.get_group(group_id)
+        if not g:
+            return False, "No such group."
+        if g.owner != self.active_player:
+            return False, "You don't control that group."
+
+        self.pending_orders[self.active_player].append(ColonizeOrder(group_id))
+        return True, f"Queued colonize {group_id}"
+
+    def queue_mine(self, group_id: str) -> tuple[bool, str]:
+        self._ensure_order_queue(self.active_player)
+
+        g = self.get_group(group_id)
+        if not g:
+            return False, "No such group."
+        if g.owner != self.active_player:
+            return False, "You don't control that group."
+
+        self.pending_orders[self.active_player].append(MineOrder(group_id))
+        return True, f"Queued mine {group_id}"
+
     def list_orders(self, player=None) -> list[Order]:
         if player is None:
             player = self.active_player
@@ -599,21 +614,20 @@ class GameState:
 
         ended_hexes: set[Hex] = set()
 
-        if not orders:
+        move_orders: list[Order] = [o for o in orders if isinstance(o, MoveOrder)]
+        action_orders: list[Order] = [o for o in orders if not isinstance(o, MoveOrder)]
+
+        if not move_orders:
             events.append("  (no moves)")
         else:
-            for idx, order in enumerate(list(orders), start=1):
-                if isinstance(order, MoveOrder):
-                    ok, msg, final_hex, sites, notes = self.apply_move_movement_phase(order.group_id, order.dest)
-                    combat_sites |= sites
-                    if ok:
-                        ended_hexes.add(final_hex)
-                    events.append(f"  {idx}. {order} -> {msg}")
-                    for n in notes:
-                        events.append(f"     {n}")
-
-            # Clear orders after movement application (boardgame style)
-            orders.clear()
+            for idx, order in enumerate(list(move_orders), start=1):
+                ok, msg, final_hex, sites, notes = self.apply_move_movement_phase(order.group_id, order.dest)
+                combat_sites |= sites
+                if ok:
+                    ended_hexes.add(final_hex)
+                events.append(f"  {idx}. {order} -> {msg}")
+                for n in notes:
+                    events.append(f"     {n}")
 
         # Determine additional combat sites (convergence):
         contested = self.find_contested_hexes()
@@ -640,6 +654,29 @@ class GameState:
         explored_now = self.resolve_exploration_phase(ended_hexes)
         for hx in explored_now:
             events.append(f"  Explored {hx}")
+
+        # -------------
+        # 4) ACTIONS PHASE
+        # -------------
+        events.append("PHASE: Actions")
+
+        if not action_orders:
+            events.append("  (no actions)")
+        else:
+            for idx, order in enumerate(list(action_orders), start=1):
+                if isinstance(order, ColonizeOrder):
+                    out = self.manual_colonize(order.group_id)
+                    events.append(f"  {idx}. {order} -> {out[-1] if out else 'OK'}")
+                    for e in out:
+                        self.log.append(e)
+                elif isinstance(order, MineOrder):
+                    out = self.manual_mine(order.group_id)
+                    events.append(f"  {idx}. {order} -> {out[-1] if out else 'OK'}")
+                    for e in out:
+                        self.log.append(e)
+
+        # Clear all orders after full resolution
+        orders.clear()
 
         # Append to log
         for e in events:

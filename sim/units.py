@@ -41,9 +41,6 @@ class UnitType:
         self.builtin_sensors = builtin_sensors
         self.can_colonize = can_colonize
         self.can_mine = can_mine
-        self.cargo_minerals = 0
-        # upkeep per hull per econ turn
-        # default: combatants cost 1/hull, noncombatants cost 0/hull
         self.upkeep_per_hull = 1 if is_combatant else 0
 
 
@@ -64,6 +61,7 @@ class UnitGroup:
         self.attack_bonus = int(attack_bonus)
         self.defense_bonus = int(defense_bonus)
         self.damage = 0
+        self.cargo_minerals = 0
 
     @property
     def initiative(self) -> str:

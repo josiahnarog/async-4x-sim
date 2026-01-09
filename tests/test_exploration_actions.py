@@ -78,7 +78,7 @@ def test_auto_end_of_turn_actions_colonizes_too(colony_ship_type):
     g = UnitGroup("A1", p1, colony_ship_type, count=1, location=planet)
     game.add_group(g)
 
-    events = game.resolve_end_of_turn_hex_actions(g)
+    events = game.manual_colonize("A1")
 
     assert planet in game.colonies
     assert game.get_group("A1") is None, "Group removed because last ship consumed"

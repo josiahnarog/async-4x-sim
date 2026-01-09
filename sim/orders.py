@@ -14,5 +14,20 @@ class MoveOrder:
     def __str__(self) -> str:
         return f"move {self.group_id} {self.dest.q} {self.dest.r}"
 
+@dataclass(frozen=True)
+class ColonizeOrder:
+    group_id: str
 
-Order = Union[MoveOrder]
+    def __str__(self) -> str:
+        return f"colonize {self.group_id}"
+
+
+@dataclass(frozen=True)
+class MineOrder:
+    group_id: str
+
+    def __str__(self) -> str:
+        return f"mine {self.group_id}"
+
+
+Order = Union[MoveOrder, ColonizeOrder, MineOrder]

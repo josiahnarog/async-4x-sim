@@ -79,7 +79,7 @@ def test_auto_end_of_turn_actions_colonizes_and_removes_group_if_last_ship():
     g = UnitGroup("A1", p1, ut, count=1, location=h)
     game.add_group(g)
 
-    events = game.resolve_end_of_turn_hex_actions(g)
+    events = game.manual_colonize("A1")
 
     assert h in game.colonies
     assert game.get_group("A1") is None
