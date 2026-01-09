@@ -42,6 +42,23 @@
         <label>Viewer</label><br/>
         <input type="text" name="viewer" value="{{ viewer }}"/>
         <br/><br/>
+        <div class="btnrow" style="align-items: center;">
+          <label style="display:flex; gap:8px; align-items:center;">
+            <input type="checkbox" id="auto_refresh"/>
+            Auto-refresh
+          </label>
+          <label class="small" style="display:flex; gap:6px; align-items:center;">
+            every
+            <select id="refresh_seconds" style="width:auto; padding:6px 10px;">
+              <option value="2">2s</option>
+              <option value="3">3s</option>
+              <option value="5" selected>5s</option>
+              <option value="10">10s</option>
+              <option value="20">20s</option>
+            </select>
+          </label>
+        </div>
+        <br/>
         <div class="btnrow">
           <button type="button" onclick="sendCmd('submit')">Submit</button>
           <button type="button" onclick="sendCmd('pass')">Pass</button>
@@ -127,6 +144,66 @@
       if (!confirm(`Delete snapshot '${name}'?`)) { return; }
       sendCmd(`delete-save ${name}`);
     }
+
+    // --- Auto-refresh ---
+    let refreshTimer = null;
+    let refreshSeconds = 5;
+    let refreshEnabled = false;
+    let pauseBecauseTyping = false;
+
+    function getStorageKey() {
+      // Persist per game_id + viewer combination
+      const url = new URL(window.location.href);
+      const gid = url.searchParams.get("game_id") || "";
+      const viewer = url.searchParams.get("viewer") || "";
+      return `auto_refresh:${gid}:${viewer}`;
+    }
+
+    function stopAutoRefresh() {
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+    }
+
+    function startAutoRefresh(seconds) {
+      stopAutoRefresh();
+      refreshSeconds = seconds;
+      refreshTimer = setInterval(() => {
+        if (pauseBecauseTyping) return;
+        // Reload current URL (preserves game_id/viewer query params)
+        window.location.reload();
+      }, seconds * 1000);
+    }
+
+    function setTypingPause(paused) {
+      pauseBecauseTyping = paused;
+    }
+
+    function syncAutoRefreshFromUI() {
+      const enabled = document.getElementById("auto_refresh").checked;
+      const seconds = parseInt(document.getElementById("refresh_seconds").value, 10) || 5;
+      refreshEnabled = enabled;
+      refreshSeconds = seconds;
+      localStorage.setItem(getStorageKey(), JSON.stringify({ enabled, seconds }));
+      if (enabled) startAutoRefresh(seconds); else stopAutoRefresh();
+    }
+
+    function initAutoRefresh() {
+      const key = getStorageKey();
+      const raw = localStorage.getItem(key);
+      let cfg = { enabled: false, seconds: 5 };
+      try { if (raw) cfg = { ...cfg, ...JSON.parse(raw) }; } catch {}
+      document.getElementById("auto_refresh").checked = !!cfg.enabled;
+      document.getElementById("refresh_seconds").value = String(cfg.seconds || 5);
+      refreshEnabled = !!cfg.enabled;
+      refreshSeconds = parseInt(cfg.seconds, 10) || 5;
+
+      document.getElementById("auto_refresh").addEventListener("change", syncAutoRefreshFromUI);
+      document.getElementById("refresh_seconds").addEventListener("change", syncAutoRefreshFromUI);
+
+      // Pause auto-refresh while user is typing in command box (focused or non-empty).
+      const cmdEl = document.getElementById("command");
   </script>
 </body>
 </html>
