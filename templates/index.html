@@ -42,8 +42,26 @@
         <label>Viewer</label><br/>
         <input type="text" name="viewer" value="{{ viewer }}"/>
         <br/><br/>
+        <div class="btnrow">
+          <button type="button" onclick="sendCmd('submit')">Submit</button>
+          <button type="button" onclick="sendCmd('pass')">Pass</button>
+        </div>
+        <br/>
+
+        <label>Snapshot name</label><br/>
+        <input type="text" id="snapshot_name" placeholder="e.g. test1"/>
+        <div class="btnrow" style="margin-top: 8px;">
+          <button type="button" onclick="saveSnap()">Save snapshot</button>
+          <button type="button" onclick="loadSnap()">Load snapshot</button>
+          <button type="button" onclick="deleteSnap()">Delete snapshot</button>
+        </div>
+        <div class="small" style="margin-top: 6px;">
+          Uses: <code>save NAME</code>, <code>load NAME</code>, <code>delete-save NAME</code>
+        </div>
+        <br/>
+
         <label>Command</label><br/>
-        <input type="text" name="command" autofocus placeholder="e.g. move A1 1 0"/>
+        <input type="text" id="command" name="command" autofocus placeholder="e.g. move A1 1 0"/>
         <br/><br/>
         <button type="submit">Send</button>
       </form>
@@ -75,5 +93,40 @@
       <pre>{{ log_tail }}</pre>
     </div>
   </div>
+
+  <script>
+    function getForm() {
+      return document.querySelector('form[action="/ui/command"]');
+    }
+    function setCommand(cmd) {
+      const el = document.getElementById('command');
+      el.value = cmd;
+      el.focus();
+    }
+    function sendCmd(cmd) {
+      setCommand(cmd);
+      getForm().submit();
+    }
+    function getSnapName() {
+      const el = document.getElementById('snapshot_name');
+      return (el.value || '').trim();
+    }
+    function saveSnap() {
+      const name = getSnapName();
+      if (!name) { alert("Enter a snapshot name first."); return; }
+      sendCmd(`save ${name}`);
+    }
+    function loadSnap() {
+      const name = getSnapName();
+      if (!name) { alert("Enter a snapshot name first."); return; }
+      sendCmd(`load ${name}`);
+    }
+    function deleteSnap() {
+      const name = getSnapName();
+      if (!name) { alert("Enter a snapshot name first."); return; }
+      if (!confirm(`Delete snapshot '${name}'?`)) { return; }
+      sendCmd(`delete-save ${name}`);
+    }
+  </script>
 </body>
 </html>
