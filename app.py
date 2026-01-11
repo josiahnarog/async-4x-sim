@@ -239,6 +239,16 @@ def index(request: Request, game_id: Optional[str] = None, viewer: str = "A"):
     )
 
 
+@app.get("/health")
+def health():
+    # Useful for deployment health checks and debugging DB path.
+    return {
+        "ok": True,
+        "db_path": db.db_path(),
+        "games": len(db.list_game_ids()),
+    }
+
+
 @app.get("/games")
 def list_games():
     return {"games": db.list_game_ids()}
@@ -275,10 +285,34 @@ def ui_command(
     game_id: str = Form(...),
     viewer: str = Form("A"),
     command: str = Form(""),
+    quick_action: str = Form(""),
+    snapshot_name: str = Form(""),
 ):
+    # HTML-only fallback: if JS is blocked, buttons submit `quick_action`
+    # and (optionally) `snapshot_name`. Convert into a real command.
+    cmd = (command or "").strip()
+    qa = (quick_action or "").strip().lower()
+    snap = (snapshot_name or "").strip()
+    if not cmd and qa:
+        if qa in ("submit", "pass"):
+            cmd = qa
+        elif qa in ("save", "load", "delete-save", "list-saves"):
+            if qa == "list-saves":
+                cmd = "list-saves"
+            else:
+                if not snap:
+                    cmd = ""  # will yield "(no command)" below; we override with clearer msg
+                else:
+                    cmd = f"{qa} {snap}"
+        else:
+            cmd = ""
+
     game = _load_game(game_id)
     try:
-        events = _apply_command(game_id, game, viewer, command)
+        if not cmd and qa in ("save", "load", "delete-save"):
+            events = ["ERROR: Enter a snapshot name first."]
+        else:
+            events = _apply_command(game_id, game, viewer, cmd)
         _save_game(game_id, game)
     except HTTPException as e:
         # For the HTML UI we render the error as a message instead of 500-ing.
