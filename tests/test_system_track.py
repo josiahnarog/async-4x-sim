@@ -1,17 +1,17 @@
 import pytest
 
-from tactical.system_track import ShipSystems
+from tactical.ship_systems import ShipSystems
 
 
 def test_parse_and_render_roundtrip_preserves_groups():
     t = ShipSystems.parse("SSSAAALL(III)(III)")
-    assert len(t.boxes) == 14
+    assert len(t.systems) == 14
     assert t.render_compact() == "SSSAAALL(III)(III)"
 
 
 def test_parse_supports_camel_case_tokens():
     t = ShipSystems.parse("XcXc(III)")
-    assert len(t.boxes) == 5
+    assert len(t.systems) == 5
     assert t.render_compact() == "XcXc(III)"
 
 

@@ -5,7 +5,9 @@ from enum import Enum
 from typing import Iterable
 
 from tactical.battle_state import BattleState, ShipID
+from tactical.combat import FireEvent, resolve_large_fire
 from tactical.initiative import Initiative, RNG
+from tactical.weapons import WeaponType
 
 
 class Phase(str, Enum):
@@ -448,3 +450,46 @@ class Encounter:
             spent_to_fire=self.spent_to_fire,
             active_combat_side_index=0,
         )
+
+    def fire_large_unit(
+            self,
+            side_id: str,
+            attacker_id: ShipID,
+            target_id: ShipID,
+            weapon: WeaponType,
+            rng: RNG,
+    ) -> tuple["Encounter", FireEvent]:
+        self._require_combat_large()
+        if side_id != self.active_large_combat_side():
+            raise PermissionError(...)
+        if attacker_id in self.spent_to_fire:
+            raise ValueError(...)
+
+        new_battle, event = resolve_large_fire(
+            self.battle,
+            attacker_id=attacker_id,
+            target_id=target_id,
+            weapon=weapon,
+            rng=rng,
+        )
+
+        new_spent = set(self.spent_to_fire)
+        new_spent.add(attacker_id)
+
+        return (
+            Encounter(
+                battle=new_battle,
+                initiative=self.initiative,
+                phase=self.phase,
+                movement_subphases=self.movement_subphases,
+                movement_subphase_index=self.movement_subphase_index,
+                active_side_index=self.active_side_index,
+                mp_capacity_base=self.mp_capacity_base,
+                mp_start_this_subphase=self.mp_start_this_subphase,
+                mp_spent_this_subphase=self.mp_spent_this_subphase,
+                spent_to_fire=new_spent,
+                active_combat_side_index=self.active_combat_side_index,
+            ),
+            event,
+        )
+

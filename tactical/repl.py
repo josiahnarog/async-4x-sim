@@ -8,14 +8,14 @@ from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
-from tactical.system_track import ShipSystems
+from tactical.ship_systems import ShipSystems
 
 
 def _fmt_ship(s: ShipState) -> str:
     return (
         f"{s.ship_id:>3} owner={s.owner_id} pos=({s.pos.q:+},{s.pos.r:+}) "
         f"face={int(s.facing)} mp={s.mp} tc={s.turn_cost} ch={s.turn_charge} "
-        f"track={s.systems.render_compact() if s.systems else '-'}"
+        f"systems=[{s.systems.render_compact() if s.systems else '-'}]"
     )
 
 
@@ -37,7 +37,7 @@ def _print_state(enc: Encounter) -> None:
 
     print()
     print("MAP:")
-    print(render_tactical_grid_ascii(enc.battle, radius=4, empty=".."))
+    print(render_tactical_grid_ascii(enc.battle, radius=6, empty=".."))
 
 
 def main() -> None:

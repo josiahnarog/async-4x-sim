@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sim.hexgrid import Hex
 from tactical.facing import Facing
 from tactical.movement import compute_move_forward
-from tactical.system_track import ShipSystems
+from tactical.ship_systems import ShipSystems
 
 
 @dataclass(frozen=True, slots=True)

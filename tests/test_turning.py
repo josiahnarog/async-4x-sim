@@ -6,7 +6,7 @@ from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
 from tactical.ship_state import ShipState
-from tactical.system_track import ShipSystems
+from tactical.ship_systems import ShipSystems
 
 
 def test_turning_requires_full_charge_and_resets_charge():

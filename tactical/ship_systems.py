@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Iterable, Iterator
+from tactical.weapons import WeaponSpec
 
 
-class BoxStatus(str, Enum):
+class SystemStatus(str, Enum):
     INTACT = "intact"
     DESTROYED = "destroyed"
 
 
 @dataclass(frozen=True, slots=True)
-class SystemBox:
-    """A single damageable system 'box' on a ship's track.
+class System:
+    """A single damageable system 'system' on a ship's track.
 
     System tokens are camel case:
       - exactly one capital letter per system (base)
@@ -27,19 +28,19 @@ class SystemBox:
 
     base: str
     mods: str = ""
-    status: BoxStatus = BoxStatus.INTACT
+    status: SystemStatus = SystemStatus.INTACT
     group: int | None = None
 
     def is_active(self) -> bool:
-        return self.status == BoxStatus.INTACT
+        return self.status == SystemStatus.INTACT
 
-    def destroy(self) -> SystemBox:
-        if self.status == BoxStatus.DESTROYED:
+    def destroy(self) -> System:
+        if self.status == SystemStatus.DESTROYED:
             return self
-        return SystemBox(
+        return System(
             base=self.base,
             mods=self.mods,
-            status=BoxStatus.DESTROYED,
+            status=SystemStatus.DESTROYED,
             group=self.group,
         )
 
@@ -50,15 +51,15 @@ class SystemBox:
 
 @dataclass(frozen=True, slots=True)
 class ShipSystems:
-    """Canonical representation of a ship's system track.
+    """Canonical representation of a ship's systems.
 
-    Ordering of boxes is authoritative and used for:
+    Ordering of systems is authoritative and used for:
       - deterministic damage application
       - rendering
       - capability queries
     """
 
-    boxes: tuple[SystemBox, ...]
+    systems: tuple[System, ...]
 
     # ---------------------------------------------------------------------
     # Parsing
@@ -80,7 +81,7 @@ class ShipSystems:
         This parser assumes all systems start intact.
         """
         s = "".join(ch for ch in compact if not ch.isspace())
-        boxes: list[SystemBox] = []
+        systems: list[System] = []
         i = 0
         group_id = 0
 
@@ -96,7 +97,7 @@ class ShipSystems:
                 j += 1
 
             mods = s[start + 1 : j]
-            boxes.append(SystemBox(base=base, mods=mods, group=group))
+            systems.append(System(base=base, mods=mods, group=group))
             return j
 
         while i < len(s):
@@ -124,14 +125,14 @@ class ShipSystems:
 
             raise ValueError(f"Unexpected character at position {i}: {ch!r}")
 
-        if not boxes:
+        if not systems:
             raise ValueError("SystemTrack cannot be empty")
 
-        return ShipSystems(tuple(boxes))
+        return ShipSystems(tuple(systems))
 
     @staticmethod
-    def from_boxes(boxes: Iterable[SystemBox]) -> ShipSystems:
-        return ShipSystems(tuple(boxes))
+    def from_systems(systems: Iterable[System]) -> ShipSystems:
+        return ShipSystems(tuple(systems))
 
     # ---------------------------------------------------------------------
     # Rendering / serialization
@@ -152,37 +153,37 @@ class ShipSystems:
                 out.append(")")
                 current_group = None
 
-        for b in self.boxes:
+        for b in self.systems:
             if b.group != current_group:
                 close_group()
                 if b.group is not None:
                     out.append("(")
                     current_group = b.group
 
-            out.append(f"!{b.token}" if b.status == BoxStatus.DESTROYED else b.token)
+            out.append(f"!{b.token}" if b.status == SystemStatus.DESTROYED else b.token)
 
         close_group()
         return "".join(out)
 
     def to_dict(self) -> dict:
         return {
-            "boxes": [
+            "systems": [
                 {
                     "base": b.base,
                     "mods": b.mods,
                     "status": b.status.value,
                     "group": b.group,
                 }
-                for b in self.boxes
+                for b in self.systems
             ]
         }
 
     @staticmethod
     def from_dict(data: dict) -> ShipSystems:
-        boxes: list[SystemBox] = []
+        systems: list[System] = []
 
-        for b in data.get("boxes", []):
-            status = BoxStatus(b.get("status", BoxStatus.INTACT.value))
+        for b in data.get("systems", []):
+            status = SystemStatus(b.get("status", SystemStatus.INTACT.value))
 
             base = str(b["base"]).upper()
             if len(base) != 1 or not ("A" <= base <= "Z"):
@@ -192,8 +193,8 @@ class ShipSystems:
             if any(not ("a" <= ch <= "z") for ch in mods):
                 raise ValueError(f"Invalid system modifiers: {mods!r}")
 
-            boxes.append(
-                SystemBox(
+            systems.append(
+                System(
                     base=base,
                     mods=mods,
                     status=status,
@@ -201,28 +202,28 @@ class ShipSystems:
                 )
             )
 
-        return ShipSystems(tuple(boxes))
+        return ShipSystems(tuple(systems))
 
     # ---------------------------------------------------------------------
     # Queries
     # ---------------------------------------------------------------------
 
-    def __iter__(self) -> Iterator[SystemBox]:
-        return iter(self.boxes)
+    def __iter__(self) -> Iterator[System]:
+        return iter(self.systems)
 
     def active_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
-        for b in self.boxes:
+        for b in self.systems:
             if b.is_active():
                 counts[b.base] = counts.get(b.base, 0) + 1
         return counts
 
     def active_count(self, code: str) -> int:
         c = code.upper()
-        return sum(1 for b in self.boxes if b.is_active() and b.base == c)
+        return sum(1 for b in self.systems if b.is_active() and b.base == c)
 
     def movement_points(self, engine_code: str = "I") -> int:
-        """MVP rule: each intact engine box grants 1 movement point."""
+        """MVP rule: each intact engine system grants 1 movement point."""
         return self.active_count(engine_code)
 
     # ---------------------------------------------------------------------
@@ -238,13 +239,75 @@ class ShipSystems:
             return self
 
         remaining = amount
-        new_boxes: list[SystemBox] = []
+        new_systems: list[System] = []
 
-        for b in self.boxes:
+        for b in self.systems:
             if remaining > 0 and b.is_active():
-                new_boxes.append(b.destroy())
+                new_systems.append(b.destroy())
                 remaining -= 1
             else:
-                new_boxes.append(b)
+                new_systems.append(b)
 
-        return ShipSystems(tuple(new_boxes))
+        return ShipSystems(tuple(new_systems))
+
+    def apply_weapon_damage(self, damage: int, *, weapon: WeaponSpec) -> "ShipSystems":
+        """Apply weapon damage to this ship's systems.
+
+        Rules:
+          - damage is applied point-by-point
+          - ALWAYS skip systems that are already destroyed
+          - weapon may skip specific codes (e.g. Laser skips 'S', Electron skips 'A' and 'H')
+          - Electron Beam does half damage against shields, per point (rounded down)
+            Implementation here: when the selected system is a shield, the point applies only
+            if floor(1 * shield_multiplier) == 1; with 0.5 multiplier this means:
+              - a single point would do 0 to shields (so effectively shields are very resistant)
+            If you want "half total damage" instead, see note below.
+        """
+        if damage <= 0:
+            return self
+
+        systems = list(self.systems)  # assumes `self.systems` is a list[System] field
+        skip = set(weapon.skip_codes)
+
+        def is_destroyed(i: int) -> bool:
+            return bool(systems[i].destroyed)
+
+        def code_of(i: int) -> str:
+            # only the leading capital letter is the "system code" for skip comparisons
+            # (since you have camel-case modifiers like Xc)
+            c = systems[i].code
+            return c[:1] if c else ""
+
+        def select_next_index() -> int | None:
+            for i in range(len(systems)):
+                if is_destroyed(i):
+                    continue
+                if code_of(i) in skip:
+                    continue
+                return i
+            return None
+
+        # Apply damage point-by-point to the next eligible system
+        points = int(damage)
+        while points > 0:
+            idx = select_next_index()
+            if idx is None:
+                break
+
+            code = code_of(idx)
+
+            # Electron beam halves damage vs shields.
+            # IMPORTANT: this interpretation matters. If you instead mean "halve TOTAL damage dealt
+            # when the first impacted system is shields", we can change it. See note below.
+            if code == "S" and weapon.shield_multiplier != 1.0:
+                eff = int(1 * weapon.shield_multiplier)  # floor
+                if eff <= 0:
+                    # consumes the point but does not damage the shield
+                    points -= 1
+                    continue
+
+            # Destroy this system box
+            systems[idx] = replace(systems[idx], destroyed=True)
+            points -= 1
+
+        return type(self)(systems=systems)
