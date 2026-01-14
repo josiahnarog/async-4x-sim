@@ -20,7 +20,7 @@ def test_turn_charge_caps_and_turning_resets_charge():
 
     # Move 1 => charge 1
     s1 = s0.move_forward(1)
-    assert (s1.pos.q, s1.pos.r) == (1, 0)
+    assert (s1.pos.q, s1.pos.r) == (0, 1)
     assert s1.mp == 9
     assert s1.turn_charge == 1
     assert not s1.can_turn()
@@ -32,7 +32,7 @@ def test_turn_charge_caps_and_turning_resets_charge():
     assert s2.can_turn()
 
     # Turning is free but resets charge
-    s3 = s2.turn_left(1)
+    s3 = s2.turn_left()
     assert s3.mp == 7
     assert s3.facing == Facing.NW
     assert s3.turn_charge == 0
@@ -55,7 +55,7 @@ def test_excess_movement_does_not_accrue_past_turn_cost():
     assert s1.can_turn()
 
     # Turn for free; charge resets to 0
-    s2 = s1.turn_right(1)
+    s2 = s1.turn_right()
     assert s2.mp == 5
     assert s2.turn_charge == 0
 
@@ -71,7 +71,7 @@ def test_cannot_turn_without_full_charge():
         turn_charge=2,
     )
     with pytest.raises(ValueError):
-        s0.turn_left(1)
+        s0.turn_left()
 
 
 def test_spend_mp_and_move_validate_resources():

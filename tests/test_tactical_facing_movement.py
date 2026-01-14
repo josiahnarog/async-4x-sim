@@ -7,12 +7,12 @@ from tactical.movement import forward_neighbor, step_forward, compute_move_forwa
 
 def test_facing_offsets_match_expected_order():
     assert FACING_OFFSETS == (
+        (0, 1),
         (1, 0),
         (1, -1),
         (0, -1),
         (-1, 0),
         (-1, 1),
-        (0, 1),
     )
 
 
@@ -42,8 +42,8 @@ def test_forward_neighbor_moves_correctly_in_axial_coords():
 
 def test_step_forward_is_pure_and_deterministic():
     start = Hex(2, -1)
-    end = step_forward(start, Facing.D0, steps=3)  # +3 in q
-    assert (end.q, end.r) == (5, -1)
+    end = step_forward(start, Facing.N, steps=3)
+    assert (end.q, end.r) == (2, 2)
 
     same = step_forward(start, Facing.D0, steps=0)
     assert (same.q, same.r) == (2, -1)
@@ -55,7 +55,7 @@ def test_step_forward_is_pure_and_deterministic():
 def test_move_forward_spends_mp_and_returns_result():
     start = Hex(0, 0)
     end, mp2, res = compute_move_forward(start, Facing.D2, mp=5, steps=2)
-    assert (end.q, end.r) == (0, -2)
+    assert (end.q, end.r) == (2, -2)
     assert mp2 == 3
     assert res.start == start
     assert res.end == end

@@ -90,16 +90,11 @@ class ShipState:
             track=self.track,
         )
 
-
     # ---------------------------------------------------------------------
     # Turning (free, gated by charge, resets charge)
     # ---------------------------------------------------------------------
 
-    def turn_left(self, steps: int = 1) -> ShipState:
-        if steps < 0:
-            raise ValueError("steps must be >= 0")
-        if steps == 0:
-            return self
+    def turn_left(self) -> ShipState:
         if not self.can_turn():
             raise ValueError(
                 f"Cannot turn: turn_charge={self.turn_charge}, turn_cost={self.turn_cost}"
@@ -108,18 +103,14 @@ class ShipState:
             ship_id=self.ship_id,
             owner_id=self.owner_id,
             pos=self.pos,
-            facing=self.facing.left(steps),
+            facing=self.facing.left(1),
             mp=self.mp,
             turn_cost=self.turn_cost,
             turn_charge=0,
             track=self.track,
         )
 
-    def turn_right(self, steps: int = 1) -> ShipState:
-        if steps < 0:
-            raise ValueError("steps must be >= 0")
-        if steps == 0:
-            return self
+    def turn_right(self) -> ShipState:
         if not self.can_turn():
             raise ValueError(
                 f"Cannot turn: turn_charge={self.turn_charge}, turn_cost={self.turn_cost}"
@@ -128,9 +119,33 @@ class ShipState:
             ship_id=self.ship_id,
             owner_id=self.owner_id,
             pos=self.pos,
-            facing=self.facing.right(steps),
+            facing=self.facing.right(1),
             mp=self.mp,
             turn_cost=self.turn_cost,
             turn_charge=0,
             track=self.track,
         )
+
+    def missing_turn_charge(self) -> int:
+        """How many more MP-equivalents must be spent to earn a turn."""
+        return max(0, self.turn_cost - self.turn_charge)
+
+    def turn_left_auto(self) -> ShipState:
+        """If needed, spend MP to finish charging, then turn left (one step)."""
+        missing = self.missing_turn_charge()
+        s = self
+        if missing > 0:
+            if s.mp < missing:
+                raise ValueError(f"Insufficient MP to charge turn: mp={s.mp}, missing={missing}")
+            s = s.spend_mp(missing)
+        return s.turn_left()
+
+    def turn_right_auto(self) -> ShipState:
+        """If needed, spend MP to finish charging, then turn right (one step)."""
+        missing = self.missing_turn_charge()
+        s = self
+        if missing > 0:
+            if s.mp < missing:
+                raise ValueError(f"Insufficient MP to charge turn: mp={s.mp}, missing={missing}")
+            s = s.spend_mp(missing)
+        return s.turn_right()
