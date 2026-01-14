@@ -45,7 +45,7 @@ class Encounter:
     # Movement side whose move is currently executing (low -> high)
     active_side_index: int = 0
 
-    # Baseline MP "design cap" per ship at encounter start (used when no SystemTrack)
+    # Baseline MP "design cap" per ship at encounter start (used when no ShipSystems)
     mp_capacity_base: dict[ShipID, int] = None
 
     # MP at start of THIS movement subphase (after refresh)
@@ -113,9 +113,9 @@ class Encounter:
 
     def _capacity_for_ship(self, ship_id: ShipID) -> int:
         ship = self.battle.ships[ship_id]
-        # If we have a system track, use its movement points as current capacity.
-        if ship.track is not None:
-            return ship.track.movement_points()
+        # If we have ship systems, use its movement points as current capacity.
+        if ship.systems is not None:
+            return ship.systems.movement_points()
         # Otherwise fall back to baseline captured at encounter start.
         return int(self.mp_capacity_base.get(ship_id, ship.mp))
 
@@ -138,7 +138,7 @@ class Encounter:
                 mp=cap,
                 turn_cost=ship.turn_cost,
                 turn_charge=ship.turn_charge,  # persists across phases/turns
-                track=ship.track,
+                systems=ship.systems,
             )
             new_ships[sid] = refreshed
             mp_start[sid] = cap

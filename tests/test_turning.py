@@ -6,7 +6,7 @@ from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
 from tactical.ship_state import ShipState
-from tactical.system_track import SystemTrack
+from tactical.system_track import ShipSystems
 
 
 def test_turning_requires_full_charge_and_resets_charge():
@@ -21,7 +21,7 @@ def test_turning_requires_full_charge_and_resets_charge():
         mp=3,
         turn_cost=3,
         turn_charge=0,
-        track=SystemTrack.parse("III"),
+        systems=ShipSystems.parse("III"),
     )
     battle = BattleState(ships={"A1": ship})
     enc = Encounter.start(battle, rng=rng, movement_subphases=3)
@@ -53,7 +53,7 @@ def test_turning_does_not_count_as_mp_spent_for_subphase_requirement():
         mp=3,
         turn_cost=3,
         turn_charge=3,  # already charged
-        track=SystemTrack.parse("III"),
+        systems=ShipSystems.parse("III"),
     )
     battle = BattleState(ships={"A1": ship})
     enc = Encounter.start(battle, rng=rng, movement_subphases=3)
@@ -76,7 +76,7 @@ def test_auto_turn_spends_missing_mp_then_turns_and_counts_as_spend():
         mp=3,
         turn_cost=3,
         turn_charge=1,
-        track=SystemTrack.parse("III"),
+        systems=ShipSystems.parse("III"),
     )
     battle = BattleState(ships={"A1": ship})
     enc = Encounter.start(battle, rng=rng, movement_subphases=3)

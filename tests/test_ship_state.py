@@ -3,7 +3,7 @@ import pytest
 from sim.hexgrid import Hex
 from tactical.facing import Facing
 from tactical.ship_state import ShipState
-from tactical.system_track import SystemTrack
+from tactical.system_track import ShipSystems
 
 
 def test_turn_charge_caps_and_turning_resets_charge():
@@ -15,7 +15,7 @@ def test_turn_charge_caps_and_turning_resets_charge():
         mp=10,
         turn_cost=3,
         turn_charge=0,
-        track=SystemTrack.parse("III"),
+        systems=ShipSystems.parse("III"),
     )
 
     # Move 1 => charge 1

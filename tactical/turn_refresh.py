@@ -20,6 +20,6 @@ def refresh_mp_for_new_tactical_turn(battle: BattleState, mp_by_ship_id: dict[st
             mp=int(mp_by_ship_id[ship_id]),
             turn_cost=ship.turn_cost,
             turn_charge=ship.turn_charge,  # persists!
-            track=ship.track,
+            track=ship.systems,
         )
     return BattleState(new_ships)

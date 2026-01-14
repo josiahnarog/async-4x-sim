@@ -49,7 +49,7 @@ class SystemBox:
 
 
 @dataclass(frozen=True, slots=True)
-class SystemTrack:
+class ShipSystems:
     """Canonical representation of a ship's system track.
 
     Ordering of boxes is authoritative and used for:
@@ -65,7 +65,7 @@ class SystemTrack:
     # ---------------------------------------------------------------------
 
     @staticmethod
-    def parse(compact: str) -> SystemTrack:
+    def parse(compact: str) -> ShipSystems:
         """Parse a compact system-track string.
 
         Examples:
@@ -127,11 +127,11 @@ class SystemTrack:
         if not boxes:
             raise ValueError("SystemTrack cannot be empty")
 
-        return SystemTrack(tuple(boxes))
+        return ShipSystems(tuple(boxes))
 
     @staticmethod
-    def from_boxes(boxes: Iterable[SystemBox]) -> SystemTrack:
-        return SystemTrack(tuple(boxes))
+    def from_boxes(boxes: Iterable[SystemBox]) -> ShipSystems:
+        return ShipSystems(tuple(boxes))
 
     # ---------------------------------------------------------------------
     # Rendering / serialization
@@ -178,7 +178,7 @@ class SystemTrack:
         }
 
     @staticmethod
-    def from_dict(data: dict) -> SystemTrack:
+    def from_dict(data: dict) -> ShipSystems:
         boxes: list[SystemBox] = []
 
         for b in data.get("boxes", []):
@@ -201,7 +201,7 @@ class SystemTrack:
                 )
             )
 
-        return SystemTrack(tuple(boxes))
+        return ShipSystems(tuple(boxes))
 
     # ---------------------------------------------------------------------
     # Queries
@@ -229,7 +229,7 @@ class SystemTrack:
     # Mutation (pure, deterministic)
     # ---------------------------------------------------------------------
 
-    def apply_damage(self, amount: int = 1) -> SystemTrack:
+    def apply_damage(self, amount: int = 1) -> ShipSystems:
         """Apply damage left-to-right to intact systems.
 
         Returns a new SystemTrack (does not mutate).
@@ -247,4 +247,4 @@ class SystemTrack:
             else:
                 new_boxes.append(b)
 
-        return SystemTrack(tuple(new_boxes))
+        return ShipSystems(tuple(new_boxes))

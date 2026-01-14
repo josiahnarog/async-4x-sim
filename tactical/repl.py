@@ -8,14 +8,14 @@ from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
-from tactical.system_track import SystemTrack
+from tactical.system_track import ShipSystems
 
 
 def _fmt_ship(s: ShipState) -> str:
     return (
         f"{s.ship_id:>3} owner={s.owner_id} pos=({s.pos.q:+},{s.pos.r:+}) "
         f"face={int(s.facing)} mp={s.mp} tc={s.turn_cost} ch={s.turn_charge} "
-        f"track={s.track.render_compact() if s.track else '-'}"
+        f"track={s.systems.render_compact() if s.systems else '-'}"
     )
 
 
@@ -52,7 +52,7 @@ def main() -> None:
         mp=6,
         turn_cost=3,
         turn_charge=0,
-        track=SystemTrack.parse("IIII"),  # capacity=4 per subphase refresh
+        systems=ShipSystems.parse("IIII"),  # capacity=4 per subphase refresh
     )
     b = ShipState(
         ship_id="B1",
@@ -62,7 +62,7 @@ def main() -> None:
         mp=6,
         turn_cost=3,
         turn_charge=0,
-        track=SystemTrack.parse("III"),  # capacity=3 per subphase refresh
+        systems=ShipSystems.parse("III"),  # capacity=3 per subphase refresh
     )
 
     battle = BattleState(ships={"A1": a, "B1": b})

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sim.hexgrid import Hex
 from tactical.facing import Facing
 from tactical.movement import compute_move_forward
-from tactical.system_track import SystemTrack
+from tactical.system_track import ShipSystems
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +28,7 @@ class ShipState:
     turn_cost: int  # MP required (spent) to earn a turn
     turn_charge: int = 0  # in [0, turn_cost]
 
-    track: SystemTrack | None = None  # optional for now; useful immediately
+    systems: ShipSystems | None = None  # optional for now; useful immediately
 
     # ---------------------------------------------------------------------
     # Invariants / helpers
@@ -67,7 +67,7 @@ class ShipState:
             mp=new_mp,
             turn_cost=self.turn_cost,
             turn_charge=new_charge,
-            track=self.track,
+            systems=self.systems,
         )
 
     def move_forward(self, steps: int = 1, *, occupied: set[Hex] | None = None) -> ShipState:
@@ -87,7 +87,7 @@ class ShipState:
             mp=new_mp,
             turn_cost=self.turn_cost,
             turn_charge=new_charge,
-            track=self.track,
+            systems=self.systems,
         )
 
     # ---------------------------------------------------------------------
@@ -107,7 +107,7 @@ class ShipState:
             mp=self.mp,
             turn_cost=self.turn_cost,
             turn_charge=0,
-            track=self.track,
+            systems=self.systems,
         )
 
     def turn_right(self) -> ShipState:
@@ -123,7 +123,7 @@ class ShipState:
             mp=self.mp,
             turn_cost=self.turn_cost,
             turn_charge=0,
-            track=self.track,
+            systems=self.systems,
         )
 
     def missing_turn_charge(self) -> int:
