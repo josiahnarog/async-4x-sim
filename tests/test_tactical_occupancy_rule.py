@@ -16,15 +16,16 @@ def test_can_pass_through_occupied_hex_but_cannot_end_in_one():
         turn_charge=0,
     )
 
-    occupied = {Hex(1, 0)}  # directly in front
+    # Facing.N is (dq,dr) = (0,+1), so directly in front is (0,1)
+    occupied = {Hex(0, 1)}
 
-    # steps=2 passes through (1,0) but ends at (2,0) => allowed
+    # steps=2 passes through (0,1) but ends at (0,2) => allowed
     ship2 = ship.move_forward(2, occupied=occupied)
-    assert (ship2.pos.q, ship2.pos.r) == (2, 0)
+    assert (ship2.pos.q, ship2.pos.r) == (0, 2)
     assert ship2.mp == 8
     assert ship2.turn_charge == 2
 
-    # steps=1 ends at (1,0) => not allowed
+    # steps=1 ends at (0,1) => not allowed
     with pytest.raises(ValueError):
         ship.move_forward(1, occupied=occupied)
 
@@ -40,8 +41,14 @@ def test_destination_occupied_blocks_even_if_not_adjacent():
         turn_charge=0,
     )
 
-    occupied = {Hex(3, 0)}
+    # 3 steps north from (0,0) ends at (0,3)
+    occupied = {Hex(0, 3)}
 
     # moving 3 would land on occupied destination => blocked
     with pytest.raises(ValueError):
         ship.move_forward(3, occupied=occupied)
+
+    # moving 2 ends at (0,2) => allowed
+    ship2 = ship.move_forward(2, occupied=occupied)
+    assert (ship2.pos.q, ship2.pos.r) == (0, 2)
+
