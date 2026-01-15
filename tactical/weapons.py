@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Optional, Union
 
 
 MAX_RANGE = 50
@@ -14,11 +14,29 @@ class RangeTable:
 
     If fewer than 51 values are provided, we extend by repeating the last value.
     """
-    values: tuple[int, ...]
+    values: tuple[Optional[int], ...]
 
     @staticmethod
-    def from_list(vals: Iterable[int]) -> RangeTable:
-        base = tuple(int(v) for v in vals)
+    def from_list(vals: Iterable[Union[int, str, None]]) -> RangeTable:
+        """Create a RangeTable from ints and/or '-' sentinels.
+
+        '-' or None means "not possible" (e.g., cannot hit beyond this range).
+        """
+        base_list: list[Optional[int]] = []
+        for v in vals:
+            if v is None:
+                base_list.append(None)
+                continue
+            if isinstance(v, str):
+                s = v.strip()
+                if s == "-":
+                    base_list.append(None)
+                    continue
+                base_list.append(int(s))
+                continue
+            base_list.append(int(v))
+
+        base = tuple(base_list)
         if not base:
             raise ValueError("RangeTable requires at least one value")
         if len(base) < MAX_RANGE + 1:
@@ -27,7 +45,7 @@ class RangeTable:
             base = base[: MAX_RANGE + 1]
         return RangeTable(values=base)
 
-    def at(self, rng: int) -> int:
+    def at(self, rng: int) -> Optional[int]:
         if rng < 0:
             raise ValueError("range must be >= 0")
         if rng > MAX_RANGE:
@@ -39,6 +57,7 @@ class WeaponType(str, Enum):
     ELECTRON_BEAM = "E"  # Electron Beam
     LASER = "L"          # Laser
     FORCE_BEAM = "F"     # Force Beam (baseline example)
+    STANDARD_MISSILE = "R"  # Standard Missile
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +73,11 @@ class WeaponSpec:
     shield_multiplier: float = 1.0             # e.g. Electron Beam = 0.5 against shields
 
     def damage_at(self, rng: int) -> int:
-        return self.damage.at(rng)
+        v = self.damage.at(rng)
+        assert v is not None
+        return v
 
-    def to_hit_at(self, rng: int) -> int:
+    def to_hit_at(self, rng: int) -> Optional[int]:
         return self.to_hit.at(rng)
 
 
@@ -92,9 +113,20 @@ FORCE_BEAM = WeaponSpec(
     damage=RangeTable.from_list([2]),
 )
 
+STANDARD_MISSILE = WeaponSpec(
+    type=WeaponType.STANDARD_MISSILE,
+    name="Standard Missile",
+    rate_of_fire=1,
+    # '-' means "cannot hit beyond this range"; extended to 0..50 by repeating '-'.
+    to_hit=RangeTable.from_list([6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 4, 4, 3, 3, "-"]),
+    # 1 damage at all ranges
+    damage=RangeTable.from_list([1]),
+)
+
 
 WEAPONS: dict[WeaponType, WeaponSpec] = {
     WeaponType.ELECTRON_BEAM: ELECTRON_BEAM,
     WeaponType.LASER: LASER,
     WeaponType.FORCE_BEAM: FORCE_BEAM,
+    WeaponType.STANDARD_MISSILE: STANDARD_MISSILE,
 }

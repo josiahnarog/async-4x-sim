@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Tuple
+
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Iterable, Iterator

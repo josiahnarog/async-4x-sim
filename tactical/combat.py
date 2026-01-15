@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Optional, Protocol
 
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
@@ -26,7 +26,7 @@ class FireEvent:
     weapon: WeaponType
     range: int
     roll: int
-    to_hit: int
+    to_hit: Optional[int]
     hit: bool
     raw_damage: int
 
@@ -51,7 +51,7 @@ def resolve_large_fire(
     rng_dist = hex_distance(attacker.pos, target.pos)
     to_hit = spec.to_hit_at(rng_dist)
     roll = int(rng.randint(1, 10))
-    hit = roll >= to_hit
+    hit = (to_hit is not None) and (roll >= to_hit)
 
     raw_damage = spec.damage_at(rng_dist)
 
