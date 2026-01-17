@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Tuple
-
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Tuple
+
 from tactical.weapons import WeaponSpec
 
 
@@ -255,61 +254,56 @@ class ShipSystems:
     def apply_weapon_damage(self, damage: int, *, weapon: WeaponSpec) -> "ShipSystems":
         """Apply weapon damage to this ship's systems.
 
-        Rules:
+        Rules (current MVP):
           - damage is applied point-by-point
-          - ALWAYS skip systems that are already destroyed
-          - weapon may skip specific codes (e.g. Laser skips 'S', Electron skips 'A' and 'H')
-          - Electron Beam does half damage against shields, per point (rounded down)
-            Implementation here: when the selected system is a shield, the point applies only
-            if floor(1 * shield_multiplier) == 1; with 0.5 multiplier this means:
-              - a single point would do 0 to shields (so effectively shields are very resistant)
-            If you want "half total damage" instead, see note below.
+          - ALWAYS skip systems that are already DESTROYED
+          - weapon may skip specific base codes (e.g. Laser skips 'S', Electron skips 'A' and 'H')
+          - Electron Beam: half damage vs shields (rounded down) applied as:
+              when the next eligible system is a shield, reduce remaining points to floor(points * multiplier)
+              before applying to shields.
+            (If you instead want per-point halving, say so; this is the more “tabletop typical” interpretation.)
         """
         if damage <= 0:
             return self
 
-        systems = list(self.systems)  # assumes `self.systems` is a list[System] field
+        systems = list(self.systems)
         skip = set(weapon.skip_codes)
 
-        def is_destroyed(i: int) -> bool:
-            return bool(systems[i].destroyed)
+        def eligible(i: int) -> bool:
+            s = systems[i]
+            return s.is_active() and (s.base not in skip)
 
-        def code_of(i: int) -> str:
-            # only the leading capital letter is the "system code" for skip comparisons
-            # (since you have camel-case modifiers like Xc)
-            c = systems[i].code
-            return c[:1] if c else ""
-
-        def select_next_index() -> int | None:
+        def next_idx() -> int | None:
             for i in range(len(systems)):
-                if is_destroyed(i):
-                    continue
-                if code_of(i) in skip:
-                    continue
-                return i
+                if eligible(i):
+                    return i
             return None
 
-        # Apply damage point-by-point to the next eligible system
         points = int(damage)
+
         while points > 0:
-            idx = select_next_index()
+            idx = next_idx()
             if idx is None:
                 break
 
-            code = code_of(idx)
+            if systems[idx].base == "S" and weapon.shield_multiplier != 1.0:
+                points = int(points * weapon.shield_multiplier)  # floor
+                if points <= 0:
+                    break
 
-            # Electron beam halves damage vs shields.
-            # IMPORTANT: this interpretation matters. If you instead mean "halve TOTAL damage dealt
-            # when the first impacted system is shields", we can change it. See note below.
-            if code == "S" and weapon.shield_multiplier != 1.0:
-                eff = int(1 * weapon.shield_multiplier)  # floor
-                if eff <= 0:
-                    # consumes the point but does not damage the shield
-                    points -= 1
-                    continue
-
-            # Destroy this system box
-            systems[idx] = replace(systems[idx], destroyed=True)
+            systems[idx] = systems[idx].destroy()
             points -= 1
 
-        return type(self)(systems=systems)
+        return ShipSystems(tuple(systems))
+
+    def point_defense(self) -> Tuple[int, int]:
+        """
+        Returns (shots, to_hit) for point defense for the current incoming volley.
+
+        Each intact 'D' system provides 3 shots at 3+ to hit.
+        Shot capacity is per incoming volley (handled by combat resolution).
+        """
+        pd_mounts = sum(1 for s in self.systems if s.is_active() and s.base == "D")
+        if pd_mounts <= 0:
+            return (0, 0)
+        return (pd_mounts * 3, 3)

@@ -6,6 +6,7 @@ from typing import Optional, Protocol
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
 from tactical.weapons import WEAPONS, WeaponType, WeaponSpec
+from tactical.missile_volley import resolve_missile_volley
 
 
 class RNG(Protocol):
@@ -29,6 +30,10 @@ class FireEvent:
     to_hit: Optional[int]
     hit: bool
     raw_damage: int
+    # missile-specific fields (None for non-missile weapons)
+    missile_hits: Optional[int] = None
+    pd_intercepted: Optional[int] = None
+    remaining_hits: Optional[int] = None
 
 
 def resolve_large_fire(
@@ -49,6 +54,65 @@ def resolve_large_fire(
     spec: WeaponSpec = WEAPONS[weapon]
 
     rng_dist = hex_distance(attacker.pos, target.pos)
+    # Missile weapon: roll-to-hit -> hits -> PD engages hits -> remaining hits apply as damage points.
+    if weapon == WeaponType.STANDARD_MISSILE:
+        to_hit = spec.to_hit_at(rng_dist)
+        hits = 0
+        last_roll = 0
+
+        if to_hit is not None:
+            for _ in range(spec.rate_of_fire):
+                last_roll = int(rng.randint(1, 10))
+                if last_roll >= to_hit:
+                    hits += 1
+
+        intercepted = 0
+        remaining = hits
+
+        if hits > 0 and target.systems is not None:
+            pd_shots, pd_to_hit = target.systems.point_defense()
+            if pd_shots > 0 and pd_to_hit > 0:
+                res = resolve_missile_volley(
+                    incoming_hits=hits,
+                    pd_shots=pd_shots,
+                    pd_to_hit=pd_to_hit,
+                    rng=rng,
+                )
+                intercepted = res.intercepted
+                remaining = res.remaining_hits
+
+        event = FireEvent(
+            attacker_id=attacker_id,
+            target_id=target_id,
+            weapon=weapon,
+            range=rng_dist,
+            roll=last_roll,
+            to_hit=to_hit,
+            hit=(hits > 0),
+            raw_damage=remaining,
+            missile_hits=hits,
+            pd_intercepted=intercepted,
+            remaining_hits=remaining,
+        )
+
+        if remaining <= 0 or target.systems is None:
+            return battle, event
+
+        new_systems = target.systems.apply_weapon_damage(remaining, weapon=spec)
+
+        new_target = type(target)(
+            ship_id=target.ship_id,
+            owner_id=target.owner_id,
+            pos=target.pos,
+            facing=target.facing,
+            mp=target.mp,
+            turn_cost=target.turn_cost,
+            turn_charge=target.turn_charge,
+            systems=new_systems,
+        )
+        return battle.with_ship(new_target), event
+
+    # Beam weapons (existing behavior)
     to_hit = spec.to_hit_at(rng_dist)
     roll = int(rng.randint(1, 10))
     hit = (to_hit is not None) and (roll >= to_hit)

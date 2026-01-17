@@ -32,10 +32,10 @@ def resolve_missile_volley(
       - PD capacity is per volley
       - each PD hit intercepts exactly one missile hit
     """
-    if incoming_hits <= 0 or pd_shots <= 0:
+    if incoming_hits <= 0 or pd_shots <= 0 or pd_to_hit <= 0:
         return VolleyResult(
             incoming_hits=incoming_hits,
-            pd_shots=pd_shots,
+            pd_shots=0,
             pd_hits=0,
             intercepted=0,
             remaining_hits=incoming_hits,
