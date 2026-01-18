@@ -7,6 +7,8 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
 from tactical.weapons import WEAPONS, WeaponType, WeaponSpec
 from tactical.missile_volley import resolve_missile_volley
+from tactical.attack_context import AttackContext, TargetClass, ToHitMod
+from tactical.to_hit import combine_mods, resolve_to_hit, check_hit, roll_hits_target
 
 
 class RNG(Protocol):
@@ -53,17 +55,40 @@ def resolve_large_fire(
     target = battle.ships[target_id]
     spec: WeaponSpec = WEAPONS[weapon]
 
-    rng_dist = hex_distance(attacker.pos, target.pos)
-    # Missile weapon: roll-to-hit -> hits -> PD engages hits -> remaining hits apply as damage points.
+    base_range = hex_distance(attacker.pos, target.pos)
+
+    # Placeholder hook: later we can add ECM/evasion/missile countermeasures here.
+    mods = combine_mods([])  # no modifiers yet
+
+    effective_range = max(0, base_range + mods.range_shift)
+    ctx = AttackContext(
+        target_class=TargetClass.SHIP,
+        base_range=base_range,
+        effective_range=effective_range,
+    )
+
+    # -------------------------
+    # Missile weapons
+    # -------------------------
     if weapon == WeaponType.STANDARD_MISSILE:
-        to_hit = spec.to_hit_at(rng_dist)
+        base_to_hit = spec.to_hit_at(effective_range)
+        # Resolve final to-hit target number (may be None if '-' cutoff)
+        res = resolve_to_hit(base_to_hit=base_to_hit, ctx=ctx, mods=mods)
+        to_hit = res.target
+
         hits = 0
         last_roll = 0
 
         if to_hit is not None:
             for _ in range(spec.rate_of_fire):
                 last_roll = int(rng.randint(1, 10))
-                if last_roll >= to_hit:
+                check = roll_hits_target(
+                    roll=last_roll,
+                    base_target=to_hit,
+                    target_delta=0,
+                    roll_delta=res.roll_delta,
+                )
+                if check.hit:
                     hits += 1
 
         intercepted = 0
@@ -72,24 +97,24 @@ def resolve_large_fire(
         if hits > 0 and target.systems is not None:
             pd_shots, pd_to_hit = target.systems.point_defense()
             if pd_shots > 0 and pd_to_hit > 0:
-                res = resolve_missile_volley(
+                volley = resolve_missile_volley(
                     incoming_hits=hits,
                     pd_shots=pd_shots,
                     pd_to_hit=pd_to_hit,
                     rng=rng,
                 )
-                intercepted = res.intercepted
-                remaining = res.remaining_hits
+                intercepted = volley.intercepted
+                remaining = volley.remaining_hits
 
         event = FireEvent(
             attacker_id=attacker_id,
             target_id=target_id,
             weapon=weapon,
-            range=rng_dist,
+            range=base_range,
             roll=last_roll,
             to_hit=to_hit,
             hit=(hits > 0),
-            raw_damage=remaining,
+            raw_damage=remaining,  # remaining hits apply as damage points for now
             missile_hits=hits,
             pd_intercepted=intercepted,
             remaining_hits=remaining,
@@ -99,7 +124,6 @@ def resolve_large_fire(
             return battle, event
 
         new_systems = target.systems.apply_weapon_damage(remaining, weapon=spec)
-
         new_target = type(target)(
             ship_id=target.ship_id,
             owner_id=target.owner_id,
@@ -112,18 +136,30 @@ def resolve_large_fire(
         )
         return battle.with_ship(new_target), event
 
-    # Beam weapons (existing behavior)
-    to_hit = spec.to_hit_at(rng_dist)
+    # -------------------------
+    # Beam weapons (existing behavior, but canonical hit logic)
+    # -------------------------
     roll = int(rng.randint(1, 10))
-    hit = (to_hit is not None) and (roll >= to_hit)
 
-    raw_damage = spec.damage_at(rng_dist)
+    base_to_hit = spec.to_hit_at(effective_range)
+    res = resolve_to_hit(base_to_hit=base_to_hit, ctx=ctx, mods=mods)
+    to_hit = res.target
+
+    check = roll_hits_target(
+        roll=roll,
+        base_target=to_hit,
+        target_delta=0,
+        roll_delta=res.roll_delta,
+    )
+    hit = check.hit
+
+    raw_damage = spec.damage_at(base_range)
 
     event = FireEvent(
         attacker_id=attacker_id,
         target_id=target_id,
         weapon=weapon,
-        range=rng_dist,
+        range=base_range,
         roll=roll,
         to_hit=to_hit,
         hit=hit,
@@ -134,7 +170,6 @@ def resolve_large_fire(
         return battle, event
 
     if target.systems is None:
-        # No systems model => nothing to damage yet
         return battle, event
 
     new_systems = target.systems.apply_weapon_damage(raw_damage, weapon=spec)
@@ -149,3 +184,4 @@ def resolve_large_fire(
         systems=new_systems,
     )
     return battle.with_ship(new_target), event
+

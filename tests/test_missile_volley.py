@@ -20,7 +20,7 @@ def test_pd_limited_by_shots_per_volley():
     res = resolve_missile_volley(
         incoming_hits=10,
         pd_shots=3,
-        pd_to_hit=1,  # guaranteed hits
+        pd_to_hit=10,  # guaranteed hits under roll<=target semantics
         rng=rng,
     )
     assert res.intercepted == 3
@@ -44,7 +44,7 @@ def test_pd_exactly_intercepts_all_hits_if_lucky():
     res = resolve_missile_volley(
         incoming_hits=2,
         pd_shots=5,
-        pd_to_hit=1,  # guaranteed
+        pd_to_hit=10,  # guaranteed hits
         rng=rng,
     )
     assert res.remaining_hits == 0

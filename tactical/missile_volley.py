@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from tactical.to_hit import roll_hits_target
+
 
 class RNG(Protocol):
     def randint(self, a: int, b: int) -> int: ...
@@ -23,6 +25,7 @@ def resolve_missile_volley(
     pd_shots: int,
     pd_to_hit: int,
     rng: RNG,
+    target_delta = 0
 ) -> VolleyResult:
     """
     Resolve point defense against an incoming missile volley.
@@ -46,7 +49,7 @@ def resolve_missile_volley(
 
     for _ in range(shots):
         roll = int(rng.randint(1, 10))
-        if roll >= pd_to_hit:
+        if roll_hits_target(roll=roll, base_target=pd_to_hit,target_delta=target_delta):
             pd_hits += 1
 
     intercepted = min(pd_hits, incoming_hits)
