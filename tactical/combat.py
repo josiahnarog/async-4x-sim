@@ -80,7 +80,11 @@ def resolve_large_fire(
         last_roll = 0
 
         if to_hit is not None:
-            for _ in range(spec.rate_of_fire):
+            # MVP: each intact 'R' launcher contributes one missile per firing
+            launcher_count = attacker.systems.active_count("R") if attacker.systems is not None else 0
+            shots = launcher_count * spec.rate_of_fire
+
+            for _ in range(shots):
                 last_roll = int(rng.randint(1, 10))
                 check = roll_hits_target(
                     roll=last_roll,

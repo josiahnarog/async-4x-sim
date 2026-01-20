@@ -25,16 +25,20 @@ def resolve_missile_volley(
     pd_shots: int,
     pd_to_hit: int,
     rng: RNG,
-    target_delta = 0
+    target_delta: int = 0,
 ) -> VolleyResult:
     """
     Resolve point defense against an incoming missile volley.
 
-    Rules:
-      - PD only engages *hits*
-      - PD capacity is per volley
+    Canonical semantics:
+      - higher to-hit target is easier
+      - a PD shot hits iff roll <= (pd_to_hit + target_delta)
+      - PD only engages hits
+      - capacity is per volley
       - each PD hit intercepts exactly one missile hit
     """
+    from tactical.to_hit import roll_hits_target
+
     if incoming_hits <= 0 or pd_shots <= 0 or pd_to_hit <= 0:
         return VolleyResult(
             incoming_hits=incoming_hits,
@@ -49,7 +53,12 @@ def resolve_missile_volley(
 
     for _ in range(shots):
         roll = int(rng.randint(1, 10))
-        if roll_hits_target(roll=roll, base_target=pd_to_hit,target_delta=target_delta):
+        if roll_hits_target(
+            roll=roll,
+            base_target=pd_to_hit,
+            target_delta=target_delta,
+            roll_delta=0,
+        ).hit:
             pd_hits += 1
 
     intercepted = min(pd_hits, incoming_hits)
@@ -62,3 +71,4 @@ def resolve_missile_volley(
         intercepted=intercepted,
         remaining_hits=remaining,
     )
+
