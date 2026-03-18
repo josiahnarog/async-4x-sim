@@ -17,6 +17,7 @@ class VolleyResult:
     pd_hits: int
     intercepted: int
     remaining_hits: int
+    pd_rolls: tuple[int, ...] = ()  # each PD shot's roll result
 
 
 def resolve_missile_volley(
@@ -50,9 +51,11 @@ def resolve_missile_volley(
 
     shots = min(pd_shots, incoming_hits)
     pd_hits = 0
+    all_pd_rolls: list[int] = []
 
     for _ in range(shots):
         roll = int(rng.randint(1, 10))
+        all_pd_rolls.append(roll)
         if roll_hits_target(
             roll=roll,
             base_target=pd_to_hit,
@@ -70,5 +73,6 @@ def resolve_missile_volley(
         pd_hits=pd_hits,
         intercepted=intercepted,
         remaining_hits=remaining,
+        pd_rolls=tuple(all_pd_rolls),
     )
 

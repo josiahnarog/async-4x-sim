@@ -14,7 +14,7 @@ class HullType:
 
     def movement_points(self, active_engine_count: int) -> int:
         """MP capacity from engine count, floored and capped at max_speed."""
-        raw = int(active_engine_count * self.engine_power_ratio)
+        raw = int(active_engine_count / self.engine_power_ratio)
         return min(raw, self.max_speed)
 
 

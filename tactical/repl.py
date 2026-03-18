@@ -6,6 +6,7 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
+from tactical.hull_types import FG
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
@@ -100,36 +101,63 @@ def _scenario_missiles_vs_pd() -> "Encounter":
     return Encounter(battle=battle)
 
 def _format_fire_event(ev) -> str:
-    # keep it simple and readable in REPL
-    s = f"{ev.attacker_id} -> {ev.target_id} w={ev.weapon.value} r={ev.range} roll={ev.roll} to_hit={ev.to_hit} hit={ev.hit} dmg={ev.raw_damage}"
-    if getattr(ev, "missile_hits", None) is not None:
-        s += f" | missile_hits={ev.missile_hits} pd_int={ev.pd_intercepted} rem={ev.remaining_hits}"
-    return s
+    if getattr(ev, "missile_rolls", None) is not None:
+        to_hit = ev.to_hit
+        roll_detail = ", ".join(
+            f"{r}{'✓' if to_hit is not None and r <= to_hit else '✗'}"
+            for r in ev.missile_rolls
+        )
+        pd_detail = ""
+        if ev.pd_rolls:
+            pd_to_hit = 3  # canonical PD to-hit
+            pd_roll_str = ", ".join(
+                f"{r}{'✓' if r <= pd_to_hit else '✗'}"
+                for r in ev.pd_rolls
+            )
+            pd_detail = f" pd_rolls=[{pd_roll_str}] pd_int={ev.pd_intercepted}"
+        else:
+            pd_detail = f" pd_int={ev.pd_intercepted}"
+        return (
+            f"{ev.attacker_id} -> {ev.target_id} w={ev.weapon.value} r={ev.range} "
+            f"to_hit={ev.to_hit} rolls=[{roll_detail}] hits={ev.missile_hits}"
+            f"{pd_detail} rem={ev.remaining_hits} dmg={ev.raw_damage}"
+        )
+    return (
+        f"{ev.attacker_id} -> {ev.target_id} w={ev.weapon.value} r={ev.range} "
+        f"roll={ev.roll} to_hit={ev.to_hit} hit={ev.hit} dmg={ev.raw_damage}"
+    )
 
 
 def main() -> None:
+    import sys
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     rng = random.Random(1)
 
-    # Tiny starter scenario: 2 sides, 1 ship each.
+    # Default scenario: 2 identical Frigates, one per side.
+    _fg_systems = "SSSSSAAAAA(I)FFRRD(I)(I)(I)"
     a = ShipState(
         ship_id="A1",
         owner_id="A",
         pos=Hex(0, 0),
-        facing=Facing.N,
-        mp=6,
-        turn_cost=3,
+        facing=Facing.NE,
+        mp=5,
+        turn_cost=2,
         turn_charge=0,
-        systems=ShipSystems.parse("IIII"),  # capacity=4 per subphase refresh
+        systems=ShipSystems.parse(_fg_systems),
+        hull_type=FG,
     )
     b = ShipState(
         ship_id="B1",
         owner_id="B",
         pos=Hex(6, 0),
         facing=Facing.S,
-        mp=6,
-        turn_cost=3,
+        mp=5,
+        turn_cost=2,
         turn_charge=0,
-        systems=ShipSystems.parse("III"),  # capacity=3 per subphase refresh
+        systems=ShipSystems.parse(_fg_systems),
+        hull_type=FG,
     )
 
     battle = BattleState(ships={"A1": a, "B1": b})
@@ -144,6 +172,7 @@ def main() -> None:
     print("  tr <ship_id> [steps]  (turn right; free but requires full charge)")
     print("  spend <ship_id> <mp>")
     print("  end                 (end active side movement; enforces required spend)")
+    print("  fireall <ship_id> <target_id>  (fire all active weapons at target)")
     print("  fire <ship_id>      (COMBAT_LARGE only; marks ship spent)")
     print("  pass <ship_id>      (COMBAT_LARGE only; marks ship spent)")
     print("  next                (COMBAT_LARGE only; advance to next combat side / cycle)")
@@ -169,6 +198,34 @@ def main() -> None:
                 print(render_tactical_grid_ascii(enc.battle, radius=6))
                 continue
 
+            if cmd == "fireall":
+                if len(parts) != 3:
+                    print("usage: fireall <attacker_id> <target_id>")
+                    continue
+                attacker_id, target_id = parts[1], parts[2]
+                if attacker_id not in enc.battle.ships:
+                    print(f"unknown ship: {attacker_id!r}")
+                    continue
+                attacker_owner = enc.battle.ships[attacker_id].owner_id
+                if attacker_owner != enc.active_side():
+                    print(f"not your turn: {attacker_id!r} belongs to side {attacker_owner!r}, active side is {enc.active_side()!r}")
+                    continue
+                from dataclasses import replace
+                from tactical.combat import resolve_fire_all
+                enc_battle, events = resolve_fire_all(
+                    enc.battle,
+                    attacker_id=attacker_id,
+                    target_id=target_id,
+                    rng=rng,
+                )
+                enc = replace(enc, battle=enc_battle)
+                if not events:
+                    print(f"{attacker_id} has no active weapons.")
+                for ev in events:
+                    print(_format_fire_event(ev))
+                _print_state(enc)
+                continue
+
             if cmd == "shoot":
                 if len(parts) != 4:
                     print("usage: shoot <attacker_id> <target_id> <weapon_code>")
@@ -187,8 +244,6 @@ def main() -> None:
                     print(f"unknown weapon_code: {wcode!r}")
                     continue
 
-                rng = random.Random(0)
-
                 battle2, ev = resolve_large_fire(
                     enc.battle,
                     attacker_id=attacker_id,
@@ -196,7 +251,8 @@ def main() -> None:
                     weapon=weapon,
                     rng=rng,
                 )
-                enc = type(enc)(**{**enc.__dict__, "battle": battle2})  # functional update
+                from dataclasses import replace
+                enc = replace(enc, battle=battle2)
 
                 print(_format_fire_event(ev))
                 _print_state(enc)

@@ -36,6 +36,8 @@ class FireEvent:
     missile_hits: Optional[int] = None
     pd_intercepted: Optional[int] = None
     remaining_hits: Optional[int] = None
+    missile_rolls: Optional[tuple[int, ...]] = None  # per-missile roll results
+    pd_rolls: Optional[tuple[int, ...]] = None       # per-PD-shot roll results
 
 
 def resolve_large_fire(
@@ -78,6 +80,7 @@ def resolve_large_fire(
 
         hits = 0
         last_roll = 0
+        all_rolls: list[int] = []
 
         if to_hit is not None:
             # MVP: each intact 'R' launcher contributes one missile per firing
@@ -86,6 +89,7 @@ def resolve_large_fire(
 
             for _ in range(shots):
                 last_roll = int(rng.randint(1, 10))
+                all_rolls.append(last_roll)
                 check = roll_hits_target(
                     roll=last_roll,
                     base_target=to_hit,
@@ -118,10 +122,12 @@ def resolve_large_fire(
             roll=last_roll,
             to_hit=to_hit,
             hit=(hits > 0),
-            raw_damage=remaining,  # remaining hits apply as damage points for now
+            raw_damage=remaining,
             missile_hits=hits,
             pd_intercepted=intercepted,
             remaining_hits=remaining,
+            missile_rolls=tuple(all_rolls),
+            pd_rolls=volley.pd_rolls if hits > 0 else None,
         )
 
         if remaining <= 0 or target.systems is None:
@@ -137,6 +143,7 @@ def resolve_large_fire(
             turn_cost=target.turn_cost,
             turn_charge=target.turn_charge,
             systems=new_systems,
+            hull_type=target.hull_type,
         )
         return battle.with_ship(new_target), event
 
@@ -186,6 +193,54 @@ def resolve_large_fire(
         turn_cost=target.turn_cost,
         turn_charge=target.turn_charge,
         systems=new_systems,
+        hull_type=target.hull_type,
     )
     return battle.with_ship(new_target), event
+
+
+# Weapon system codes that map to WeaponType values
+_WEAPON_CODES: dict[str, WeaponType] = {wt.value: wt for wt in WeaponType}
+
+
+def resolve_fire_all(
+    battle: BattleState,
+    *,
+    attacker_id: ShipID,
+    target_id: ShipID,
+    rng: RNG,
+) -> tuple[BattleState, list[FireEvent]]:
+    """Fire all active weapons on attacker at target.
+
+    Beams (L, E, F): one firing per active weapon instance.
+    Missiles (R): all active launchers fire as a single volley (handled by resolve_large_fire).
+    """
+    attacker = battle.ships[attacker_id]
+    if attacker.systems is None:
+        return battle, []
+
+    events: list[FireEvent] = []
+    missile_fired = False
+
+    for system in attacker.systems:
+        if not system.is_active():
+            continue
+        weapon_type = _WEAPON_CODES.get(system.base)
+        if weapon_type is None:
+            continue
+
+        if weapon_type == WeaponType.STANDARD_MISSILE:
+            if missile_fired:
+                continue  # all launchers already resolved as one volley
+            missile_fired = True
+
+        battle, ev = resolve_large_fire(
+            battle,
+            attacker_id=attacker_id,
+            target_id=target_id,
+            weapon=weapon_type,
+            rng=rng,
+        )
+        events.append(ev)
+
+    return battle, events
 

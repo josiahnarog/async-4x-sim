@@ -109,8 +109,8 @@ FORCE_BEAM = WeaponSpec(
     name="Force Beam",
     rate_of_fire=1,
     # Placeholder baseline; you can replace later
-    to_hit=RangeTable.from_list([7]),
-    damage=RangeTable.from_list([2]),
+    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 7, 6, 6]),
+    damage=RangeTable.from_list([3, 2, 2, 2, 1, 1, 1, 1, "-"]),
 )
 
 STANDARD_MISSILE = WeaponSpec(

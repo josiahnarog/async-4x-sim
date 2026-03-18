@@ -262,7 +262,7 @@ class ShipSystems:
         count = self._active_engine_count(engine_code)
         if engine_power_ratio is None:
             return count
-        return int(count * Fraction(engine_power_ratio))
+        return int(count / Fraction(engine_power_ratio))
 
     # ---------------------------------------------------------------------
     # Mutation (pure, deterministic)
