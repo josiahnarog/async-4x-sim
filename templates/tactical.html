@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Tactical Encounter</title>
+  <style>
+    body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace; margin: 16px; background: #1a1a2e; color: #e0e0e0; }
+    h1 { color: #a8d8ea; margin-bottom: 4px; }
+    h2 { color: #a8d8ea; margin: 12px 0 6px; font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.08em; }
+    .phase { color: #f0e68c; margin-bottom: 12px; font-size: 0.95em; }
+    .row { display: flex; gap: 16px; align-items: flex-start; }
+    .col-map { flex: 0 0 auto; }
+    .col-right { flex: 1; min-width: 320px; }
+    canvas { display: block; background: #0d0d1a; border-radius: 6px; }
+    pre { background: #0d0d1a; padding: 12px; border-radius: 6px; overflow: auto; color: #c8f0c8; font-size: 0.88em; margin: 0; }
+    .ships-pre { color: #d0d8ff; }
+    .log-pre { color: #c0c0c0; max-height: 320px; overflow-y: auto; }
+    .cmd-row { display: flex; gap: 8px; margin-top: 8px; }
+    input[type=text] { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.95em; }
+    input[type=text]:focus { outline: none; border-color: #a8d8ea; }
+    button { padding: 8px 16px; border-radius: 6px; border: 1px solid #555; background: #2a2a4a; color: #e0e0e0; cursor: pointer; font-family: inherit; }
+    button:hover { background: #3a3a6a; }
+    .hint { font-size: 0.78em; color: #888; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Tactical Encounter</h1>
+  <div class="phase">{{ phase }}</div>
+
+  <div class="row">
+    <div class="col-map">
+      <h2>Map</h2>
+      <canvas id="hexmap" width="560" height="560"></canvas>
+
+      <h2>Ships</h2>
+      <pre class="ships-pre">{{ ships_text }}</pre>
+    </div>
+
+    <div class="col-right">
+      <h2>Command</h2>
+      <form method="post" action="/tactical/command">
+        <div class="cmd-row">
+          <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. fireall A1 B1"/>
+          <button type="submit">Send</button>
+        </div>
+      </form>
+      <div class="hint">
+        move &lt;id&gt; &lt;n&gt; &nbsp;|&nbsp; tl/tr/tla/tra &lt;id&gt; &nbsp;|&nbsp; spend &lt;id&gt; &lt;n&gt;<br/>
+        end &nbsp;|&nbsp; fireall &lt;att&gt; &lt;tgt&gt; &nbsp;|&nbsp; next &nbsp;|&nbsp; pass &lt;id&gt; &nbsp;|&nbsp; reset
+      </div>
+
+      <h2>Log</h2>
+      <pre class="log-pre" id="log">{{ log }}</pre>
+    </div>
+  </div>
+
+  <script>
+    // -----------------------------------------------------------------------
+    // Hex map canvas renderer — flat-top orientation, axial coordinates
+    // FACING_OFFSETS: N=(0,+1) NE=(+1,0) SE=(+1,-1) S=(0,-1) SW=(-1,0) NW=(-1,+1)
+    // Flat-top pixel formula (r increases upward, canvas y increases downward):
+    //   px = cx + SIZE * (3/2 * q)
+    //   py = cy - SIZE * (sqrt(3)/2 * q + sqrt(3) * r)
+    // -----------------------------------------------------------------------
+
+    const SHIPS = {{ ships_json | safe }};
+    const RADIUS = 8;
+    const SIZE = 28;           // hex circumradius in px
+    const SQ3 = Math.sqrt(3);
+
+    const OWNER_COLORS = { "A": "#4488ff", "B": "#ff4444" };
+    const OWNER_DARK   = { "A": "#1a3a88", "B": "#881a1a" };
+    const FACING_NAMES = ["N", "NE", "SE", "S", "SW", "NW"];
+
+    function hexToPixel(q, r, cx, cy) {
+      return {
+        x: cx + SIZE * (1.5 * q),
+        y: cy - SIZE * (SQ3 / 2 * q + SQ3 * r),
+      };
+    }
+
+    function drawHexPath(ctx, x, y) {
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = (i * Math.PI) / 3;
+        const px = x + SIZE * Math.cos(angle);
+        const py = y + SIZE * Math.sin(angle);
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+    }
+
+    function drawGrid(ctx, cx, cy) {
+      for (let q = -RADIUS; q <= RADIUS; q++) {
+        const rMin = Math.max(-RADIUS, -q - RADIUS);
+        const rMax = Math.min(RADIUS,  -q + RADIUS);
+        for (let r = rMin; r <= rMax; r++) {
+          const { x, y } = hexToPixel(q, r, cx, cy);
+          drawHexPath(ctx, x, y);
+          ctx.fillStyle = "#111128";
+          ctx.fill();
+          ctx.strokeStyle = "#2a2a4a";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Coord label at origin only
+          if (q === 0 && r === 0) {
+            ctx.fillStyle = "#333355";
+            ctx.font = "9px monospace";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("0,0", x, y);
+          }
+        }
+      }
+    }
+
+    function drawShip(ctx, ship, cx, cy) {
+      const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
+      const color = OWNER_COLORS[ship.owner] || "#ffffff";
+      const dark  = OWNER_DARK[ship.owner]  || "#444444";
+
+      // Body circle
+      ctx.beginPath();
+      ctx.arc(x, y, SIZE * 0.38, 0, 2 * Math.PI);
+      ctx.fillStyle = dark;
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Facing arrow (pointing from center outward)
+      const angle = -Math.PI / 2 + ship.facing * (Math.PI / 3);
+      const arrowLen = SIZE * 0.55;
+      const tipX = x + arrowLen * Math.cos(angle);
+      const tipY = y + arrowLen * Math.sin(angle);
+
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(tipX, tipY);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+
+      // Arrowhead
+      const headLen = SIZE * 0.18;
+      const leftAngle  = angle + 2.7;
+      const rightAngle = angle - 2.7;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX + headLen * Math.cos(leftAngle),  tipY + headLen * Math.sin(leftAngle));
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX + headLen * Math.cos(rightAngle), tipY + headLen * Math.sin(rightAngle));
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Label (id + facing name)
+      ctx.fillStyle = color;
+      ctx.font = "bold 10px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(ship.id, x, y + 1);
+
+      ctx.fillStyle = "#aaaaaa";
+      ctx.font = "9px monospace";
+      ctx.fillText(FACING_NAMES[ship.facing], x, y + SIZE * 0.62);
+    }
+
+    function render() {
+      const canvas = document.getElementById("hexmap");
+      const ctx = canvas.getContext("2d");
+      const cx = canvas.width  / 2;
+      const cy = canvas.height / 2;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawGrid(ctx, cx, cy);
+      for (const ship of SHIPS) drawShip(ctx, ship, cx, cy);
+    }
+
+    render();
+
+    // Scroll log to bottom
+    const log = document.getElementById("log");
+    if (log) log.scrollTop = log.scrollHeight;
+    document.getElementById("cmd").focus();
+  </script>
+</body>
+</html>

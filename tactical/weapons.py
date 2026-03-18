@@ -60,6 +60,16 @@ class WeaponType(str, Enum):
     STANDARD_MISSILE = "R"  # Standard Missile
 
 
+class WeaponArc(Enum):
+    """Defines which arcs a weapon can fire into (on top of the global blind-spot rule).
+
+    ALL     — can fire into any non-blind-spot bearing (relative bearings 0, 1, 5).
+    FORWARD — can only fire dead ahead (relative bearing 0).
+    """
+    ALL     = "all"
+    FORWARD = "forward"
+
+
 @dataclass(frozen=True, slots=True)
 class WeaponSpec:
     type: WeaponType
@@ -71,6 +81,9 @@ class WeaponSpec:
     # Damage application rules:
     skip_codes: frozenset[str] = frozenset()   # codes skipped entirely by this weapon
     shield_multiplier: float = 1.0             # e.g. Electron Beam = 0.5 against shields
+
+    # Firing arc restriction (in addition to the universal blind-spot rule):
+    firing_arc: WeaponArc = WeaponArc.ALL
 
     def damage_at(self, rng: int) -> int:
         v = self.damage.at(rng)

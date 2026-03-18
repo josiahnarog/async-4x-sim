@@ -20,6 +20,9 @@ from scenarios.simple_scenario import build_game
 app = FastAPI(title="Async 4X Sim (MVP)")
 templates = Jinja2Templates(directory="templates")
 
+from tactical.web import router as tactical_router
+app.include_router(tactical_router)
+
 
 def _load_game(game_id: str):
     s = db.get_game_json(game_id)

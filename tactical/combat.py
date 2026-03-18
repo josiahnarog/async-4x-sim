@@ -5,10 +5,11 @@ from typing import Optional, Protocol
 
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
-from tactical.weapons import WEAPONS, WeaponType, WeaponSpec
+from tactical.weapons import WEAPONS, WeaponType, WeaponSpec, WeaponArc
 from tactical.missile_volley import resolve_missile_volley
 from tactical.attack_context import AttackContext, TargetClass, ToHitMod
 from tactical.to_hit import combine_mods, resolve_to_hit, check_hit, roll_hits_target
+from tactical.arcs import arc_of, relative_bearing, Arc, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS
 
 
 class RNG(Protocol):
@@ -59,8 +60,27 @@ def resolve_large_fire(
 
     base_range = hex_distance(attacker.pos, target.pos)
 
-    # Placeholder hook: later we can add ECM/evasion/missile countermeasures here.
-    mods = combine_mods([])  # no modifiers yet
+    # Blind-spot enforcement: cannot fire at a target in the attacker's rear arc.
+    dq = target.pos.q - attacker.pos.q
+    dr = target.pos.r - attacker.pos.r
+    rb_from_attacker = relative_bearing(int(attacker.facing), dq, dr)
+    if rb_from_attacker in REAR_BEARINGS:
+        raise ValueError(
+            f"{attacker_id} cannot fire at {target_id}: target is in blind spot "
+            f"(relative bearing {rb_from_attacker})"
+        )
+
+    # Per-weapon arc restriction (e.g. FORWARD-only weapons).
+    if spec.firing_arc == WeaponArc.FORWARD and rb_from_attacker != 0:
+        raise ValueError(
+            f"{weapon.value} weapon on {attacker_id} has FORWARD-only arc; "
+            f"target is at relative bearing {rb_from_attacker}"
+        )
+
+    # Arc modifiers: bonus to-hit when attacking from the target's blind spot.
+    attacker_in_target_rear = arc_of(int(target.facing), -dq, -dr) == Arc.REAR
+    arc_target_delta = REAR_ARC_TO_HIT_BONUS if attacker_in_target_rear else 0
+    mods = combine_mods([ToHitMod(target_delta=arc_target_delta)])
 
     effective_range = max(0, base_range + mods.range_shift)
     ctx = AttackContext(
@@ -101,8 +121,9 @@ def resolve_large_fire(
 
         intercepted = 0
         remaining = hits
+        pd_rolls_out: Optional[tuple[int, ...]] = None
 
-        if hits > 0 and target.systems is not None:
+        if hits > 0 and target.systems is not None and not attacker_in_target_rear:
             pd_shots, pd_to_hit = target.systems.point_defense()
             if pd_shots > 0 and pd_to_hit > 0:
                 volley = resolve_missile_volley(
@@ -113,6 +134,7 @@ def resolve_large_fire(
                 )
                 intercepted = volley.intercepted
                 remaining = volley.remaining_hits
+                pd_rolls_out = volley.pd_rolls
 
         event = FireEvent(
             attacker_id=attacker_id,
@@ -127,7 +149,7 @@ def resolve_large_fire(
             pd_intercepted=intercepted,
             remaining_hits=remaining,
             missile_rolls=tuple(all_rolls),
-            pd_rolls=volley.pd_rolls if hits > 0 else None,
+            pd_rolls=pd_rolls_out,
         )
 
         if remaining <= 0 or target.systems is None:
@@ -215,8 +237,20 @@ def resolve_fire_all(
     Missiles (R): all active launchers fire as a single volley (handled by resolve_large_fire).
     """
     attacker = battle.ships[attacker_id]
+    target = battle.ships[target_id]
+
     if attacker.systems is None:
         return battle, []
+
+    # Global blind-spot rule: cannot fire at a target in the attacker's rear arc.
+    dq = target.pos.q - attacker.pos.q
+    dr = target.pos.r - attacker.pos.r
+    rb = relative_bearing(int(attacker.facing), dq, dr)
+    if rb in REAR_BEARINGS:
+        raise ValueError(
+            f"{attacker_id} cannot fire at {target_id}: target is in blind spot "
+            f"(relative bearing {rb})"
+        )
 
     events: list[FireEvent] = []
     missile_fired = False
@@ -227,6 +261,11 @@ def resolve_fire_all(
         weapon_type = _WEAPON_CODES.get(system.base)
         if weapon_type is None:
             continue
+
+        # Per-weapon arc restriction (e.g. FORWARD-only weapons).
+        spec = WEAPONS[weapon_type]
+        if spec.firing_arc == WeaponArc.FORWARD and rb != 0:
+            continue  # this weapon cannot reach that bearing
 
         if weapon_type == WeaponType.STANDARD_MISSILE:
             if missile_fired:
