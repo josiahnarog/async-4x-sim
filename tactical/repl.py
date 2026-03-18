@@ -187,9 +187,6 @@ def main() -> None:
                     print(f"unknown weapon_code: {wcode!r}")
                     continue
 
-                # Use encounter's rng if you have one; otherwise a deterministic default.
-                # If Encounter already stores rng, swap this line accordingly.
-                import random
                 rng = random.Random(0)
 
                 battle2, ev = resolve_large_fire(

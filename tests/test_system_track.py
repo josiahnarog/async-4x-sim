@@ -22,7 +22,8 @@ def test_apply_damage_left_to_right_and_marks_destroyed():
 
     t2 = t1.apply_damage(1)
     assert t2.render_compact() == "!S!A(!II)L"
-    assert t2.movement_points() == 1
+    # One engine in the room is destroyed — the whole room is inactive.
+    assert t2.movement_points() == 0
 
 
 def test_serialization_roundtrip_is_lossless():

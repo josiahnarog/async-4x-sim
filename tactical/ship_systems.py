@@ -223,9 +223,46 @@ class ShipSystems:
         c = code.upper()
         return sum(1 for b in self.systems if b.is_active() and b.base == c)
 
-    def movement_points(self, engine_code: str = "I") -> int:
-        """MVP rule: each intact engine system grants 1 movement point."""
-        return self.active_count(engine_code)
+    def _active_engine_count(self, engine_code: str = "I") -> int:
+        """Count active engine systems, applying engine room rules.
+
+        Engine room rule: a grouped cluster of engine systems contributes its
+        full count only if every system in that group is intact. A single
+        destroyed system in a room disables the entire room.
+
+        Ungrouped engine systems (group=None) are counted individually.
+        """
+        count = 0
+
+        # Ungrouped engines count individually.
+        for s in self.systems:
+            if s.base == engine_code and s.group is None and s.is_active():
+                count += 1
+
+        # Grouped systems: collect all systems per group, then apply room rule.
+        groups: dict[int, list[System]] = {}
+        for s in self.systems:
+            if s.group is not None:
+                groups.setdefault(s.group, []).append(s)
+
+        for room in groups.values():
+            if all(s.is_active() for s in room):
+                count += sum(1 for s in room if s.base == engine_code)
+
+        return count
+
+    def movement_points(self, engine_code: str = "I", engine_power_ratio=None) -> int:
+        """Return MP capacity from active engine systems.
+
+        Applies engine room rules (see _active_engine_count). If
+        engine_power_ratio is provided (a Fraction or float from a HullType),
+        MP = floor(active_count * ratio). Otherwise defaults to 1:1.
+        """
+        from fractions import Fraction
+        count = self._active_engine_count(engine_code)
+        if engine_power_ratio is None:
+            return count
+        return int(count * Fraction(engine_power_ratio))
 
     # ---------------------------------------------------------------------
     # Mutation (pure, deterministic)

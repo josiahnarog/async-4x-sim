@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sim.hexgrid import Hex
 from tactical.facing import Facing
 from tactical.movement import compute_move_forward
 from tactical.ship_systems import ShipSystems
+
+if TYPE_CHECKING:
+    from tactical.hull_types import HullType
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +32,8 @@ class ShipState:
     turn_cost: int  # MP required (spent) to earn a turn
     turn_charge: int = 0  # in [0, turn_cost]
 
-    systems: ShipSystems | None = None  # optional for now; useful immediately
+    systems: ShipSystems | None = None
+    hull_type: HullType | None = None
 
     # ---------------------------------------------------------------------
     # Invariants / helpers
@@ -68,6 +73,7 @@ class ShipState:
             turn_cost=self.turn_cost,
             turn_charge=new_charge,
             systems=self.systems,
+            hull_type=self.hull_type,
         )
 
     def move_forward(self, steps: int = 1, *, occupied: set[Hex] | None = None) -> ShipState:
@@ -88,6 +94,7 @@ class ShipState:
             turn_cost=self.turn_cost,
             turn_charge=new_charge,
             systems=self.systems,
+            hull_type=self.hull_type,
         )
 
     # ---------------------------------------------------------------------
@@ -108,6 +115,7 @@ class ShipState:
             turn_cost=self.turn_cost,
             turn_charge=0,
             systems=self.systems,
+            hull_type=self.hull_type,
         )
 
     def turn_right(self) -> ShipState:
@@ -124,6 +132,7 @@ class ShipState:
             turn_cost=self.turn_cost,
             turn_charge=0,
             systems=self.systems,
+            hull_type=self.hull_type,
         )
 
     def missing_turn_charge(self) -> int:

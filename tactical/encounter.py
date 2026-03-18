@@ -115,10 +115,12 @@ class Encounter:
 
     def _capacity_for_ship(self, ship_id: ShipID) -> int:
         ship = self.battle.ships[ship_id]
-        # If we have ship systems, use its movement points as current capacity.
         if ship.systems is not None:
-            return ship.systems.movement_points()
-        # Otherwise fall back to baseline captured at encounter start.
+            epr = ship.hull_type.engine_power_ratio if ship.hull_type else None
+            mp = ship.systems.movement_points(engine_power_ratio=epr)
+            if ship.hull_type:
+                mp = min(mp, ship.hull_type.max_speed)
+            return mp
         return int(self.mp_capacity_base.get(ship_id, ship.mp))
 
     def _refresh_movement_subphase_mp(self) -> Encounter:

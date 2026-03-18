@@ -8,9 +8,7 @@
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
 
-from repl.repl import run_repl
-from scenarios.simple_scenario import build_game
+from tactical.repl import main
 
 if __name__ == "__main__":
-    game = build_game()
-    run_repl(game)
+    main()
