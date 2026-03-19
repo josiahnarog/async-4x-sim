@@ -63,20 +63,26 @@ A separate, detailed ship-level combat system with its own state machine:
 - **`to_hit.py`** — Hit probability calculations (shared logic used across systems).
 - **`weapons.py`** / **`missile_volley.py`** — Weapon fire and missile volley mechanics with point defense.
 - **`ship_state.py`** / **`ship_systems.py`** — Per-ship damage tracking and systems.
+- **`arcs.py`** — Firing arc geometry: `relative_bearing`, `arc_of`, blind-spot constants.
+- **`hull_types.py`** — `HullType` dataclass (FG/DD/CA) with EPR, engines-per-room, max speed.
+- **`combat.py`** — `resolve_large_fire` and `resolve_fire_all`; arc enforcement lives here.
+- **`web.py`** — FastAPI router for the tactical web UI (`/tactical/`). Single-session global state (placeholder for future per-game persistence).
 
 ### Interfaces
 
-- **`app.py`** — FastAPI application. Handles game creation, command dispatch, snapshots for rollback, and multiplayer turn enforcement (only the active player can mutate state).
-- **`repl/repl.py`** — Interactive CLI for local play.
+- **`app.py`** — FastAPI application. Mounts the strategic game UI and the tactical router (`/tactical/`).
+- **`main.py`** — Entry point; routes to `tactical/repl.py`.
+- **`tactical/repl.py`** — Interactive CLI for tactical play. Primary development interface.
 - **`db.py`** — SQLite persistence layer (games and snapshots tables).
-- **`scenarios/simple_scenario.py`** — Default two-player game initialization.
+- **`scenarios/simple_scenario.py`** — Default two-player strategic game initialization.
+- **`templates/tactical.html`** — Tactical web UI: canvas hex map (flat-top, radius 8) + command input.
 
 ### Data Flow
 
-1. Players submit orders via web API (`app.py`) or REPL (`repl/repl.py`).
-2. Orders are queued on `GameState` in `turn_engine.py`.
+1. Players submit orders via web API (`app.py`) or tactical REPL (`tactical/repl.py`).
+2. Strategic orders are queued on `GameState` in `turn_engine.py`; tactical commands mutate `Encounter` state directly.
 3. On turn submission, `turn_engine.py` processes movement, interception, and combat (delegating to `sim/combat/` or `tactical/`).
-4. State is persisted via `persistence.py` → `db.py` (SQLite).
+4. Strategic state is persisted via `persistence.py` → `db.py` (SQLite). Tactical state is currently in-memory only.
 
 ## Key Conventions
 
@@ -104,9 +110,11 @@ Ships are composed of ordered systems stored as structured objects (not raw stri
 | S | Shield |
 | A | Armor |
 | L | Laser |
-| I | Internal |
+| E | Electron Beam |
+| F | Force Beam |
 | R | Standard Missile launcher |
 | D | Point Defense |
+| I | Internal (engine room) |
 
 Parsing, rendering, and deterministic damage application are handled by `ShipSystems` in `tactical/ship_systems.py`.
 
@@ -121,6 +129,26 @@ Parsing, rendering, and deterministic damage application are handled by `ShipSys
 
 A volley = all missiles from one firing unit. Each intact `R` launcher contributes shots. PD (`D` systems) fires only at incoming hits, 3 shots per `D` per volley, to-hit target of 3. Each PD hit cancels one missile hit. Resolved via `resolve_missile_volley(...)` in `tactical/missile_volley.py`.
 
+### Firing Arcs
+
+Centralized in `tactical/arcs.py`. Bearings are relative to the observer's facing: 0 = dead ahead, 1 = 60° right, …, 3 = dead astern, …, 5 = 60° left.
+
+**Blind spot**: relative bearing 3 only (dead astern — a 60° cone). A unit cannot fire at a target in its own blind spot. Enforced in `resolve_large_fire` (covers all call paths including the REPL `shoot` command).
+
+**Rear-arc bonus**: if the attacker is at bearing 3 from the *target's* facing, `target_delta += 2` (20% easier on d10).
+
+**PD suppression**: PD is fully disabled against missiles fired from the target's blind spot (attacker at bearing 3 from target).
+
+**`WeaponArc`** (in `weapons.py`): `ALL` (default — any non-blind-spot bearing) or `FORWARD` (bearing 0 only). Per-weapon arc violations skip that weapon in `resolve_fire_all`; `resolve_large_fire` raises `ValueError`.
+
+### Hull Types
+
+Defined in `tactical/hull_types.py`. `HullType` fields: `designation`, `name`, `engine_power_ratio` (EPR, as `Fraction`), `engines_per_room`, `max_speed`.
+
+**EPR semantics**: engines required *per MP* — `MP = active_engine_count / EPR`. FG=2/3, DD=1, CA=2.
+
+**Engine room rule**: engines in a parenthesised group (e.g. `(III)`) contribute 0 MP if any system in the group is destroyed. Implemented in `ShipSystems._active_engine_count()`.
+
 ### Tactical Turn Structure
 
 **Movement phase**: 3 sub-phases (default). Initiative determines order (low → high moves first). Each ship spends ~⅓ of its MP per sub-phase; turn charge persists across sub-phases.
@@ -133,6 +161,17 @@ A volley = all missiles from one firing unit. Each intact `R` launcher contribut
 
 - **Small, incremental changes.** Prefer drop-in snippets over large refactors.
 - **Deterministic behavior everywhere.** Tests use a seeded RNG; never break stable test ordering.
-- **REPL-first iteration.** The tactical REPL (`python main.py`) is the primary development interface — use `scenario missiles`, `map`, `shoot A1 B1 R` etc. to validate behavior interactively.
+- **REPL-first iteration.** The tactical REPL (`python main.py`) is the primary development interface — use `scenario missiles`, `map`, `shoot A1 B1 R`, `fireall A1 B1` etc. to validate behavior interactively.
 - **Pure functions preferred.** Explicit state transitions over implicit side effects.
 - **Do not rewrite working systems.** Especially anything in v1 (`sim/`, `app.py`).
+
+## Design Documents
+
+- **`docs/tactical_combat_design.md`** — Full turn structure and fighter mechanics design.
+  Read this before implementing anything in `tactical/` related to phases, fighters, or
+  the movement simulation. Supersedes any conflicting notes in this file.
+
+## Known Issues / Next Work
+
+- **Damage does not reduce movement points.** Systems (including engine rooms) are marked destroyed by damage, but `ShipState.mp` is not recalculated after taking hits. Movement capacity should be recomputed from `ShipSystems` after each damage application.
+- **Tactical turn structure enforcement is incomplete.** The `Encounter` phase/activation state machine needs tighter enforcement — e.g. preventing fire outside the combat phase, ensuring all ships have activated before advancing, and handling the `COMPLETE` phase transition cleanly.
