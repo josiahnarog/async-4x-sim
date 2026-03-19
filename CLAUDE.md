@@ -149,13 +149,23 @@ Defined in `tactical/hull_types.py`. `HullType` fields: `designation`, `name`, `
 
 **Engine room rule**: engines in a parenthesised group (e.g. `(III)`) contribute 0 MP if any system in the group is destroyed. Implemented in `ShipSystems._active_engine_count()`.
 
-### Tactical Turn Structure
+### Tactical Turn Structure (Simultaneous-Submission Model)
 
-**Movement phase**: 3 sub-phases (default). Initiative determines order (low → high moves first). Each ship spends ~⅓ of its MP per sub-phase; turn charge persists across sub-phases.
+Three phases per turn (see `docs/tactical_combat_design.md` for the full spec):
 
-**Movement rules**: Ships spend MP to move forward. Turning requires accumulating turn charge; once threshold is met the turn is free and charge resets. A ship may pass through an occupied hex but cannot end movement there.
+| Phase | `Encounter` state | How it works |
+|-------|-------------------|--------------|
+| **MOVE_SUBMISSION** | `phase == Phase.MOVE_SUBMISSION` | Each side calls `stage_move(side, ship, dest, facing)` then `commit_movement(side)`. When all sides have committed, `_resolve_movement()` fires automatically. |
+| **COMBAT_SUBMISSION** | `phase == Phase.COMBAT_SUBMISSION` | Each side calls `stage_fire(side, ship, target)` or `pass_fire(side, ship)`, then `commit_fire(side, rng)`. When all sides have committed, `_resolve_fire(rng)` fires automatically. |
+| **COMBAT_SMALL** | `phase == Phase.COMBAT_SMALL` | Fighter combat — not yet implemented. |
 
-**Combat phase**: Large unit combat — high initiative fires first, alternating activation, each unit fires once or passes. Small unit combat (fighters/gunships) is planned but not yet implemented.
+**Collision resolution**: when two ships submit moves to the same hex, higher initiative (from `Initiative.rolls`) wins; lower-initiative ship's move is cancelled (it stays in place).
+
+**Simultaneity rule**: all fire is resolved against the pre-combat `BattleState` snapshot; damage is accumulated per target and applied in one pass after all shots. A ship destroyed mid-volley still fires back.
+
+**Movement validation**: destination distance must be ≤ ship's MP capacity at encounter start (`_mp_capacity`). No turn-cost enforcement for MVP — ships may freely choose any facing at their destination.
+
+**`turn_orders.py`**: `ShipMoveOrder(dest, dest_facing)` and `ShipFireOrder(target_id)` — the order dataclasses staged during submission phases.
 
 ## Developer Preferences
 
@@ -174,4 +184,5 @@ Defined in `tactical/hull_types.py`. `HullType` fields: `designation`, `name`, `
 ## Known Issues / Next Work
 
 - **Damage does not reduce movement points.** Systems (including engine rooms) are marked destroyed by damage, but `ShipState.mp` is not recalculated after taking hits. Movement capacity should be recomputed from `ShipSystems` after each damage application.
-- **Tactical turn structure enforcement is incomplete.** The `Encounter` phase/activation state machine needs tighter enforcement — e.g. preventing fire outside the combat phase, ensuring all ships have activated before advancing, and handling the `COMPLETE` phase transition cleanly.
+- **COMBAT_SMALL not implemented.** Fighter mechanics are designed in `docs/tactical_combat_design.md` but not yet coded. For now, `_resolve_fire` automatically calls `next_turn()` to skip `COMBAT_SMALL` and return to `MOVE_SUBMISSION` for the next turn.
+- **`next_turn()` recomputes MP from live systems**, so engine damage does reduce movement on subsequent turns. The remaining gap: `ShipState.mp` still reflects the previous turn's capacity mid-turn (between damage application and the next `next_turn()` call).

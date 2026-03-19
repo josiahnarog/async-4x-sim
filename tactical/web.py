@@ -21,6 +21,18 @@ _rng: Optional[random.Random] = None
 _log: list[str] = []
 _MAX_LOG = 100
 
+# Draft move state — built up by move/tl/tr/spend commands before commit.
+# Each entry: ship_id -> {
+#   "pos":           Hex,
+#   "facing":        int (0-5),
+#   "mp_remaining":  int,
+#   "turn_charge":   int,
+#   "turn_cost":     int,
+#   "path":          list[Hex],   # hex waypoints from ship start (inclusive)
+#   "mp_used":       int,
+# }
+_drafts: dict = {}
+
 
 def _build_default() -> tuple:
     from sim.hexgrid import Hex
@@ -40,21 +52,97 @@ def _build_default() -> tuple:
                   mp=5, turn_cost=2, turn_charge=0,
                   systems=ShipSystems.parse(fg), hull_type=FG)
     battle = BattleState(ships={"A1": a, "B1": b})
-    enc = Encounter.start(battle, rng=rng, movement_subphases=3)
+    enc = Encounter.start(battle, rng=rng)
     return enc, rng
 
 
 def _reset() -> None:
-    global _enc, _rng, _log
+    global _enc, _rng, _log, _drafts
     _enc, _rng = _build_default()
     _log = []
+    _drafts = {}
 
 
 _reset()
 
 
 # ---------------------------------------------------------------------------
-# Fire event formatting (mirrors repl.py)
+# Draft-path helpers
+# ---------------------------------------------------------------------------
+
+def _get_or_create_draft(ship_id: str) -> dict:
+    """Return the draft for ship_id, creating it from the current ship state."""
+    if ship_id not in _drafts:
+        ship = _enc.battle.ships[ship_id]
+        cap  = _enc._mp_capacity.get(ship_id, ship.mp)
+        _drafts[ship_id] = {
+            "pos":          ship.pos,
+            "facing":       int(ship.facing),
+            "mp_remaining": cap,
+            "turn_charge":  ship.turn_charge,
+            "turn_cost":    ship.turn_cost,
+            "path":         [ship.pos],
+            "mp_used":      0,
+        }
+    return _drafts[ship_id]
+
+
+def _draft_move_forward(ship_id: str, steps: int) -> list[str]:
+    """Advance ship draft forward `steps` hexes in current draft facing."""
+    from sim.hexgrid import Hex
+    from tactical.facing import FACING_OFFSETS
+
+    d = _get_or_create_draft(ship_id)
+    if steps <= 0:
+        return [f"steps must be > 0"]
+    if steps > d["mp_remaining"]:
+        return [f"Ship {ship_id!r} has only {d['mp_remaining']} MP remaining in this draft"]
+
+    dq, dr = FACING_OFFSETS[d["facing"]]
+    pos = d["pos"]
+    new_path = list(d["path"])
+    for _ in range(steps):
+        pos = Hex(pos.q + dq, pos.r + dr)
+        new_path.append(pos)
+
+    d["pos"]          = pos
+    d["mp_remaining"] -= steps
+    d["mp_used"]      += steps
+    d["turn_charge"]   = min(d["turn_charge"] + steps, d["turn_cost"])
+    d["path"]          = new_path
+    return [f"Draft {ship_id}: +{steps} forward → ({pos.q},{pos.r}) "
+            f"facing={d['facing']} mp_left={d['mp_remaining']}"]
+
+
+def _draft_turn(ship_id: str, direction: int) -> list[str]:
+    """Turn draft ±1 facing step (direction: +1 = right, -1 = left)."""
+    d = _get_or_create_draft(ship_id)
+    if d["turn_charge"] < d["turn_cost"]:
+        return [f"Cannot turn: charge={d['turn_charge']}/{d['turn_cost']} "
+                f"(use 'spend {ship_id} <n>' to charge)"]
+    d["facing"]      = (d["facing"] + direction) % 6
+    d["turn_charge"] = 0
+    facing_names     = ["N", "NE", "SE", "S", "SW", "NW"]
+    return [f"Draft {ship_id}: turned → facing {facing_names[d['facing']]} "
+            f"charge reset to 0"]
+
+
+def _draft_spend(ship_id: str, amount: int) -> list[str]:
+    """Spend MP in draft (charges turning, does not move)."""
+    d = _get_or_create_draft(ship_id)
+    if amount <= 0:
+        return ["amount must be > 0"]
+    if amount > d["mp_remaining"]:
+        return [f"Ship {ship_id!r} has only {d['mp_remaining']} MP remaining"]
+    d["mp_remaining"] -= amount
+    d["mp_used"]      += amount
+    d["turn_charge"]   = min(d["turn_charge"] + amount, d["turn_cost"])
+    return [f"Draft {ship_id}: spent {amount} MP → charge={d['turn_charge']}/{d['turn_cost']} "
+            f"mp_left={d['mp_remaining']}"]
+
+
+# ---------------------------------------------------------------------------
+# Fire event formatting
 # ---------------------------------------------------------------------------
 
 def _fmt_fire(ev) -> str:
@@ -84,7 +172,7 @@ def _fmt_fire(ev) -> str:
 # ---------------------------------------------------------------------------
 
 def _process(cmd_line: str) -> list[str]:
-    global _enc, _rng
+    global _enc, _rng, _drafts
     out: list[str] = []
     parts = cmd_line.strip().split()
     if not parts:
@@ -96,65 +184,182 @@ def _process(cmd_line: str) -> list[str]:
             _reset()
             out.append("Reset to default scenario.")
 
-        elif cmd in ("move",):
-            if len(parts) != 3:
-                out.append("usage: move <ship_id> <steps>"); return out
-            _enc = _enc.move_ship_forward(_enc.active_side(), parts[1], steps=int(parts[2]))
+        # ---------------------------------------------------------------- #
+        # Movement path building (MOVE_SUBMISSION)                          #
+        # ---------------------------------------------------------------- #
 
-        elif cmd == "tl":
-            if len(parts) != 2:
-                out.append("usage: tl <ship_id>"); return out
-            _enc = _enc.turn_ship_left(_enc.active_side(), parts[1], auto_spend=False)
+        elif cmd == "move":
+            # move <ship_id> <steps>            — forward N hexes in current draft facing
+            # move <ship_id> <q> <r> [facing]  — go directly to hex (bypasses draft)
+            if len(parts) < 3:
+                out.append("usage: move <ship_id> <steps>  OR  move <ship_id> <q> <r> [facing]")
+                return out
+            ship_id = parts[1]
+            if ship_id not in _enc.battle.ships:
+                out.append(f"unknown ship: {ship_id!r}"); return out
 
-        elif cmd == "tr":
-            if len(parts) != 2:
-                out.append("usage: tr <ship_id>"); return out
-            _enc = _enc.turn_ship_right(_enc.active_side(), parts[1], auto_spend=False)
+            from tactical.encounter import Phase
+            if _enc.phase == Phase.MOVE_SUBMISSION:
+                if len(parts) == 3:
+                    out += _draft_move_forward(ship_id, int(parts[2]))
+                else:
+                    # Direct hex destination — stage immediately, no draft
+                    from sim.hexgrid import Hex
+                    from tactical.facing import Facing
+                    ship = _enc.battle.ships[ship_id]
+                    dest = Hex(int(parts[2]), int(parts[3]))
+                    dest_facing = (
+                        Facing.from_int(int(parts[4])) if len(parts) >= 5 else ship.facing
+                    )
+                    side = ship.owner_id
+                    _enc = _enc.stage_move(side, ship_id, dest, dest_facing)
+                    out.append(f"Staged: {ship_id} → ({dest.q},{dest.r}) facing={int(dest_facing)}")
+            else:
+                out.append(f"Cannot move: phase is {_enc.phase.value!r}")
 
-        elif cmd == "tla":
+        elif cmd in ("tl", "tr"):
             if len(parts) != 2:
-                out.append("usage: tla <ship_id>"); return out
-            _enc = _enc.turn_ship_left(_enc.active_side(), parts[1], auto_spend=True)
-
-        elif cmd == "tra":
-            if len(parts) != 2:
-                out.append("usage: tra <ship_id>"); return out
-            _enc = _enc.turn_ship_right(_enc.active_side(), parts[1], auto_spend=True)
+                out.append(f"usage: {cmd} <ship_id>"); return out
+            ship_id = parts[1]
+            if ship_id not in _enc.battle.ships:
+                out.append(f"unknown ship: {ship_id!r}"); return out
+            from tactical.encounter import Phase
+            if _enc.phase != Phase.MOVE_SUBMISSION:
+                out.append(f"Cannot turn: phase is {_enc.phase.value!r}"); return out
+            direction = +1 if cmd == "tr" else -1
+            out += _draft_turn(ship_id, direction)
 
         elif cmd == "spend":
             if len(parts) != 3:
-                out.append("usage: spend <ship_id> <mp>"); return out
-            _enc = _enc.spend_mp(_enc.active_side(), parts[1], int(parts[2]))
+                out.append("usage: spend <ship_id> <amount>"); return out
+            ship_id = parts[1]
+            if ship_id not in _enc.battle.ships:
+                out.append(f"unknown ship: {ship_id!r}"); return out
+            from tactical.encounter import Phase
+            if _enc.phase != Phase.MOVE_SUBMISSION:
+                out.append(f"Cannot spend: phase is {_enc.phase.value!r}"); return out
+            out += _draft_spend(ship_id, int(parts[2]))
 
-        elif cmd == "end":
-            _enc = _enc.end_side_movement(_enc.active_side())
+        elif cmd == "commit":
+            if len(parts) < 2:
+                out.append("usage: commit move [side_id]  |  commit fire [side_id]")
+                return out
+            from tactical.encounter import Phase
+            sub = parts[1].lower()
+
+            if sub == "move":
+                if _enc.phase != Phase.MOVE_SUBMISSION:
+                    out.append(f"Not in move_submission phase (current: {_enc.phase.value})")
+                    return out
+                # Stage move orders from all pending drafts first
+                from tactical.facing import Facing
+                for ship_id, d in list(_drafts.items()):
+                    if ship_id not in _enc.battle.ships:
+                        continue
+                    ship = _enc.battle.ships[ship_id]
+                    side = ship.owner_id
+                    try:
+                        _enc = _enc.stage_move(
+                            side, ship_id,
+                            d["pos"], Facing.from_int(d["facing"]),
+                            path_cost=d["mp_used"],
+                        )
+                        out.append(
+                            f"Staged from draft: {ship_id} → ({d['pos'].q},{d['pos'].r}) "
+                            f"facing={d['facing']} cost={d['mp_used']}"
+                        )
+                    except Exception as e:
+                        out.append(f"Draft {ship_id} invalid: {e}")
+                _drafts = {}
+
+                sides_to_commit = (
+                    [parts[2]] if len(parts) >= 3
+                    else sorted(_enc.sides() - _enc._move_committed)
+                )
+                for s in sides_to_commit:
+                    _enc = _enc.commit_movement(s)
+                    out.append(f"Side {s!r} committed movement.")
+                    if _enc.phase == Phase.COMBAT_SUBMISSION:
+                        out.append("→ Movement resolved. Now in COMBAT_SUBMISSION.")
+                        break
+
+            elif sub == "fire":
+                if _enc.phase != Phase.COMBAT_SUBMISSION:
+                    out.append(f"Not in combat_submission phase (current: {_enc.phase.value})")
+                    return out
+                sides_to_commit = (
+                    [parts[2]] if len(parts) >= 3
+                    else sorted(_enc.sides() - _enc._fire_committed)
+                )
+                for s in sides_to_commit:
+                    _enc, events = _enc.commit_fire(s, _rng)
+                    out.append(f"Side {s!r} committed fire orders.")
+                    out += [_fmt_fire(ev) for ev in events]
+                    if _enc.phase == Phase.MOVE_SUBMISSION:
+                        out.append("→ Fire resolved. Starting next turn.")
+                        break
+            else:
+                out.append("usage: commit move [side_id]  |  commit fire [side_id]")
+
+        # ---------------------------------------------------------------- #
+        # Combat submission                                                  #
+        # ---------------------------------------------------------------- #
 
         elif cmd == "fireall":
             if len(parts) != 3:
-                out.append("usage: fireall <attacker_id> <target_id>"); return out
+                out.append("usage: fireall <ship_id> <target_id>"); return out
+            ship_id, target_id = parts[1], parts[2]
+            if ship_id not in _enc.battle.ships:
+                out.append(f"unknown ship: {ship_id!r}"); return out
+            side = _enc.battle.ships[ship_id].owner_id
+            _enc = _enc.stage_fire(side, ship_id, target_id)
+            out.append(f"Staged: {ship_id} fires all weapons at {target_id}")
+
+        elif cmd == "pass":
+            if len(parts) != 2:
+                out.append("usage: pass <ship_id>"); return out
+            ship_id = parts[1]
+            if ship_id not in _enc.battle.ships:
+                out.append(f"unknown ship: {ship_id!r}"); return out
+            side = _enc.battle.ships[ship_id].owner_id
+            _enc = _enc.pass_fire(side, ship_id)
+            out.append(f"Staged: {ship_id} passes fire")
+
+        # ---------------------------------------------------------------- #
+        # Debug / quick fire (bypass submission system)                      #
+        # ---------------------------------------------------------------- #
+
+        elif cmd == "quickfire":
+            if len(parts) != 3:
+                out.append("usage: quickfire <attacker_id> <target_id>"); return out
             attacker_id, target_id = parts[1], parts[2]
-            ship = _enc.battle.ships.get(attacker_id)
-            if ship is None:
+            if attacker_id not in _enc.battle.ships:
                 out.append(f"unknown ship: {attacker_id!r}"); return out
-            if ship.owner_id != _enc.active_side():
-                out.append(f"not your turn: {attacker_id!r} is side {ship.owner_id!r}, active={_enc.active_side()!r}")
-                return out
             from tactical.combat import resolve_fire_all
             new_battle, events = resolve_fire_all(
                 _enc.battle, attacker_id=attacker_id, target_id=target_id, rng=_rng)
             _enc = replace(_enc, battle=new_battle)
             out += [_fmt_fire(ev) for ev in events] or [f"{attacker_id} has no active weapons."]
 
-        elif cmd == "next":
-            _enc = _enc.advance_combat_turn()
-
-        elif cmd == "pass":
-            if len(parts) != 2:
-                out.append("usage: pass <ship_id>"); return out
-            _enc = _enc.pass_fire(_enc.active_large_combat_side(), parts[1])
+        elif cmd == "shoot":
+            if len(parts) != 4:
+                out.append("usage: shoot <attacker_id> <target_id> <weapon_code>"); return out
+            attacker_id, target_id, wcode = parts[1], parts[2], parts[3].upper()
+            from tactical.combat import resolve_large_fire
+            from tactical.weapons import WeaponType
+            try:
+                weapon = WeaponType(wcode)
+            except Exception:
+                out.append(f"unknown weapon_code: {wcode!r}"); return out
+            new_battle, ev = resolve_large_fire(
+                _enc.battle, attacker_id=attacker_id, target_id=target_id,
+                weapon=weapon, rng=_rng)
+            _enc = replace(_enc, battle=new_battle)
+            out.append(_fmt_fire(ev))
 
         else:
             out.append(f"unknown command: {cmd!r}")
+            out.append("move/tl/tr/spend  commit move  fireall/pass  commit fire  quickfire/shoot  reset")
 
     except Exception as e:
         out.append(f"ERROR: {e}")
@@ -171,7 +376,7 @@ def _render_ships() -> str:
     for sid, ship in _enc.battle.ships.items():
         lines.append(
             f"{sid:>3}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
-            f"  face={int(ship.facing)}  mp={ship.mp}  tc={ship.turn_cost}  ch={ship.turn_charge}"
+            f"  face={int(ship.facing)}  mp={ship.mp}"
             f"\n     systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
         )
     return "\n".join(lines)
@@ -180,12 +385,14 @@ def _render_ships() -> str:
 def _render_phase() -> str:
     from tactical.encounter import Phase
     enc = _enc
-    if enc.phase == Phase.MOVEMENT:
-        return (f"MOVEMENT  subphase {enc.movement_subphase_index + 1}/{enc.movement_subphases}"
-                f"  active={enc.active_side()}")
-    if enc.phase == Phase.COMBAT_LARGE:
-        return f"COMBAT (large)  active={enc.active_large_combat_side()}"
-    return enc.phase.value.upper()
+    phase = enc.phase.value.upper()
+    if enc.phase == Phase.MOVE_SUBMISSION:
+        committed = sorted(enc._move_committed)
+        return f"{phase}  committed={committed}"
+    if enc.phase == Phase.COMBAT_SUBMISSION:
+        committed = sorted(enc._fire_committed)
+        return f"{phase}  committed={committed}"
+    return phase
 
 
 # ---------------------------------------------------------------------------
@@ -199,14 +406,55 @@ def _ships_json() -> str:
     ])
 
 
+def _paths_json() -> str:
+    """Serialize pending draft paths for canvas rendering."""
+    paths = []
+    for ship_id, d in _drafts.items():
+        if ship_id not in _enc.battle.ships:
+            continue
+        ship = _enc.battle.ships[ship_id]
+        paths.append({
+            "shipId":      ship_id,
+            "owner":       ship.owner_id,
+            "hexes":       [{"q": h.q, "r": h.r} for h in d["path"]],
+            "finalFacing": d["facing"],
+        })
+    return json.dumps(paths)
+
+
+def _fire_orders_json() -> str:
+    """Serialize staged fire orders for canvas rendering."""
+    from tactical.encounter import Phase
+    if _enc.phase != Phase.COMBAT_SUBMISSION:
+        return json.dumps([])
+    orders = []
+    for ship_id, order in _enc._fire_orders.items():
+        if order is None:
+            continue
+        attacker = _enc.battle.ships.get(ship_id)
+        target   = _enc.battle.ships.get(order.target_id)
+        if attacker is None or target is None:
+            continue
+        orders.append({
+            "attacker_id":    ship_id,
+            "target_id":      order.target_id,
+            "attacker_owner": attacker.owner_id,
+            "aq": attacker.pos.q, "ar": attacker.pos.r,
+            "tq": target.pos.q,  "tr": target.pos.r,
+        })
+    return json.dumps(orders)
+
+
 @router.get("/", response_class=HTMLResponse)
 async def tactical_ui(request: Request):
     return templates.TemplateResponse("tactical.html", {
-        "request": request,
-        "phase": _render_phase(),
-        "ships_text": _render_ships(),
-        "ships_json": _ships_json(),
-        "log": "\n".join(_log[-40:]),
+        "request":         request,
+        "phase":           _render_phase(),
+        "ships_text":      _render_ships(),
+        "ships_json":      _ships_json(),
+        "paths_json":      _paths_json(),
+        "fire_orders_json": _fire_orders_json(),
+        "log":             "\n".join(_log[-40:]),
     })
 
 

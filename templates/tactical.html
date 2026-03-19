@@ -21,7 +21,8 @@
     input[type=text]:focus { outline: none; border-color: #a8d8ea; }
     button { padding: 8px 16px; border-radius: 6px; border: 1px solid #555; background: #2a2a4a; color: #e0e0e0; cursor: pointer; font-family: inherit; }
     button:hover { background: #3a3a6a; }
-    .hint { font-size: 0.78em; color: #888; margin-top: 6px; }
+    .hint { font-size: 0.78em; color: #888; margin-top: 6px; line-height: 1.7; }
+    .hint b { color: #aaa; }
   </style>
 </head>
 <body>
@@ -41,13 +42,26 @@
       <h2>Command</h2>
       <form method="post" action="/tactical/command">
         <div class="cmd-row">
-          <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. fireall A1 B1"/>
+          <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. move A1 3  |  fireall A1 B1"/>
           <button type="submit">Send</button>
         </div>
       </form>
       <div class="hint">
-        move &lt;id&gt; &lt;n&gt; &nbsp;|&nbsp; tl/tr/tla/tra &lt;id&gt; &nbsp;|&nbsp; spend &lt;id&gt; &lt;n&gt;<br/>
-        end &nbsp;|&nbsp; fireall &lt;att&gt; &lt;tgt&gt; &nbsp;|&nbsp; next &nbsp;|&nbsp; pass &lt;id&gt; &nbsp;|&nbsp; reset
+        <b>Movement (MOVE_SUBMISSION):</b><br/>
+        <code>move &lt;id&gt; &lt;n&gt;</code> — forward n hexes &nbsp;|&nbsp;
+        <code>tl/tr &lt;id&gt;</code> — turn left/right &nbsp;|&nbsp;
+        <code>spend &lt;id&gt; &lt;n&gt;</code> — charge turn<br/>
+        <code>commit move</code> — resolve movement for all sides<br/>
+        <br/>
+        <b>Combat (COMBAT_SUBMISSION):</b><br/>
+        <code>fireall &lt;id&gt; &lt;tgt&gt;</code> — stage fire &nbsp;|&nbsp;
+        <code>pass &lt;id&gt;</code> &nbsp;|&nbsp;
+        <code>commit fire</code><br/>
+        <br/>
+        <b>Debug:</b>
+        <code>quickfire &lt;att&gt; &lt;tgt&gt;</code> &nbsp;|&nbsp;
+        <code>shoot &lt;att&gt; &lt;tgt&gt; &lt;w&gt;</code> &nbsp;|&nbsp;
+        <code>reset</code>
       </div>
 
       <h2>Log</h2>
@@ -64,7 +78,9 @@
     //   py = cy - SIZE * (sqrt(3)/2 * q + sqrt(3) * r)
     // -----------------------------------------------------------------------
 
-    const SHIPS = {{ ships_json | safe }};
+    const SHIPS       = {{ ships_json | safe }};
+    const PATHS       = {{ paths_json | safe }};
+    const FIRE_ORDERS = {{ fire_orders_json | safe }};
     const RADIUS = 8;
     const SIZE = 28;           // hex circumradius in px
     const SQ3 = Math.sqrt(3);
@@ -116,6 +132,110 @@
       }
     }
 
+    function drawDraftPath(ctx, pathData, cx, cy) {
+      const { owner, hexes, finalFacing } = pathData;
+      if (hexes.length === 0) return;
+
+      const color = OWNER_COLORS[owner] || "#ffffff";
+      ctx.save();
+
+      // Dashed line + ghost circle only when ship actually moved
+      if (hexes.length >= 2) {
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.65;
+        ctx.lineJoin = "round";
+
+        ctx.beginPath();
+        const first = hexToPixel(hexes[0].q, hexes[0].r, cx, cy);
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < hexes.length; i++) {
+          const p = hexToPixel(hexes[i].q, hexes[i].r, cx, cy);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+
+        const last = hexToPixel(hexes[hexes.length - 1].q, hexes[hexes.length - 1].r, cx, cy);
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.45;
+        ctx.beginPath();
+        ctx.arc(last.x, last.y, SIZE * 0.32, 0, 2 * Math.PI);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Facing arrow at the draft endpoint (always drawn — covers turn-only case)
+      const endpoint = hexToPixel(hexes[hexes.length - 1].q, hexes[hexes.length - 1].r, cx, cy);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.7;
+      const angle    = -Math.PI / 2 + finalFacing * (Math.PI / 3);
+      const arrowLen = SIZE * 0.48;
+      const tipX = endpoint.x + arrowLen * Math.cos(angle);
+      const tipY = endpoint.y + arrowLen * Math.sin(angle);
+
+      ctx.beginPath();
+      ctx.moveTo(endpoint.x, endpoint.y);
+      ctx.lineTo(tipX, tipY);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      const headLen  = SIZE * 0.15;
+      const leftAng  = angle + 2.7;
+      const rightAng = angle - 2.7;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX + headLen * Math.cos(leftAng),  tipY + headLen * Math.sin(leftAng));
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX + headLen * Math.cos(rightAng), tipY + headLen * Math.sin(rightAng));
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawFireOrder(ctx, fo, cx, cy) {
+      const color = OWNER_COLORS[fo.attacker_owner] || "#ffffff";
+      const from  = hexToPixel(fo.aq, fo.ar, cx, cy);
+      const to    = hexToPixel(fo.tq, fo.tr, cx, cy);
+
+      // Offset endpoints slightly away from hex centres so the arrow
+      // doesn't disappear under the ship circles.
+      const dx   = to.x - from.x;
+      const dy   = to.y - from.y;
+      const len  = Math.sqrt(dx * dx + dy * dy) || 1;
+      const pad  = SIZE * 0.42;
+      const sx   = from.x + (dx / len) * pad;
+      const sy   = from.y + (dy / len) * pad;
+      const ex   = to.x   - (dx / len) * pad;
+      const ey   = to.y   - (dy / len) * pad;
+
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 1.5;
+      ctx.globalAlpha = 0.75;
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+
+      // Arrowhead at the target end
+      ctx.setLineDash([]);
+      const angle    = Math.atan2(ey - sy, ex - sx);
+      const headLen  = SIZE * 0.2;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - headLen * Math.cos(angle - 0.5), ey - headLen * Math.sin(angle - 0.5));
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - headLen * Math.cos(angle + 0.5), ey - headLen * Math.sin(angle + 0.5));
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
     function drawShip(ctx, ship, cx, cy) {
       const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
       const color = OWNER_COLORS[ship.owner] || "#ffffff";
@@ -156,7 +276,7 @@
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Label (id + facing name)
+      // Label
       ctx.fillStyle = color;
       ctx.font = "bold 10px monospace";
       ctx.textAlign = "center";
@@ -176,6 +296,9 @@
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawGrid(ctx, cx, cy);
+      // Draft paths and fire-order arrows render behind ships
+      for (const p of PATHS)  drawDraftPath(ctx, p, cx, cy);
+      for (const fo of FIRE_ORDERS) drawFireOrder(ctx, fo, cx, cy);
       for (const ship of SHIPS) drawShip(ctx, ship, cx, cy);
     }
 

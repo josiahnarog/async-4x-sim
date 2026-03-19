@@ -1,497 +1,371 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Optional
 
+from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
-from tactical.combat import FireEvent, resolve_large_fire
+from tactical.combat import FireEvent, resolve_fire_all, hex_distance
+from tactical.facing import Facing
 from tactical.initiative import Initiative, RNG
-from tactical.weapons import WeaponType
+from tactical.turn_orders import ShipFireOrder, ShipMoveOrder
+from tactical.weapons import WEAPONS
 
 
 class Phase(str, Enum):
-    MOVEMENT = "movement"
-    COMBAT_LARGE = "combat_large"
-    COMBAT_SMALL = "combat_small"
-    COMPLETE = "complete"
-
-
-def _ceil_div(a: int, b: int) -> int:
-    if b <= 0:
-        raise ValueError("b must be >= 1")
-    if a <= 0:
-        return 0
-    return (a + b - 1) // b
+    MOVE_SUBMISSION   = "move_submission"
+    COMBAT_SUBMISSION = "combat_submission"
+    COMBAT_SMALL      = "combat_small"
+    COMPLETE          = "complete"
 
 
 @dataclass(frozen=True, slots=True)
 class Encounter:
-    """Tactical encounter state machine (MVP).
+    """Tactical encounter state machine — simultaneous-submission model.
 
-    Changes vs earlier:
-      - MP refresh happens at the start of EACH movement subphase.
-      - Required spend for a ship in a subphase is computed from that subphase's refreshed MP:
-          required = ceil(mp_start_this_subphase / movement_subphases)
-      - Initiative ties are resolved by rerolling tied sides (see Initiative.roll).
+    Phase flow:
+        MOVE_SUBMISSION  → (all sides commit) → _resolve_movement()
+        COMBAT_SUBMISSION → (all sides commit) → _resolve_fire()
+        COMBAT_SMALL     (fighters: not yet implemented)
+        COMPLETE
+
+    Design invariants:
+      - Neither side sees the other's staged orders before committing.
+      - Fire resolution is simultaneous: all fire is computed against the
+        pre-combat BattleState snapshot; damage is applied in one pass after
+        all shots are resolved.
+      - Collision resolution: higher initiative claims a contested hex;
+        lower-initiative ship's move is cancelled (it stays in place).
     """
 
-    battle: BattleState
+    battle:     BattleState
     initiative: Initiative
+    phase:      Phase
 
-    phase: Phase = Phase.MOVEMENT
+    # MOVE_SUBMISSION bookkeeping
+    _move_orders:    dict[ShipID, ShipMoveOrder]
+    _move_committed: frozenset[str]   # side_ids that have committed moves
 
-    movement_subphases: int = 3
-    movement_subphase_index: int = 0  # 0..movement_subphases-1
+    # COMBAT_SUBMISSION bookkeeping
+    # None value = explicit pass (ship will not fire this turn)
+    _fire_orders:    dict[ShipID, Optional[ShipFireOrder]]
+    _fire_committed: frozenset[str]   # side_ids that have committed fire orders
 
-    # Movement side whose move is currently executing (low -> high)
-    active_side_index: int = 0
+    # MP cap at encounter start, used for move-distance validation
+    _mp_capacity: dict[ShipID, int]
 
-    # Baseline MP "design cap" per ship at encounter start (used when no ShipSystems)
-    mp_capacity_base: dict[ShipID, int] = None
-
-    # MP at start of THIS movement subphase (after refresh)
-    mp_start_this_subphase: dict[ShipID, int] = None
-
-    # MP spent in THIS movement subphase per ship
-    mp_spent_this_subphase: dict[ShipID, int] = None
-
-    # Combat bookkeeping
-    spent_to_fire: set[ShipID] = None
-    active_combat_side_index: int = 0
-
-    # ---------------------------- construction -----------------------------
+    # ------------------------------------------------------------------ #
+    # Factory                                                              #
+    # ------------------------------------------------------------------ #
 
     @staticmethod
-    def start(battle: BattleState, *, rng: RNG | None = None, movement_subphases: int = 3) -> Encounter:
-        if movement_subphases <= 0:
-            raise ValueError("movement_subphases must be >= 1")
-
+    def start(battle: BattleState, *, rng: RNG | None = None) -> "Encounter":
         sides = {s.owner_id for s in battle.ships.values()}
-        init = Initiative.roll(sides, rng=rng)
-
-        base = {sid: ship.mp for sid, ship in battle.ships.items()}
-
-        enc0 = Encounter(
-            battle=battle,
-            initiative=init,
-            phase=Phase.MOVEMENT,
-            movement_subphases=movement_subphases,
-            movement_subphase_index=0,
-            active_side_index=0,
-            mp_capacity_base=base,
-            mp_start_this_subphase={},
-            mp_spent_this_subphase={},
-            spent_to_fire=set(),
-            active_combat_side_index=0,
+        init  = Initiative.roll(sides, rng=rng)
+        mp_cap = {sid: ship.mp for sid, ship in battle.ships.items()}
+        return Encounter(
+            battle           = battle,
+            initiative       = init,
+            phase            = Phase.MOVE_SUBMISSION,
+            _move_orders     = {},
+            _move_committed  = frozenset(),
+            _fire_orders     = {},
+            _fire_committed  = frozenset(),
+            _mp_capacity     = mp_cap,
         )
-        return enc0._refresh_movement_subphase_mp()
 
-    # ---------------------------- ordering helpers -----------------------------
+    # ------------------------------------------------------------------ #
+    # Helpers                                                              #
+    # ------------------------------------------------------------------ #
 
-    def movement_side_order(self) -> list[str]:
-        return self.initiative.order_low_to_high()
-
-    def combat_side_order(self) -> list[str]:
-        return self.initiative.order_high_to_low()
-
-    def active_side(self) -> str:
-        order = self.movement_side_order()
-        if not order:
-            raise ValueError("No sides in encounter")
-        return order[self.active_side_index % len(order)]
-
-    def active_combat_side(self) -> str:
-        order = self.combat_side_order()
-        if not order:
-            raise ValueError("No sides in encounter")
-        return order[self.active_combat_side_index % len(order)]
+    def sides(self) -> frozenset[str]:
+        return frozenset(s.owner_id for s in self.battle.ships.values())
 
     def ships_for_side(self, side_id: str) -> list[ShipID]:
         sids = [sid for sid, s in self.battle.ships.items() if s.owner_id == side_id]
-        return sorted(sids, key=lambda sid: (self.battle.ships[sid].pos.q, self.battle.ships[sid].pos.r, sid))
+        return sorted(
+            sids,
+            key=lambda sid: (self.battle.ships[sid].pos.q, self.battle.ships[sid].pos.r, sid),
+        )
 
-    # ---------------------------- MP refresh + requirements -----------------------------
+    def _require_phase(self, phase: Phase) -> None:
+        if self.phase != phase:
+            raise ValueError(
+                f"Expected phase {phase.value!r}, current phase is {self.phase.value!r}"
+            )
 
-    def _capacity_for_ship(self, ship_id: ShipID) -> int:
+    def _require_not_committed(self, side_id: str, committed: frozenset[str]) -> None:
+        if side_id in committed:
+            raise PermissionError(
+                f"Side {side_id!r} has already committed orders for this phase"
+            )
+
+    def _ship_owner(self, ship_id: ShipID) -> str:
+        if ship_id not in self.battle.ships:
+            raise KeyError(f"Unknown ship: {ship_id!r}")
+        return self.battle.ships[ship_id].owner_id
+
+    # ------------------------------------------------------------------ #
+    # MOVE_SUBMISSION                                                       #
+    # ------------------------------------------------------------------ #
+
+    def stage_move(
+        self,
+        side_id: str,
+        ship_id: ShipID,
+        dest: Hex,
+        dest_facing: Facing,
+        *,
+        path_cost: Optional[int] = None,
+    ) -> "Encounter":
+        """Stage a movement order for ship_id.  May be called repeatedly to
+        override a previous order, as long as the side hasn't committed yet.
+
+        path_cost: if provided, used for MP validation instead of hex_distance
+        (allows curved paths that use more MP than the straight-line distance).
+        """
+        self._require_phase(Phase.MOVE_SUBMISSION)
+        self._require_not_committed(side_id, self._move_committed)
+        if self._ship_owner(ship_id) != side_id:
+            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
+
         ship = self.battle.ships[ship_id]
+        dist = path_cost if path_cost is not None else hex_distance(ship.pos, dest)
+        cap  = self._mp_capacity.get(ship_id, ship.mp)
+        if dist > cap:
+            raise ValueError(
+                f"Ship {ship_id!r} cannot reach {dest}: "
+                f"movement cost {dist} exceeds MP capacity {cap}"
+            )
+
+        new_orders = {**self._move_orders, ship_id: ShipMoveOrder(dest=dest, dest_facing=dest_facing)}
+        return dataclasses.replace(self, _move_orders=new_orders)
+
+    def commit_movement(self, side_id: str) -> "Encounter":
+        """Mark side_id as done submitting move orders.
+
+        When all sides have committed, movement is resolved automatically.
+        Ships that did not submit a move order remain in place.
+        """
+        self._require_phase(Phase.MOVE_SUBMISSION)
+        self._require_not_committed(side_id, self._move_committed)
+
+        new_committed = self._move_committed | {side_id}
+        enc = dataclasses.replace(self, _move_committed=new_committed)
+        if new_committed >= enc.sides():
+            return enc._resolve_movement()
+        return enc
+
+    def _resolve_movement(self) -> "Encounter":
+        """All sides have committed.  Resolve movement simultaneously."""
+        ships = self.battle.ships
+
+        # Desired destination for each ship (default: stay in place)
+        desired: dict[ShipID, Hex] = {sid: s.pos for sid, s in ships.items()}
+        for ship_id, order in self._move_orders.items():
+            desired[ship_id] = order.dest
+
+        # Find destination conflicts
+        dest_to_ships: dict[Hex, list[ShipID]] = {}
+        for sid, dest in desired.items():
+            dest_to_ships.setdefault(dest, []).append(sid)
+
+        # Resolve conflicts: higher initiative wins, losers are cancelled
+        cancelled: set[ShipID] = set()
+        for dest, claimants in dest_to_ships.items():
+            if len(claimants) <= 1:
+                continue
+            ranked = sorted(
+                claimants,
+                key=lambda sid: self.initiative.rolls.get(ships[sid].owner_id, 0),
+                reverse=True,
+            )
+            for loser in ranked[1:]:
+                cancelled.add(loser)
+
+        # Apply movement for non-cancelled ships that submitted orders
+        new_ships = dict(ships)
+        for ship_id, order in self._move_orders.items():
+            if ship_id in cancelled:
+                continue
+            ship = new_ships[ship_id]
+            dist = hex_distance(ship.pos, order.dest)
+            new_ships[ship_id] = dataclasses.replace(
+                ship,
+                pos    = order.dest,
+                facing = order.dest_facing,
+                mp     = max(0, ship.mp - dist),
+            )
+
+        return dataclasses.replace(
+            self,
+            battle          = BattleState(new_ships),
+            phase           = Phase.COMBAT_SUBMISSION,
+            _move_orders    = {},
+            _move_committed = frozenset(),
+        )
+
+    # ------------------------------------------------------------------ #
+    # COMBAT_SUBMISSION                                                     #
+    # ------------------------------------------------------------------ #
+
+    def stage_fire(
+        self,
+        side_id: str,
+        ship_id: ShipID,
+        target_id: ShipID,
+    ) -> "Encounter":
+        """Stage a fire order for ship_id targeting target_id.
+
+        May be called repeatedly to override, as long as the side hasn't committed.
+        Raises ValueError immediately if the target is in the attacker's blind spot.
+        """
+        self._require_phase(Phase.COMBAT_SUBMISSION)
+        self._require_not_committed(side_id, self._fire_committed)
+        if self._ship_owner(ship_id) != side_id:
+            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
+        if target_id not in self.battle.ships:
+            raise KeyError(f"Unknown target: {target_id!r}")
+        if ship_id == target_id:
+            raise ValueError(f"Ship {ship_id!r} cannot target itself")
+
+        # Global blind-spot check: no weapon can fire dead astern.
+        attacker = self.battle.ships[ship_id]
+        target   = self.battle.ships[target_id]
+        dq = target.pos.q - attacker.pos.q
+        dr = target.pos.r - attacker.pos.r
+        from tactical.arcs import relative_bearing, REAR_BEARINGS
+        rb = relative_bearing(int(attacker.facing), dq, dr)
+        if rb in REAR_BEARINGS:
+            raise ValueError(
+                f"{ship_id} cannot fire at {target_id}: "
+                f"target is in blind spot (relative bearing {rb})"
+            )
+
+        new_orders = {**self._fire_orders, ship_id: ShipFireOrder(target_id=target_id)}
+        return dataclasses.replace(self, _fire_orders=new_orders)
+
+    def pass_fire(self, side_id: str, ship_id: ShipID) -> "Encounter":
+        """Mark ship_id as explicitly not firing this turn."""
+        self._require_phase(Phase.COMBAT_SUBMISSION)
+        self._require_not_committed(side_id, self._fire_committed)
+        if self._ship_owner(ship_id) != side_id:
+            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
+
+        new_orders = {**self._fire_orders, ship_id: None}
+        return dataclasses.replace(self, _fire_orders=new_orders)
+
+    def commit_fire(self, side_id: str, rng: RNG) -> tuple["Encounter", list[FireEvent]]:
+        """Mark side_id as done submitting fire orders.
+
+        When all sides have committed, fire is resolved automatically.
+        Ships that submitted no order (and no explicit pass) simply do not fire.
+        Returns (new_encounter, events) — events are non-empty only when resolution
+        is triggered.
+        """
+        self._require_phase(Phase.COMBAT_SUBMISSION)
+        self._require_not_committed(side_id, self._fire_committed)
+
+        new_committed = self._fire_committed | {side_id}
+        enc = dataclasses.replace(self, _fire_committed=new_committed)
+        if new_committed >= enc.sides():
+            return enc._resolve_fire(rng)
+        return enc, []
+
+    def _resolve_fire(self, rng: RNG) -> tuple["Encounter", list[FireEvent]]:
+        """All sides committed.  Resolve all fire simultaneously.
+
+        Simultaneity rule: every attacker fires against the pre-combat BattleState
+        snapshot (so a ship destroyed by fire this phase still fires back).
+        Damage from all events is accumulated per target and applied in one pass
+        after all shots are resolved.
+        """
+        snapshot   = self.battle
+        all_events: list[FireEvent] = []
+
+        # Accumulate (raw_damage, WeaponSpec) per target
+        damage_queue: dict[ShipID, list] = {}
+
+        for ship_id, order in self._fire_orders.items():
+            if order is None:
+                continue
+            target_id = order.target_id
+            if ship_id not in snapshot.ships or target_id not in snapshot.ships:
+                continue
+            try:
+                _, events = resolve_fire_all(
+                    snapshot,
+                    attacker_id=ship_id,
+                    target_id=target_id,
+                    rng=rng,
+                )
+            except (ValueError, KeyError):
+                # Arc violation or other invalid order — silently skip
+                continue
+
+            all_events.extend(events)
+            for ev in events:
+                if ev.hit and ev.raw_damage > 0:
+                    damage_queue.setdefault(ev.target_id, []).append(
+                        (ev.raw_damage, WEAPONS[ev.weapon])
+                    )
+
+        # Apply all accumulated damage to each target, starting from snapshot state
+        new_battle = snapshot
+        for target_id, damages in damage_queue.items():
+            ship = new_battle.ships[target_id]
+            if ship.systems is None:
+                continue
+            new_systems = ship.systems
+            for dmg, spec in damages:
+                new_systems = new_systems.apply_weapon_damage(dmg, weapon=spec)
+            new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
+
+        enc = dataclasses.replace(
+            self,
+            battle          = new_battle,
+            phase           = Phase.COMBAT_SMALL,
+            _fire_orders    = {},
+            _fire_committed = frozenset(),
+        )
+        # COMBAT_SMALL (fighters) not yet implemented — advance to next turn automatically.
+        return enc.next_turn(), all_events
+
+    def next_turn(self) -> "Encounter":
+        """Advance to a fresh MOVE_SUBMISSION phase for the next turn.
+
+        Recomputes each ship's MP capacity from its current systems state so
+        that engine damage is reflected in movement allowance going forward.
+        Turn charge is preserved (it persists across turns by design).
+        """
+        new_ships: dict[ShipID, object] = {}
+        new_mp_capacity: dict[ShipID, int] = {}
+
+        for ship_id, ship in self.battle.ships.items():
+            cap = self._mp_capacity_for(ship)
+            new_ships[ship_id] = dataclasses.replace(ship, mp=cap)
+            new_mp_capacity[ship_id] = cap
+
+        return dataclasses.replace(
+            self,
+            battle          = BattleState(new_ships),
+            phase           = Phase.MOVE_SUBMISSION,
+            _move_orders    = {},
+            _move_committed = frozenset(),
+            _fire_orders    = {},
+            _fire_committed = frozenset(),
+            _mp_capacity    = new_mp_capacity,
+        )
+
+    @staticmethod
+    def _mp_capacity_for(ship) -> int:
+        """Compute current MP capacity from a ship's live systems state."""
         if ship.systems is not None:
-            epr = ship.hull_type.engine_power_ratio if ship.hull_type else None
-            mp = ship.systems.movement_points(engine_power_ratio=epr)
-            if ship.hull_type:
+            epr = ship.hull_type.engine_power_ratio if ship.hull_type is not None else None
+            mp  = ship.systems.movement_points(engine_power_ratio=epr)
+            if ship.hull_type is not None:
                 mp = min(mp, ship.hull_type.max_speed)
             return mp
-        return int(self.mp_capacity_base.get(ship_id, ship.mp))
-
-    def _refresh_movement_subphase_mp(self) -> Encounter:
-        """Refresh ship.mp for the start of the current movement subphase.
-
-        Does NOT touch turn_charge (your rule: it persists unless a turn is taken).
-        """
-        new_ships = dict(self.battle.ships)
-        mp_start: dict[ShipID, int] = {}
-
-        for sid, ship in self.battle.ships.items():
-            cap = self._capacity_for_ship(sid)
-            # Refresh MP to capacity
-            refreshed = type(ship)(
-                ship_id=ship.ship_id,
-                owner_id=ship.owner_id,
-                pos=ship.pos,
-                facing=ship.facing,
-                mp=cap,
-                turn_cost=ship.turn_cost,
-                turn_charge=ship.turn_charge,  # persists across phases/turns
-                systems=ship.systems,
-            )
-            new_ships[sid] = refreshed
-            mp_start[sid] = cap
-
-        new_battle = BattleState(new_ships)
-        return Encounter(
-            battle=new_battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=mp_start,
-            mp_spent_this_subphase={},  # fresh per subphase
-            spent_to_fire=self.spent_to_fire,
-            active_combat_side_index=self.active_combat_side_index,
-        )
-
-    def required_spend_this_subphase(self, ship_id: ShipID) -> int:
-        start = int(self.mp_start_this_subphase.get(ship_id, 0))
-        return _ceil_div(start, self.movement_subphases)
-
-    def spent_this_subphase(self, ship_id: ShipID) -> int:
-        return int(self.mp_spent_this_subphase.get(ship_id, 0))
-
-    def _record_spend(self, ship_id: ShipID, delta_spent: int) -> dict[ShipID, int]:
-        new_map = dict(self.mp_spent_this_subphase)
-        new_map[ship_id] = new_map.get(ship_id, 0) + max(0, delta_spent)
-        return new_map
-
-    # ---------------------------- movement actions -----------------------------
-
-    def _require_movement_phase(self) -> None:
-        if self.phase != Phase.MOVEMENT:
-            raise ValueError(f"Not in movement phase (phase={self.phase})")
-
-    def _require_active_side(self, side_id: str) -> None:
-        if side_id != self.active_side():
-            raise PermissionError(f"Side {side_id!r} is not active (active={self.active_side()!r})")
-
-    def move_ship_forward(self, side_id: str, ship_id: ShipID, steps: int = 1) -> Encounter:
-        self._require_movement_phase()
-        self._require_active_side(side_id)
-
-        ship = self.battle.ships[ship_id]
-        if ship.owner_id != side_id:
-            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
-
-        before_mp = ship.mp
-        new_battle = self.battle.move_ship_forward(ship_id, steps=steps)
-        after_mp = new_battle.ships[ship_id].mp
-        delta = before_mp - after_mp
-
-        return Encounter(
-            battle=new_battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self._record_spend(ship_id, delta),
-            spent_to_fire=self.spent_to_fire,
-            active_combat_side_index=self.active_combat_side_index,
-        )
-
-    def turn_ship_left(self, side_id: str, ship_id: ShipID, *, auto_spend: bool = False) -> Encounter:
-        """Turn left (one facing step). If auto_spend, spend missing MP to charge first."""
-        self._require_movement_phase()
-        self._require_active_side(side_id)
-
-        ship = self.battle.ships[ship_id]
-        if ship.owner_id != side_id:
-            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
-
-        before_mp = ship.mp
-        new_ship = ship.turn_left_auto() if auto_spend else ship.turn_left()
-        after_mp = new_ship.mp
-        delta = before_mp - after_mp  # counts toward subphase spend if auto_spend
-
-        new_battle = self.battle.with_ship(new_ship)
-        return Encounter(
-            battle=new_battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self._record_spend(ship_id, delta),
-            spent_to_fire=self.spent_to_fire,
-            active_combat_side_index=self.active_combat_side_index,
-        )
-
-    def turn_ship_right(self, side_id: str, ship_id: ShipID, *, auto_spend: bool = False) -> Encounter:
-        """Turn right (one facing step). If auto_spend, spend missing MP to charge first."""
-        self._require_movement_phase()
-        self._require_active_side(side_id)
-
-        ship = self.battle.ships[ship_id]
-        if ship.owner_id != side_id:
-            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
-
-        before_mp = ship.mp
-        new_ship = ship.turn_right_auto() if auto_spend else ship.turn_right()
-        after_mp = new_ship.mp
-        delta = before_mp - after_mp
-
-        new_battle = self.battle.with_ship(new_ship)
-        return Encounter(
-            battle=new_battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self._record_spend(ship_id, delta),
-            spent_to_fire=self.spent_to_fire,
-            active_combat_side_index=self.active_combat_side_index,
-        )
-
-    def spend_mp(self, side_id: str, ship_id: ShipID, amount: int) -> Encounter:
-        self._require_movement_phase()
-        self._require_active_side(side_id)
-
-        ship = self.battle.ships[ship_id]
-        if ship.owner_id != side_id:
-            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
-
-        before_mp = ship.mp
-        new_ship = ship.spend_mp(amount)
-        after_mp = new_ship.mp
-        delta = before_mp - after_mp
-
-        new_battle = self.battle.with_ship(new_ship)
-        return Encounter(
-            battle=new_battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self._record_spend(ship_id, delta),
-            spent_to_fire=self.spent_to_fire,
-            active_combat_side_index=self.active_combat_side_index,
-        )
-
-    def end_side_movement(self, side_id: str) -> Encounter:
-        self._require_movement_phase()
-        self._require_active_side(side_id)
-
-        ship_ids = self.ships_for_side(side_id)
-        for sid in ship_ids:
-            required = self.required_spend_this_subphase(sid)
-            spent = self.spent_this_subphase(sid)
-            if spent < required:
-                raise ValueError(
-                    f"Side {side_id!r} cannot end movement: ship {sid!r} spent {spent} < required {required}"
-                )
-
-        order = self.movement_side_order()
-        next_side_index = self.active_side_index + 1
-
-        # More sides in this subphase => advance active side
-        if next_side_index < len(order):
-            return Encounter(
-                battle=self.battle,
-                initiative=self.initiative,
-                phase=self.phase,
-                movement_subphases=self.movement_subphases,
-                movement_subphase_index=self.movement_subphase_index,
-                active_side_index=next_side_index,
-                mp_capacity_base=self.mp_capacity_base,
-                mp_start_this_subphase=self.mp_start_this_subphase,
-                mp_spent_this_subphase=self.mp_spent_this_subphase,
-                spent_to_fire=self.spent_to_fire,
-                active_combat_side_index=self.active_combat_side_index,
-            )
-
-        # End of subphase: next subphase or transition to combat.
-        next_subphase = self.movement_subphase_index + 1
-        if next_subphase < self.movement_subphases:
-            enc_next = Encounter(
-                battle=self.battle,
-                initiative=self.initiative,
-                phase=self.phase,
-                movement_subphases=self.movement_subphases,
-                movement_subphase_index=next_subphase,
-                active_side_index=0,
-                mp_capacity_base=self.mp_capacity_base,
-                mp_start_this_subphase=self.mp_start_this_subphase,
-                mp_spent_this_subphase={},  # will be replaced by refresh
-                spent_to_fire=self.spent_to_fire,
-                active_combat_side_index=self.active_combat_side_index,
-            )
-            return enc_next._refresh_movement_subphase_mp()
-
-        # Movement complete -> start combat (large units)
-        return Encounter(
-            battle=self.battle,
-            initiative=self.initiative,
-            phase=Phase.COMBAT_LARGE,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=0,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self.mp_spent_this_subphase,
-            spent_to_fire=set(),
-            active_combat_side_index=0,
-        )
-
-    # ---------------------------- combat (large) scaffolding -----------------------------
-
-    def _require_combat_large(self) -> None:
-        if self.phase != Phase.COMBAT_LARGE:
-            raise ValueError(f"Not in COMBAT_LARGE phase (phase={self.phase})")
-
-    def active_large_combat_side(self) -> str:
-        self._require_combat_large()
-        return self.active_combat_side()
-
-    def choose_unit_to_fire(self, side_id: str, ship_id: ShipID) -> Encounter:
-        self._require_combat_large()
-        if side_id != self.active_large_combat_side():
-            raise PermissionError(f"Side {side_id!r} is not active (active={self.active_large_combat_side()!r})")
-
-        ship = self.battle.ships[ship_id]
-        if ship.owner_id != side_id:
-            raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
-        if ship_id in self.spent_to_fire:
-            raise ValueError(f"Ship {ship_id!r} already spent in this combat subphase")
-
-        new_spent = set(self.spent_to_fire)
-        new_spent.add(ship_id)
-
-        return Encounter(
-            battle=self.battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self.mp_spent_this_subphase,
-            spent_to_fire=new_spent,
-            active_combat_side_index=self.active_combat_side_index,
-        )
-
-    def pass_fire(self, side_id: str, ship_id: ShipID) -> Encounter:
-        return self.choose_unit_to_fire(side_id, ship_id)
-
-    def advance_combat_turn(self) -> Encounter:
-        self._require_combat_large()
-        order = self.combat_side_order()
-
-        next_idx = self.active_combat_side_index + 1
-        if next_idx < len(order):
-            return Encounter(
-                battle=self.battle,
-                initiative=self.initiative,
-                phase=self.phase,
-                movement_subphases=self.movement_subphases,
-                movement_subphase_index=self.movement_subphase_index,
-                active_side_index=self.active_side_index,
-                mp_capacity_base=self.mp_capacity_base,
-                mp_start_this_subphase=self.mp_start_this_subphase,
-                mp_spent_this_subphase=self.mp_spent_this_subphase,
-                spent_to_fire=self.spent_to_fire,
-                active_combat_side_index=next_idx,
-            )
-
-        all_ships = set(self.battle.ships.keys())
-        if self.spent_to_fire >= all_ships:
-            return Encounter(
-                battle=self.battle,
-                initiative=self.initiative,
-                phase=Phase.COMBAT_SMALL,
-                movement_subphases=self.movement_subphases,
-                movement_subphase_index=self.movement_subphase_index,
-                active_side_index=self.active_side_index,
-                mp_capacity_base=self.mp_capacity_base,
-                mp_start_this_subphase=self.mp_start_this_subphase,
-                mp_spent_this_subphase=self.mp_spent_this_subphase,
-                spent_to_fire=set(),
-                active_combat_side_index=0,
-            )
-
-        return Encounter(
-            battle=self.battle,
-            initiative=self.initiative,
-            phase=self.phase,
-            movement_subphases=self.movement_subphases,
-            movement_subphase_index=self.movement_subphase_index,
-            active_side_index=self.active_side_index,
-            mp_capacity_base=self.mp_capacity_base,
-            mp_start_this_subphase=self.mp_start_this_subphase,
-            mp_spent_this_subphase=self.mp_spent_this_subphase,
-            spent_to_fire=self.spent_to_fire,
-            active_combat_side_index=0,
-        )
-
-    def fire_large_unit(
-            self,
-            side_id: str,
-            attacker_id: ShipID,
-            target_id: ShipID,
-            weapon: WeaponType,
-            rng: RNG,
-    ) -> tuple["Encounter", FireEvent]:
-        self._require_combat_large()
-        if side_id != self.active_large_combat_side():
-            raise PermissionError(...)
-        if attacker_id in self.spent_to_fire:
-            raise ValueError(...)
-
-        new_battle, event = resolve_large_fire(
-            self.battle,
-            attacker_id=attacker_id,
-            target_id=target_id,
-            weapon=weapon,
-            rng=rng,
-        )
-
-        new_spent = set(self.spent_to_fire)
-        new_spent.add(attacker_id)
-
-        return (
-            Encounter(
-                battle=new_battle,
-                initiative=self.initiative,
-                phase=self.phase,
-                movement_subphases=self.movement_subphases,
-                movement_subphase_index=self.movement_subphase_index,
-                active_side_index=self.active_side_index,
-                mp_capacity_base=self.mp_capacity_base,
-                mp_start_this_subphase=self.mp_start_this_subphase,
-                mp_spent_this_subphase=self.mp_spent_this_subphase,
-                spent_to_fire=new_spent,
-                active_combat_side_index=self.active_combat_side_index,
-            ),
-            event,
-        )
-
+        return ship.mp  # no systems: keep current value
