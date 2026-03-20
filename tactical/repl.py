@@ -6,7 +6,7 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
-from tactical.events import FuelWarningEvent, UnitDestroyedEvent
+from tactical.events import BattleEndEvent, FuelWarningEvent, UnitDestroyedEvent
 from tactical.fighter_combat import AttackRunEvent, BreakOffEvent, DogfightEvent
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
@@ -80,6 +80,11 @@ def _fmt_fighter_event(ev) -> str:
     if isinstance(ev, FuelWarningEvent):
         return f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed"
 
+    if isinstance(ev, BattleEndEvent):
+        if ev.is_draw:
+            return "  *** BATTLE OVER — MUTUAL DESTRUCTION (draw) ***"
+        return f"  *** BATTLE OVER — {ev.winner} WINS ***"
+
     return f"  FIGHTER EVENT: {ev}"
 
 
@@ -94,6 +99,10 @@ def _fmt_ship(s: ShipState) -> str:
 def _format_fire_event(ev) -> str:
     if isinstance(ev, UnitDestroyedEvent):
         return f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***"
+    if isinstance(ev, BattleEndEvent):
+        if ev.is_draw:
+            return "  *** BATTLE OVER — MUTUAL DESTRUCTION (draw) ***"
+        return f"  *** BATTLE OVER — {ev.winner} WINS ***"
     if getattr(ev, "missile_rolls", None) is not None:
         to_hit = ev.to_hit
         roll_detail = ", ".join(
@@ -443,8 +452,13 @@ def main() -> None:
                         enc, events = enc.commit_fire(s, rng)
                         all_events.extend(events)
                         print(f"Side {s!r} committed fire orders.")
-                        if enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION):
-                            phase_msg = "COMBAT_SMALL" if enc.phase == Phase.COMBAT_SMALL else "next turn (MOVE_SUBMISSION)"
+                        if enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION, Phase.COMPLETE):
+                            if enc.phase == Phase.COMPLETE:
+                                phase_msg = "battle complete"
+                            elif enc.phase == Phase.COMBAT_SMALL:
+                                phase_msg = "COMBAT_SMALL"
+                            else:
+                                phase_msg = "next turn (MOVE_SUBMISSION)"
                             print(f"→ Fire resolved. Entering {phase_msg}.")
                             break
                     for ev in all_events:
@@ -463,8 +477,9 @@ def main() -> None:
                         enc, events = enc.commit_squadron_orders(s, rng)
                         all_events.extend(events)
                         print(f"Side {s!r} committed squadron orders.")
-                        if enc.phase == Phase.MOVE_SUBMISSION:
-                            print("→ Fighter phase resolved. Starting next turn.")
+                        if enc.phase in (Phase.MOVE_SUBMISSION, Phase.COMPLETE):
+                            label = "Battle complete." if enc.phase == Phase.COMPLETE else "Starting next turn."
+                            print(f"→ Fighter phase resolved. {label}")
                             break
                     for ev in all_events:
                         print(_fmt_fighter_event(ev))

@@ -293,3 +293,84 @@ class TestSimultaneousFire:
         assert len(fire_events) == 2
         attacker_ids = {ev.attacker_id for ev in fire_events}
         assert attacker_ids == {"a1", "b1"}
+
+
+# ---------------------------------------------------------------------------
+# Win / loss detection
+# ---------------------------------------------------------------------------
+
+class TestBattleEnd:
+    def _one_shot_setup(self):
+        """Two ships point-blank, one with a laser, one with no systems (dead hulk)."""
+        # a1 has a laser; b1 has only shields — one hit destroys b1.
+        a = ShipState(ship_id="a1", owner_id="A", pos=Hex(0, 0), facing=Facing.N,
+                      mp=0, turn_cost=3, systems=ShipSystems.parse("L"))
+        b = ShipState(ship_id="b1", owner_id="B", pos=Hex(0, 1), facing=Facing.S,
+                      mp=0, turn_cost=3, systems=ShipSystems.parse("L"))
+        return BattleState(ships={"a1": a, "b1": b})
+
+    def test_battle_ends_when_ship_destroyed(self):
+        """Phase transitions to COMPLETE when a side loses all ships."""
+        battle = self._one_shot_setup()
+        enc = Encounter.start(battle, rng=random.Random(1))
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
+        # A fires at b1; B does not fire
+        enc = enc.stage_fire("A", "a1", "b1")
+        enc, _ = enc.commit_fire("A", random.Random(0))
+        enc, events = enc.commit_fire("B", random.Random(1))  # guaranteed hit (roll ≤ 8)
+        from tactical.events import BattleEndEvent
+        end_events = [ev for ev in events if isinstance(ev, BattleEndEvent)]
+        assert len(end_events) == 1
+        assert enc.phase == Phase.COMPLETE
+
+    def test_winner_is_surviving_side(self):
+        """BattleEndEvent.winner reports the surviving side."""
+        battle = self._one_shot_setup()
+        enc = Encounter.start(battle, rng=random.Random(1))
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
+        enc = enc.stage_fire("A", "a1", "b1")
+        enc, _ = enc.commit_fire("A", random.Random(0))
+        enc, events = enc.commit_fire("B", random.Random(1))
+        from tactical.events import BattleEndEvent
+        end_ev = next(ev for ev in events if isinstance(ev, BattleEndEvent))
+        assert end_ev.winner == "A"
+        assert not end_ev.is_draw
+
+    def test_draw_when_both_destroyed_simultaneously(self):
+        """Simultaneous fire can destroy both sides — that's a draw."""
+        # Each ship has exactly one L; both fire at each other; guaranteed hits.
+        a = ShipState(ship_id="a1", owner_id="A", pos=Hex(0, 0), facing=Facing.N,
+                      mp=0, turn_cost=3, systems=ShipSystems.parse("L"))
+        b = ShipState(ship_id="b1", owner_id="B", pos=Hex(0, 1), facing=Facing.S,
+                      mp=0, turn_cost=3, systems=ShipSystems.parse("L"))
+        battle = BattleState(ships={"a1": a, "b1": b})
+        enc = Encounter.start(battle, rng=random.Random(1))
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
+        enc = enc.stage_fire("A", "a1", "b1")
+        enc = enc.stage_fire("B", "b1", "a1")
+        enc, _ = enc.commit_fire("A", random.Random(0))
+
+        class AlwaysOne:
+            def randint(self, a, b): return 1   # roll=1, always hits
+
+        enc, events = enc.commit_fire("B", AlwaysOne())
+        from tactical.events import BattleEndEvent
+        end_ev = next(ev for ev in events if isinstance(ev, BattleEndEvent))
+        assert end_ev.is_draw
+        assert enc.phase == Phase.COMPLETE
+
+    def test_no_orders_accepted_after_complete(self):
+        """Encounter rejects new orders once in COMPLETE phase."""
+        battle = self._one_shot_setup()
+        enc = Encounter.start(battle, rng=random.Random(1))
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
+        enc = enc.stage_fire("A", "a1", "b1")
+        enc, _ = enc.commit_fire("A", random.Random(0))
+        enc, _ = enc.commit_fire("B", random.Random(1))
+        assert enc.phase == Phase.COMPLETE
+        with pytest.raises(ValueError):
+            enc.stage_fire("A", "a1", "b1")

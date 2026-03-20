@@ -26,3 +26,24 @@ class FuelWarningEvent:
     lands on a carrier before then.
     """
     squadron_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class BattleEndEvent:
+    """Emitted when the battle is over (one or both sides have no ships left).
+
+    surviving_sides: the set of side IDs that still have at least one
+    non-destroyed ship.  Empty = mutual destruction (draw).
+    """
+    surviving_sides: frozenset
+
+    @property
+    def is_draw(self) -> bool:
+        return len(self.surviving_sides) == 0
+
+    @property
+    def winner(self) -> str | None:
+        """Returns the winning side ID, or None for a draw."""
+        if len(self.surviving_sides) == 1:
+            return next(iter(self.surviving_sides))
+        return None

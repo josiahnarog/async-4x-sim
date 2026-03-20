@@ -428,6 +428,19 @@ class Encounter:
             if ship.systems is not None and ship.systems.is_destroyed():
                 all_events.append(UnitDestroyedEvent(target_id, DestructionCause.ENEMY_FIRE))
 
+        # Check for battle end before advancing phase.
+        end_ev = self._battle_end_event(new_battle)
+        if end_ev is not None:
+            all_events.append(end_ev)
+            enc = dataclasses.replace(
+                self,
+                battle          = new_battle,
+                phase           = Phase.COMPLETE,
+                _fire_orders    = {},
+                _fire_committed = frozenset(),
+            )
+            return enc, all_events
+
         enc = dataclasses.replace(
             self,
             battle          = new_battle,
@@ -499,6 +512,19 @@ class Encounter:
             self._squadron_orders,
             rng=rng,
         )
+        # Check for battle end before advancing to next turn.
+        end_ev = self._battle_end_event(new_battle)
+        if end_ev is not None:
+            events.append(end_ev)
+            enc = dataclasses.replace(
+                self,
+                battle              = new_battle,
+                phase               = Phase.COMPLETE,
+                _squadron_orders    = {},
+                _squadron_committed = frozenset(),
+            )
+            return enc, events
+
         enc = dataclasses.replace(
             self,
             battle              = new_battle,
@@ -567,6 +593,24 @@ class Encounter:
             _squadron_committed = frozenset(),
         )
         return enc, turn_events
+
+    @staticmethod
+    def _battle_end_event(battle: BattleState):
+        """Return a BattleEndEvent if the battle is over, else None.
+
+        A side is eliminated when every one of its ships has is_destroyed()
+        True (all non-shield/armor systems gone).  Both sides can be eliminated
+        simultaneously via simultaneous fire — that's a draw.
+        """
+        from tactical.events import BattleEndEvent
+        all_sides  = {s.owner_id for s in battle.ships.values()}
+        alive      = {
+            s.owner_id for s in battle.ships.values()
+            if s.systems is None or not s.systems.is_destroyed()
+        }
+        if alive < all_sides:          # at least one side eliminated
+            return BattleEndEvent(surviving_sides=frozenset(alive))
+        return None
 
     @staticmethod
     def _mp_capacity_for(ship) -> int:

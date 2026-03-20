@@ -333,7 +333,7 @@ def _process(cmd_line: str) -> list[str]:
                     [parts[2]] if len(parts) >= 3
                     else sorted(_enc.sides() - _enc._fire_committed)
                 )
-                from tactical.events import FuelWarningEvent, UnitDestroyedEvent
+                from tactical.events import BattleEndEvent, FuelWarningEvent, UnitDestroyedEvent
                 for s in sides_to_commit:
                     _enc, events = _enc.commit_fire(s, _rng)
                     out.append(f"Side {s!r} committed fire orders.")
@@ -342,10 +342,18 @@ def _process(cmd_line: str) -> list[str]:
                             out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
                         elif isinstance(ev, FuelWarningEvent):
                             out.append(f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed")
+                        elif isinstance(ev, BattleEndEvent):
+                            msg = "MUTUAL DESTRUCTION (draw)" if ev.is_draw else f"{ev.winner} WINS"
+                            out.append(f"  *** BATTLE OVER — {msg} ***")
                         else:
                             out.append(_fmt_fire(ev))
-                    if _enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION):
-                        phase_label = "COMBAT_SMALL" if _enc.phase == Phase.COMBAT_SMALL else "next turn"
+                    if _enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION, Phase.COMPLETE):
+                        if _enc.phase == Phase.COMPLETE:
+                            phase_label = "battle complete"
+                        elif _enc.phase == Phase.COMBAT_SMALL:
+                            phase_label = "COMBAT_SMALL"
+                        else:
+                            phase_label = "next turn"
                         out.append(f"→ Fire resolved. Entering {phase_label}.")
                         break
 
@@ -381,8 +389,12 @@ def _process(cmd_line: str) -> list[str]:
                             out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
                         elif isinstance(ev, FuelWarningEvent):
                             out.append(f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed")
-                    if _enc.phase == Phase.MOVE_SUBMISSION:
-                        out.append("→ Fighter phase resolved. Starting next turn.")
+                        elif isinstance(ev, BattleEndEvent):
+                            msg = "MUTUAL DESTRUCTION (draw)" if ev.is_draw else f"{ev.winner} WINS"
+                            out.append(f"  *** BATTLE OVER — {msg} ***")
+                    if _enc.phase in (Phase.MOVE_SUBMISSION, Phase.COMPLETE):
+                        label = "battle complete" if _enc.phase == Phase.COMPLETE else "next turn"
+                        out.append(f"→ Fighter phase resolved. {label.capitalize()}.")
                         break
 
             else:
