@@ -345,6 +345,20 @@ class ShipSystems:
             for s in self.systems
         )
 
+    def hangar_bay_count(self) -> int:
+        """Number of active Hangar Bay (Bh) systems.
+
+        Each active Bh can store, refit, and refuel one squadron.
+        """
+        return sum(1 for s in self.systems if s.is_active() and s.token == "Bh")
+
+    def launch_bay_count(self) -> int:
+        """Number of active Launch Bay (Bl) systems.
+
+        Each active Bl can launch or recover one squadron per turn.
+        """
+        return sum(1 for s in self.systems if s.is_active() and s.token == "Bl")
+
     def point_defense(self) -> Tuple[int, int]:
         """
         Returns (shots, to_hit) for point defense for the current incoming volley.

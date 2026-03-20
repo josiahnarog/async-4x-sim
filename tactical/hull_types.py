@@ -42,4 +42,13 @@ CA = HullType(
     max_speed=4,
 )
 
-HULL_TYPES: dict[str, HullType] = {h.designation: h for h in (FG, DD, CA)}
+CV = HullType(
+    designation="CV",
+    name="Carrier",
+    engine_power_ratio=Fraction(2, 1),   # same EPR as CA
+    engines_per_room=1,
+    max_speed=4,
+    # turn_cost=3 is set on ShipState at instantiation
+)
+
+HULL_TYPES: dict[str, HullType] = {h.designation: h for h in (FG, DD, CA, CV)}

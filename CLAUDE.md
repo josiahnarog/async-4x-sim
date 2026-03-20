@@ -51,7 +51,7 @@ The project develops in the following sequence. Each phase is roughly independen
 - **`weapons.py`** / **`missile_volley.py`** — Weapon specs and missile/PD resolution.
 - **`ship_state.py`** / **`ship_systems.py`** — Per-ship damage and systems (compact display e.g. `SSSAAALL(III)`).
 - **`arcs.py`** — Firing arc geometry: `relative_bearing`, blind-spot constants, rear-arc bonus.
-- **`hull_types.py`** — `HullType` (FG/DD/CA): EPR, engines-per-room, max speed.
+- **`hull_types.py`** — `HullType` (FG/DD/CA/CV): EPR, engines-per-room, max speed.
 - **`to_hit.py`** — Centralised hit resolution. **Invariant: hit if `roll ≤ target`.**
 - **`web.py`** — FastAPI router (`/tactical/`). Single-session global state (pending persistence work).
 - **`repl.py`** — Interactive CLI; primary development interface.
@@ -90,6 +90,8 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 | D | Point Defense | 3 shots/D/volley, to-hit 3; also fires at incoming fighters |
 | I | Internal (engine room) | parenthesised groups: whole group = 0 MP if any destroyed |
 | G | Gun/Autocannon | fighter-scale; `anti_fighter_modifier=2`, `can_target_fighters=True` |
+| Bh | Hangar Bay | CV only; each active Bh stores/refits/refuels 1 squadron |
+| Bl | Launch Bay | CV only; each active Bl can launch or recover 1 squadron per turn |
 
 ### Fighter Squadrons
 
@@ -116,7 +118,14 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 | `COMBAT_SUBMISSION` | `commit_fire(side, rng)` → returns `(Encounter, [fire_events])` | Simultaneous fire against pre-combat snapshot; damage applied in one pass |
 | `COMBAT_SMALL` | `commit_squadron_orders(side, rng)` → returns `(Encounter, [fighter_events])` | Squadrons move, intercept, dogfight, attack run; auto-skipped if no squadrons |
 
-**Hull types** — EPR semantics: `MP = active_engine_count / EPR`. FG=2/3, DD=1, CA=2.
+**Hull types** — EPR semantics: `MP = active_engine_count / EPR`.
+
+| Hull | EPR | Max speed | Turn cost |
+|------|-----|-----------|-----------|
+| FG (Frigate) | 2/3 | 5 | 2 |
+| DD (Destroyer) | 1 | 5 | 2 |
+| CA (Cruiser) | 2 | 4 | 3 |
+| CV (Carrier) | 2 | 4 | 3 |
 
 ## Developer Preferences
 
