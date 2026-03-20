@@ -201,7 +201,7 @@ class Encounter:
 
         return dataclasses.replace(
             self,
-            battle          = BattleState(new_ships),
+            battle          = dataclasses.replace(self.battle, ships=new_ships),
             phase           = Phase.COMBAT_SUBMISSION,
             _move_orders    = {},
             _move_committed = frozenset(),
@@ -348,9 +348,15 @@ class Encounter:
             new_ships[ship_id] = dataclasses.replace(ship, mp=cap)
             new_mp_capacity[ship_id] = cap
 
+        # Decrement endurance for all deployed squadrons
+        new_squads = {
+            sqid: sq.decrement_endurance()
+            for sqid, sq in self.battle.squadrons.items()
+        }
+
         return dataclasses.replace(
             self,
-            battle          = BattleState(new_ships),
+            battle          = dataclasses.replace(self.battle, ships=new_ships, squadrons=new_squads),
             phase           = Phase.MOVE_SUBMISSION,
             _move_orders    = {},
             _move_committed = frozenset(),

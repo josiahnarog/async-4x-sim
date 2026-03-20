@@ -7,6 +7,10 @@ from tactical.battle_state import ShipID
 from tactical.facing import Facing
 
 
+# ---------------------------------------------------------------------------
+# Capital ship orders
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True, slots=True)
 class ShipMoveOrder:
     """A ship's submitted movement order for the MOVE_SUBMISSION phase."""
@@ -18,3 +22,34 @@ class ShipMoveOrder:
 class ShipFireOrder:
     """A ship's submitted fire order for the COMBAT_SUBMISSION phase."""
     target_id: ShipID
+
+
+# ---------------------------------------------------------------------------
+# Fighter squadron orders  (COMBAT_SMALL phase)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class InterceptOrder:
+    """Move to patrol_hex then intercept any enemy within (remaining_mp + 1) hexes.
+
+    intercept_radius is computed at resolution time as:
+        (squadron.effective_mp - hex_distance(start, patrol_hex)) + 1
+    """
+    patrol_hex: Hex
+
+
+@dataclass(frozen=True, slots=True)
+class StrikeOrder:
+    """Vector toward target_id (a ShipID or SquadronID) and engage on contact.
+
+    - If the target is an enemy squadron  → dogfight on arrival.
+    - If the target is an enemy ship      → attack run on arrival.
+
+    The squadron moves as far as its effective_mp allows toward the target.
+    If it can reach the target this turn, engagement resolves immediately.
+    """
+    target_id: str  # ShipID or SquadronID
+
+
+# Convenience type alias used in Encounter
+SquadronOrder = InterceptOrder | StrikeOrder

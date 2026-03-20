@@ -54,10 +54,11 @@ class RangeTable:
 
 
 class WeaponType(str, Enum):
-    ELECTRON_BEAM = "E"  # Electron Beam
-    LASER = "L"          # Laser
-    FORCE_BEAM = "F"     # Force Beam (baseline example)
+    ELECTRON_BEAM    = "E"  # Electron Beam
+    LASER            = "L"  # Laser
+    FORCE_BEAM       = "F"  # Force Beam
     STANDARD_MISSILE = "R"  # Standard Missile
+    GUN              = "G"  # Autocannon — fighter primary weapon, +2 vs fighters
 
 
 class WeaponArc(Enum):
@@ -84,6 +85,12 @@ class WeaponSpec:
 
     # Firing arc restriction (in addition to the universal blind-spot rule):
     firing_arc: WeaponArc = WeaponArc.ALL
+
+    # Fighter combat rules:
+    # anti_fighter_modifier: added to the to-hit target number when attacking a squadron
+    # can_target_fighters:   if False, weapon is skipped entirely in dogfights
+    anti_fighter_modifier: int = 0
+    can_target_fighters: bool = True
 
     def damage_at(self, rng: int) -> int:
         v = self.damage.at(rng)
@@ -134,12 +141,27 @@ STANDARD_MISSILE = WeaponSpec(
     to_hit=RangeTable.from_list([6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 4, 4, 3, 3, "-"]),
     # 1 damage at all ranges
     damage=RangeTable.from_list([1]),
+    # Missiles cannot be used in fighter dogfights (only attack runs vs ships)
+    can_target_fighters=False,
+)
+
+GUN = WeaponSpec(
+    type=WeaponType.GUN,
+    name="Autocannon",
+    rate_of_fire=1,
+    # Effective at short range; trailing '-' means unusable beyond range 7
+    to_hit=RangeTable.from_list([7, 7, 7, 6, 6, 5, 5, "-"]),
+    # 1 damage vs ships at all usable ranges
+    damage=RangeTable.from_list([1, 1, 1, 1, 1, 1, 1, "-"]),
+    # +2 to-hit bonus vs fighters in dogfights
+    anti_fighter_modifier=2,
 )
 
 
 WEAPONS: dict[WeaponType, WeaponSpec] = {
-    WeaponType.ELECTRON_BEAM: ELECTRON_BEAM,
-    WeaponType.LASER: LASER,
-    WeaponType.FORCE_BEAM: FORCE_BEAM,
+    WeaponType.ELECTRON_BEAM:    ELECTRON_BEAM,
+    WeaponType.LASER:            LASER,
+    WeaponType.FORCE_BEAM:       FORCE_BEAM,
     WeaponType.STANDARD_MISSILE: STANDARD_MISSILE,
+    WeaponType.GUN:              GUN,
 }
