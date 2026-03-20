@@ -82,36 +82,36 @@ class TestMoveSubmission:
     def test_commit_after_commit_raises(self):
         battle = _two_ship_battle()
         enc = Encounter.start(battle, rng=random.Random(1))
-        enc = enc.commit_movement("A")
+        enc, _ = enc.commit_movement("A", random.Random(0))
         with pytest.raises(PermissionError):
-            enc.commit_movement("A")
+            enc.commit_movement("A", random.Random(0))
 
     def test_stage_after_commit_raises(self):
         battle = _two_ship_battle()
         enc = Encounter.start(battle, rng=random.Random(1))
-        enc = enc.commit_movement("A")
+        enc, _ = enc.commit_movement("A", random.Random(0))
         with pytest.raises(PermissionError):
             enc.stage_move("A", "a1", Hex(1, 0), Facing.N)
 
     def test_first_commit_does_not_resolve(self):
         battle = _two_ship_battle()
         enc = Encounter.start(battle, rng=random.Random(1))
-        enc = enc.commit_movement("A")
+        enc, _ = enc.commit_movement("A", random.Random(0))
         assert enc.phase == Phase.MOVE_SUBMISSION  # still waiting for B
 
     def test_second_commit_triggers_resolution(self):
         battle = _two_ship_battle()
         enc = Encounter.start(battle, rng=random.Random(1))
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
         assert enc.phase == Phase.COMBAT_SUBMISSION
 
     def test_move_order_applied_after_both_commit(self):
         battle = _two_ship_battle(a_pos=Hex(0, 0), mp=6)
         enc = Encounter.start(battle, rng=random.Random(1))
         enc = enc.stage_move("A", "a1", Hex(3, 0), Facing.NE)
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
         # A's ship should have moved to (3, 0)
         assert enc.battle.ships["a1"].pos == Hex(3, 0)
         assert enc.battle.ships["a1"].facing == Facing.NE
@@ -121,8 +121,8 @@ class TestMoveSubmission:
         enc = Encounter.start(battle, rng=random.Random(1))
         # A stages a move; B does not
         enc = enc.stage_move("A", "a1", Hex(2, 0), Facing.N)
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
         assert enc.battle.ships["a1"].pos == Hex(2, 0)
         assert enc.battle.ships["b1"].pos == Hex(10, 0)  # unchanged
 
@@ -147,8 +147,8 @@ class TestCollisionResolution:
         contested = Hex(3, 0)
         enc = enc.stage_move("A", "a1", contested, Facing.N)
         enc = enc.stage_move("B", "b1", contested, Facing.N)
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
 
         # One ship is at (3,0), the other stayed put
         positions = {s.pos for s in enc.battle.ships.values()}
@@ -163,8 +163,8 @@ class TestCollisionResolution:
         enc = Encounter.start(battle, rng=random.Random(1))
         enc = enc.stage_move("A", "a1", Hex(3, 0), Facing.N)
         enc = enc.stage_move("B", "b1", Hex(7, 0), Facing.N)
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
         assert enc.battle.ships["a1"].pos == Hex(3, 0)
         assert enc.battle.ships["b1"].pos == Hex(7, 0)
 
@@ -177,8 +177,8 @@ class TestCombatSubmission:
     def _reach_combat(self) -> Encounter:
         battle = _two_ship_battle()
         enc = Encounter.start(battle, rng=random.Random(1))
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
         assert enc.phase == Phase.COMBAT_SUBMISSION
         return enc
 
@@ -245,8 +245,8 @@ class TestSimultaneousFire:
         )
         battle = BattleState(ships={"a1": a, "b1": b})
         enc = Encounter.start(battle, rng=random.Random(42))
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
 
         enc = enc.stage_fire("A", "a1", "b1")
         enc = enc.stage_fire("B", "b1", "a1")
@@ -276,8 +276,8 @@ class TestSimultaneousFire:
         )
         battle = BattleState(ships={"a1": a, "b1": b})
         enc = Encounter.start(battle, rng=random.Random(1))
-        enc = enc.commit_movement("A")
-        enc = enc.commit_movement("B")
+        enc, _ = enc.commit_movement("A", random.Random(0))
+        enc, _ = enc.commit_movement("B", random.Random(0))
 
         enc = enc.stage_fire("A", "a1", "b1")
         enc = enc.stage_fire("B", "b1", "a1")

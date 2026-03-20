@@ -42,6 +42,8 @@ def _build_default() -> tuple:
     from tactical.hull_types import FG
     from tactical.ship_state import ShipState
     from tactical.ship_systems import ShipSystems
+    from tactical.squadron_state import FighterLoadout, SquadronState
+    from tactical.weapons import WeaponType
 
     rng = random.Random(1)
     fg = "SSSSSAAAAA(I)FFRRD(I)(I)(I)"
@@ -51,7 +53,44 @@ def _build_default() -> tuple:
     b = ShipState(ship_id="B1", owner_id="B", pos=Hex(6, 0), facing=Facing.S,
                   mp=5, turn_cost=2, turn_charge=0,
                   systems=ShipSystems.parse(fg), hull_type=FG)
-    battle = BattleState(ships={"A1": a, "B1": b})
+
+    af1 = SquadronState(
+        squadron_id="AF1", owner_id="A", pos=Hex(1, 0),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(base_mvr=4, base_mp=10,
+                               internal=(WeaponType.GUN,)),
+        endurance=20, max_endurance=20,
+    )
+    af2 = SquadronState(
+        squadron_id="AF2", owner_id="A", pos=Hex(0, 1),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(base_mvr=3, base_mp=8,
+                               internal=(WeaponType.LASER,),
+                               external=(WeaponType.STANDARD_MISSILE,),
+                               external_shots_remaining=2),
+        endurance=20, max_endurance=20,
+    )
+    bf1 = SquadronState(
+        squadron_id="BF1", owner_id="B", pos=Hex(5, 0),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(base_mvr=4, base_mp=10,
+                               internal=(WeaponType.GUN,)),
+        endurance=20, max_endurance=20,
+    )
+    bf2 = SquadronState(
+        squadron_id="BF2", owner_id="B", pos=Hex(6, 1),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(base_mvr=3, base_mp=8,
+                               internal=(WeaponType.LASER,),
+                               external=(WeaponType.STANDARD_MISSILE,),
+                               external_shots_remaining=2),
+        endurance=20, max_endurance=20,
+    )
+
+    battle = BattleState(
+        ships={"A1": a, "B1": b},
+        squadrons={"AF1": af1, "AF2": af2, "BF1": bf1, "BF2": bf2},
+    )
     enc = Encounter.start(battle, rng=rng)
     return enc, rng
 
@@ -142,8 +181,55 @@ def _draft_spend(ship_id: str, amount: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Fire event formatting
+# Event formatting helpers
 # ---------------------------------------------------------------------------
+
+def _fmt_shots(shots, to_hit: int | None = None) -> str:
+    """Compact roll list: '3✓ 7✗ 2✓' grouped by weapon if mixed."""
+    parts = []
+    for s in shots:
+        th = s.to_hit if to_hit is None else to_hit
+        mark = "✓" if s.hit else "✗"
+        parts.append(f"{s.roll}{mark}")
+    return " ".join(parts)
+
+
+def _fmt_dogfight(ev) -> list[str]:
+    from tactical.fighter_combat import DogfightEvent
+    lines = [f"  DOGFIGHT {ev.attacker_id}→{ev.target_id}  mvr={ev.mvr_delta:+}"
+             f"  casualties={ev.total_casualties}"]
+    # Group shots by weapon
+    from itertools import groupby
+    for weapon, group in groupby(ev.shots, key=lambda s: s.weapon):
+        shots = list(group)
+        th = shots[0].to_hit
+        rolls = _fmt_shots(shots)
+        hits = sum(1 for s in shots if s.hit)
+        lines.append(f"    [{weapon.value}] to_hit={th}  {rolls}  hits={hits}")
+    return lines
+
+
+def _fmt_attack_run(ev) -> list[str]:
+    from tactical.fighter_combat import AttackRunEvent
+    pd_rolls = " ".join(
+        f"{r}{'✓' if r <= 3 else '✗'}" for r in ev.pd_rolls
+    ) or "—"
+    lines = [
+        f"  ATTACK RUN {ev.attacker_id}→{ev.target_id}",
+        f"    PD: [{pd_rolls}]  killed={ev.fighters_killed_by_pd}"
+        f"  survivors={ev.surviving_strength}",
+    ]
+    from itertools import groupby
+    for weapon, group in groupby(ev.weapon_shots, key=lambda s: s.weapon):
+        shots = list(group)
+        th = shots[0].to_hit
+        rolls = _fmt_shots(shots)
+        hits = sum(1 for s in shots if s.hit)
+        dmg  = sum(s.damage for s in shots)
+        lines.append(f"    [{weapon.value}] to_hit={th}  {rolls}  hits={hits}  dmg={dmg}")
+    lines.append(f"    total ship damage: {ev.total_ship_damage}")
+    return lines
+
 
 def _fmt_fire(ev) -> str:
     if getattr(ev, "missile_rolls", None) is not None:
@@ -263,6 +349,7 @@ def _process(cmd_line: str) -> list[str]:
                             side, ship_id,
                             d["pos"], Facing.from_int(d["facing"]),
                             path_cost=d["mp_used"],
+                            path=tuple(d["path"]),
                         )
                         out.append(
                             f"Staged from draft: {ship_id} → ({d['pos'].q},{d['pos'].r}) "
@@ -276,9 +363,19 @@ def _process(cmd_line: str) -> list[str]:
                     [parts[2]] if len(parts) >= 3
                     else sorted(_enc.sides() - _enc._move_committed)
                 )
+                from tactical.fighter_combat import AttackRunEvent, DogfightEvent
                 for s in sides_to_commit:
-                    _enc = _enc.commit_movement(s)
+                    _enc, mv_events = _enc.commit_movement(s, _rng)
                     out.append(f"Side {s!r} committed movement.")
+                    for ev in mv_events:
+                        if isinstance(ev, AttackRunEvent):
+                            out.append(
+                                f"  TRANSIT: {ev.attacker_id}→{ev.target_id}"
+                                f" pd_killed={ev.fighters_killed_by_pd}"
+                                f" survivors={ev.surviving_strength}"
+                                f" hits={sum(1 for s in ev.weapon_shots if s.hit)}"
+                                f" dmg={ev.total_ship_damage}"
+                            )
                     if _enc.phase == Phase.COMBAT_SUBMISSION:
                         out.append("→ Movement resolved. Now in COMBAT_SUBMISSION.")
                         break
@@ -295,11 +392,34 @@ def _process(cmd_line: str) -> list[str]:
                     _enc, events = _enc.commit_fire(s, _rng)
                     out.append(f"Side {s!r} committed fire orders.")
                     out += [_fmt_fire(ev) for ev in events]
-                    if _enc.phase == Phase.MOVE_SUBMISSION:
-                        out.append("→ Fire resolved. Starting next turn.")
+                    if _enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION):
+                        phase_label = "COMBAT_SMALL" if _enc.phase == Phase.COMBAT_SMALL else "next turn"
+                        out.append(f"→ Fire resolved. Entering {phase_label}.")
                         break
+
+            elif sub == "squadrons":
+                if _enc.phase != Phase.COMBAT_SMALL:
+                    out.append(f"Not in combat_small phase (current: {_enc.phase.value})")
+                    return out
+                sides_to_commit = (
+                    [parts[2]] if len(parts) >= 3
+                    else sorted(_enc.sides() - _enc._squadron_committed)
+                )
+                from tactical.fighter_combat import AttackRunEvent, DogfightEvent
+                for s in sides_to_commit:
+                    _enc, events = _enc.commit_squadron_orders(s, _rng)
+                    out.append(f"Side {s!r} committed squadron orders.")
+                    for ev in events:
+                        if isinstance(ev, DogfightEvent):
+                            out.extend(_fmt_dogfight(ev))
+                        elif isinstance(ev, AttackRunEvent):
+                            out.extend(_fmt_attack_run(ev))
+                    if _enc.phase == Phase.MOVE_SUBMISSION:
+                        out.append("→ Fighter phase resolved. Starting next turn.")
+                        break
+
             else:
-                out.append("usage: commit move [side_id]  |  commit fire [side_id]")
+                out.append("usage: commit move [side_id]  |  commit fire [side_id]  |  commit squadrons [side_id]")
 
         # ---------------------------------------------------------------- #
         # Combat submission                                                  #
@@ -324,6 +444,42 @@ def _process(cmd_line: str) -> list[str]:
             side = _enc.battle.ships[ship_id].owner_id
             _enc = _enc.pass_fire(side, ship_id)
             out.append(f"Staged: {ship_id} passes fire")
+
+        # ---------------------------------------------------------------- #
+        # COMBAT_SMALL — fighter orders                                      #
+        # ---------------------------------------------------------------- #
+
+        elif cmd == "intercept":
+            # intercept <squad_id> <q> <r>
+            if len(parts) != 4:
+                out.append("usage: intercept <squad_id> <q> <r>"); return out
+            sq_id = parts[1]
+            if sq_id not in _enc.battle.squadrons:
+                out.append(f"unknown squadron: {sq_id!r}"); return out
+            from tactical.encounter import Phase
+            if _enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {_enc.phase.value!r}"); return out
+            from sim.hexgrid import Hex
+            from tactical.turn_orders import InterceptOrder
+            patrol = Hex(int(parts[2]), int(parts[3]))
+            side   = _enc.battle.squadrons[sq_id].owner_id
+            _enc   = _enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol))
+            out.append(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r})")
+
+        elif cmd == "strike":
+            # strike <squad_id> <target_id>
+            if len(parts) != 3:
+                out.append("usage: strike <squad_id> <target_id>"); return out
+            sq_id, target_id = parts[1], parts[2]
+            if sq_id not in _enc.battle.squadrons:
+                out.append(f"unknown squadron: {sq_id!r}"); return out
+            from tactical.encounter import Phase
+            if _enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {_enc.phase.value!r}"); return out
+            from tactical.turn_orders import StrikeOrder
+            side = _enc.battle.squadrons[sq_id].owner_id
+            _enc = _enc.stage_squadron_order(side, sq_id, StrikeOrder(target_id=target_id))
+            out.append(f"Staged: {sq_id} STRIKE → {target_id}")
 
         # ---------------------------------------------------------------- #
         # Debug / quick fire (bypass submission system)                      #
@@ -371,13 +527,25 @@ def _process(cmd_line: str) -> list[str]:
 # State rendering helpers
 # ---------------------------------------------------------------------------
 
-def _render_ships() -> str:
+def _render_units() -> str:
     lines = []
-    for sid, ship in _enc.battle.ships.items():
+    for sid in _enc.battle.ship_ids_sorted():
+        ship = _enc.battle.ships[sid]
         lines.append(
-            f"{sid:>3}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
+            f"{sid:>4}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
             f"  face={int(ship.facing)}  mp={ship.mp}"
-            f"\n     systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
+            f"\n      systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
+        )
+    for sqid in _enc.battle.squadron_ids_sorted():
+        sq = _enc.battle.squadrons[sqid]
+        internal = "".join(w.value for w in sq.loadout.internal)
+        external = "".join(w.value for w in sq.loadout.external)
+        loadout  = internal + (f"[{external}×{sq.loadout.external_shots_remaining}]" if external else "")
+        lines.append(
+            f"{sqid:>4}  owner={sq.owner_id}  pos=({sq.pos.q:+},{sq.pos.r:+})"
+            f"  str={sq.strength}/{sq.max_strength}"
+            f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
+            f"  load={loadout}"
         )
     return "\n".join(lines)
 
@@ -406,6 +574,20 @@ def _ships_json() -> str:
     ])
 
 
+def _squadrons_json() -> str:
+    return json.dumps([
+        {
+            "id":       sqid,
+            "owner":    sq.owner_id,
+            "q":        sq.pos.q,
+            "r":        sq.pos.r,
+            "strength": sq.strength,
+            "max":      sq.max_strength,
+        }
+        for sqid, sq in _enc.battle.squadrons.items()
+    ])
+
+
 def _paths_json() -> str:
     """Serialize pending draft paths for canvas rendering."""
     paths = []
@@ -420,6 +602,77 @@ def _paths_json() -> str:
             "finalFacing": d["facing"],
         })
     return json.dumps(paths)
+
+
+def _intercept_paths_json() -> str:
+    """Serialize staged intercept orders as {owner, hexes} paths for canvas."""
+    from tactical.turn_orders import InterceptOrder
+    paths = []
+    for sq_id, order in _enc._squadron_orders.items():
+        if not isinstance(order, InterceptOrder):
+            continue
+        sq = _enc.battle.squadrons.get(sq_id)
+        if sq is None:
+            continue
+        if sq.pos == order.patrol_hex:
+            continue  # already at patrol hex, nothing to draw
+        paths.append({
+            "owner": sq.owner_id,
+            "hexes": [
+                {"q": sq.pos.q, "r": sq.pos.r},
+                {"q": order.patrol_hex.q, "r": order.patrol_hex.r},
+            ],
+        })
+    return json.dumps(paths)
+
+
+def _intercept_zones_json() -> str:
+    """Serialize staged intercept orders as {owner, q, r, radius} zones."""
+    from tactical.fighter_combat import hex_distance
+    from tactical.turn_orders import InterceptOrder
+    zones = []
+    for sq_id, order in _enc._squadron_orders.items():
+        if not isinstance(order, InterceptOrder):
+            continue
+        sq = _enc.battle.squadrons.get(sq_id)
+        if sq is None:
+            continue
+        dist   = hex_distance(sq.pos, order.patrol_hex)
+        radius = max(0, sq.effective_mp - dist + 1)
+        zones.append({
+            "owner":  sq.owner_id,
+            "q":      order.patrol_hex.q,
+            "r":      order.patrol_hex.r,
+            "radius": radius,
+        })
+    return json.dumps(zones)
+
+
+def _strike_orders_json() -> str:
+    """Serialize staged strike orders as attacker→target arrows."""
+    from tactical.encounter import Phase
+    from tactical.turn_orders import StrikeOrder
+    if _enc.phase != Phase.COMBAT_SMALL:
+        return json.dumps([])
+    orders = []
+    for sq_id, order in _enc._squadron_orders.items():
+        if not isinstance(order, StrikeOrder):
+            continue
+        attacker = _enc.battle.squadrons.get(sq_id)
+        if attacker is None:
+            continue
+        if order.target_id in _enc.battle.ships:
+            target_pos = _enc.battle.ships[order.target_id].pos
+        elif order.target_id in _enc.battle.squadrons:
+            target_pos = _enc.battle.squadrons[order.target_id].pos
+        else:
+            continue
+        orders.append({
+            "attacker_owner": attacker.owner_id,
+            "aq": attacker.pos.q, "ar": attacker.pos.r,
+            "tq": target_pos.q,  "tr": target_pos.r,
+        })
+    return json.dumps(orders)
 
 
 def _fire_orders_json() -> str:
@@ -448,13 +701,17 @@ def _fire_orders_json() -> str:
 @router.get("/", response_class=HTMLResponse)
 async def tactical_ui(request: Request):
     return templates.TemplateResponse("tactical.html", {
-        "request":         request,
-        "phase":           _render_phase(),
-        "ships_text":      _render_ships(),
-        "ships_json":      _ships_json(),
-        "paths_json":      _paths_json(),
-        "fire_orders_json": _fire_orders_json(),
-        "log":             "\n".join(_log[-40:]),
+        "request":          request,
+        "phase":            _render_phase(),
+        "units_text":           _render_units(),
+        "ships_json":           _ships_json(),
+        "squadrons_json":       _squadrons_json(),
+        "paths_json":           _paths_json(),
+        "fire_orders_json":     _fire_orders_json(),
+        "strike_orders_json":   _strike_orders_json(),
+        "intercept_paths_json": _intercept_paths_json(),
+        "intercept_zones_json": _intercept_zones_json(),
+        "log":              "\n".join(_log[-40:]),
     })
 
 

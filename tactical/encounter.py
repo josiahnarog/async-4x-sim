@@ -9,8 +9,10 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
 from tactical.combat import FireEvent, resolve_fire_all, hex_distance
 from tactical.facing import Facing
+from tactical.fighter_combat import FighterCombatEvent, resolve_combat_small
 from tactical.initiative import Initiative, RNG
-from tactical.turn_orders import ShipFireOrder, ShipMoveOrder
+from tactical.squadron_state import SquadronID
+from tactical.turn_orders import ShipFireOrder, ShipMoveOrder, SquadronOrder
 from tactical.weapons import WEAPONS
 
 
@@ -56,6 +58,10 @@ class Encounter:
     # MP cap at encounter start, used for move-distance validation
     _mp_capacity: dict[ShipID, int]
 
+    # COMBAT_SMALL bookkeeping
+    _squadron_orders:    dict[SquadronID, SquadronOrder]
+    _squadron_committed: frozenset[str]   # side_ids that have committed squadron orders
+
     # ------------------------------------------------------------------ #
     # Factory                                                              #
     # ------------------------------------------------------------------ #
@@ -66,14 +72,16 @@ class Encounter:
         init  = Initiative.roll(sides, rng=rng)
         mp_cap = {sid: ship.mp for sid, ship in battle.ships.items()}
         return Encounter(
-            battle           = battle,
-            initiative       = init,
-            phase            = Phase.MOVE_SUBMISSION,
-            _move_orders     = {},
-            _move_committed  = frozenset(),
-            _fire_orders     = {},
-            _fire_committed  = frozenset(),
-            _mp_capacity     = mp_cap,
+            battle              = battle,
+            initiative          = init,
+            phase               = Phase.MOVE_SUBMISSION,
+            _move_orders        = {},
+            _move_committed     = frozenset(),
+            _fire_orders        = {},
+            _fire_committed     = frozenset(),
+            _mp_capacity        = mp_cap,
+            _squadron_orders    = {},
+            _squadron_committed = frozenset(),
         )
 
     # ------------------------------------------------------------------ #
@@ -119,12 +127,15 @@ class Encounter:
         dest_facing: Facing,
         *,
         path_cost: Optional[int] = None,
+        path: tuple[Hex, ...] = (),
     ) -> "Encounter":
         """Stage a movement order for ship_id.  May be called repeatedly to
         override a previous order, as long as the side hasn't committed yet.
 
         path_cost: if provided, used for MP validation instead of hex_distance
         (allows curved paths that use more MP than the straight-line distance).
+        path: full sequence of hexes traversed (including start); used for
+        transit interception detection during movement resolution.
         """
         self._require_phase(Phase.MOVE_SUBMISSION)
         self._require_not_committed(side_id, self._move_committed)
@@ -140,14 +151,16 @@ class Encounter:
                 f"movement cost {dist} exceeds MP capacity {cap}"
             )
 
-        new_orders = {**self._move_orders, ship_id: ShipMoveOrder(dest=dest, dest_facing=dest_facing)}
+        new_orders = {**self._move_orders, ship_id: ShipMoveOrder(dest=dest, dest_facing=dest_facing, path=path)}
         return dataclasses.replace(self, _move_orders=new_orders)
 
-    def commit_movement(self, side_id: str) -> "Encounter":
+    def commit_movement(self, side_id: str, rng: RNG) -> tuple["Encounter", list[FighterCombatEvent]]:
         """Mark side_id as done submitting move orders.
 
         When all sides have committed, movement is resolved automatically.
         Ships that did not submit a move order remain in place.
+        Returns (new_encounter, transit_events) where transit_events contains
+        any attack runs triggered by ships moving through enemy squadron hexes.
         """
         self._require_phase(Phase.MOVE_SUBMISSION)
         self._require_not_committed(side_id, self._move_committed)
@@ -155,11 +168,18 @@ class Encounter:
         new_committed = self._move_committed | {side_id}
         enc = dataclasses.replace(self, _move_committed=new_committed)
         if new_committed >= enc.sides():
-            return enc._resolve_movement()
-        return enc
+            return enc._resolve_movement(rng)
+        return enc, []
 
-    def _resolve_movement(self) -> "Encounter":
-        """All sides have committed.  Resolve movement simultaneously."""
+    def _resolve_movement(self, rng: RNG) -> tuple["Encounter", list[FighterCombatEvent]]:
+        """All sides have committed.  Resolve movement simultaneously.
+
+        After placing ships, check each ship's movement path for enemy squadrons.
+        Any squadron whose hex is transited by an enemy ship fires a free attack
+        run immediately (the ship keeps moving regardless).
+        """
+        from tactical.fighter_combat import resolve_attack_run
+
         ships = self.battle.ships
 
         # Desired destination for each ship (default: stay in place)
@@ -199,13 +219,52 @@ class Encounter:
                 mp     = max(0, ship.mp - dist),
             )
 
-        return dataclasses.replace(
+        new_battle = dataclasses.replace(self.battle, ships=new_ships)
+
+        # Transit attack run detection.
+        # Squadron positions are fixed during MOVE_SUBMISSION; use pre-movement
+        # positions from self.battle.squadrons.
+        transit_events: list[FighterCombatEvent] = []
+        if self.battle.squadrons:
+            for ship_id, order in self._move_orders.items():
+                if ship_id in cancelled:
+                    continue
+                orig_ship = self.battle.ships[ship_id]
+                # Transit hexes = everything after the starting hex.
+                # If no path was recorded, fall back to checking destination only.
+                transit_hexes: tuple[Hex, ...] = (
+                    order.path[1:] if len(order.path) > 1 else (order.dest,)
+                )
+                seen_hexes: set[Hex] = set()
+                for hex_pos in transit_hexes:
+                    if hex_pos in seen_hexes:
+                        continue
+                    seen_hexes.add(hex_pos)
+                    for sq_id, sq in self.battle.squadrons.items():
+                        if sq.owner_id == orig_ship.owner_id:
+                            continue  # friendly squadron
+                        if sq.pos != hex_pos:
+                            continue
+                        if ship_id not in new_battle.ships:
+                            continue  # ship somehow gone
+                        if sq_id not in new_battle.squadrons:
+                            continue  # squadron already destroyed
+                        new_battle, ev = resolve_attack_run(
+                            new_battle,
+                            attacker_id=sq_id,
+                            target_ship_id=ship_id,
+                            rng=rng,
+                        )
+                        transit_events.append(ev)
+
+        enc = dataclasses.replace(
             self,
-            battle          = dataclasses.replace(self.battle, ships=new_ships),
+            battle          = new_battle,
             phase           = Phase.COMBAT_SUBMISSION,
             _move_orders    = {},
             _move_committed = frozenset(),
         )
+        return enc, transit_events
 
     # ------------------------------------------------------------------ #
     # COMBAT_SUBMISSION                                                     #
@@ -330,8 +389,76 @@ class Encounter:
             _fire_orders    = {},
             _fire_committed = frozenset(),
         )
-        # COMBAT_SMALL (fighters) not yet implemented — advance to next turn automatically.
-        return enc.next_turn(), all_events
+        # If no squadrons are deployed, skip COMBAT_SMALL entirely.
+        if not enc.battle.squadrons:
+            return enc.next_turn(), all_events
+        return enc, all_events
+
+    # ------------------------------------------------------------------ #
+    # COMBAT_SMALL                                                         #
+    # ------------------------------------------------------------------ #
+
+    def stage_squadron_order(
+        self,
+        side_id: str,
+        squadron_id: SquadronID,
+        order: SquadronOrder,
+    ) -> "Encounter":
+        """Stage an INTERCEPT or STRIKE order for squadron_id.
+
+        May be called repeatedly to override, as long as the side hasn't committed.
+        """
+        self._require_phase(Phase.COMBAT_SMALL)
+        self._require_not_committed(side_id, self._squadron_committed)
+        if squadron_id not in self.battle.squadrons:
+            raise KeyError(f"Unknown squadron: {squadron_id!r}")
+        sq = self.battle.squadrons[squadron_id]
+        if sq.owner_id != side_id:
+            raise PermissionError(
+                f"Squadron {squadron_id!r} not controlled by side {side_id!r}"
+            )
+
+        new_orders = {**self._squadron_orders, squadron_id: order}
+        return dataclasses.replace(self, _squadron_orders=new_orders)
+
+    def commit_squadron_orders(
+        self,
+        side_id: str,
+        rng: RNG,
+    ) -> tuple["Encounter", list[FighterCombatEvent]]:
+        """Mark side_id as done submitting squadron orders.
+
+        When all sides have committed, COMBAT_SMALL resolves automatically.
+        Squadrons that received no order stay in place and do not engage.
+        Returns (new_encounter, events) — events are non-empty only when
+        resolution fires.
+        """
+        self._require_phase(Phase.COMBAT_SMALL)
+        self._require_not_committed(side_id, self._squadron_committed)
+
+        new_committed = self._squadron_committed | {side_id}
+        enc = dataclasses.replace(self, _squadron_committed=new_committed)
+        if new_committed >= enc.sides():
+            return enc._resolve_combat_small(rng)
+        return enc, []
+
+    def _resolve_combat_small(
+        self,
+        rng: RNG,
+    ) -> tuple["Encounter", list[FighterCombatEvent]]:
+        """All sides committed.  Resolve fighter movement and combat."""
+        new_battle, events = resolve_combat_small(
+            self.battle,
+            self._squadron_orders,
+            rng=rng,
+        )
+        enc = dataclasses.replace(
+            self,
+            battle              = new_battle,
+            _squadron_orders    = {},
+            _squadron_committed = frozenset(),
+        )
+        return enc.next_turn(), events
 
     def next_turn(self) -> "Encounter":
         """Advance to a fresh MOVE_SUBMISSION phase for the next turn.
@@ -354,15 +481,26 @@ class Encounter:
             for sqid, sq in self.battle.squadrons.items()
         }
 
+        # Preserve InterceptOrders as standing patrol orders across turns.
+        # StrikeOrders are one-time and are cleared.
+        from tactical.turn_orders import InterceptOrder
+        carried_squadron_orders = {
+            sq_id: order
+            for sq_id, order in self._squadron_orders.items()
+            if isinstance(order, InterceptOrder) and sq_id in new_squads
+        }
+
         return dataclasses.replace(
             self,
-            battle          = dataclasses.replace(self.battle, ships=new_ships, squadrons=new_squads),
-            phase           = Phase.MOVE_SUBMISSION,
-            _move_orders    = {},
-            _move_committed = frozenset(),
-            _fire_orders    = {},
-            _fire_committed = frozenset(),
-            _mp_capacity    = new_mp_capacity,
+            battle              = dataclasses.replace(self.battle, ships=new_ships, squadrons=new_squads),
+            phase               = Phase.MOVE_SUBMISSION,
+            _move_orders        = {},
+            _move_committed     = frozenset(),
+            _fire_orders        = {},
+            _fire_committed     = frozenset(),
+            _mp_capacity        = new_mp_capacity,
+            _squadron_orders    = carried_squadron_orders,
+            _squadron_committed = frozenset(),
         )
 
     @staticmethod

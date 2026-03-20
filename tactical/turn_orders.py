@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 from sim.hexgrid import Hex
@@ -13,9 +14,15 @@ from tactical.facing import Facing
 
 @dataclass(frozen=True, slots=True)
 class ShipMoveOrder:
-    """A ship's submitted movement order for the MOVE_SUBMISSION phase."""
+    """A ship's submitted movement order for the MOVE_SUBMISSION phase.
+
+    path: ordered sequence of hexes traversed (including start and dest).
+    Used during movement resolution to detect transit through enemy-held hexes.
+    If empty, only the destination hex is checked for transit interceptions.
+    """
     dest: Hex
     dest_facing: Facing
+    path: tuple[Hex, ...] = dataclasses.field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)

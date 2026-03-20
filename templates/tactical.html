@@ -34,8 +34,8 @@
       <h2>Map</h2>
       <canvas id="hexmap" width="560" height="560"></canvas>
 
-      <h2>Ships</h2>
-      <pre class="ships-pre">{{ ships_text }}</pre>
+      <h2>Units</h2>
+      <pre class="ships-pre">{{ units_text }}</pre>
     </div>
 
     <div class="col-right">
@@ -58,6 +58,11 @@
         <code>pass &lt;id&gt;</code> &nbsp;|&nbsp;
         <code>commit fire</code><br/>
         <br/>
+        <b>Fighters (COMBAT_SMALL):</b><br/>
+        <code>intercept &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> — patrol hex &nbsp;|&nbsp;
+        <code>strike &lt;id&gt; &lt;tgt&gt;</code> — attack ship or squadron<br/>
+        <code>commit squadrons</code> — resolve fighter phase<br/>
+        <br/>
         <b>Debug:</b>
         <code>quickfire &lt;att&gt; &lt;tgt&gt;</code> &nbsp;|&nbsp;
         <code>shoot &lt;att&gt; &lt;tgt&gt; &lt;w&gt;</code> &nbsp;|&nbsp;
@@ -78,9 +83,13 @@
     //   py = cy - SIZE * (sqrt(3)/2 * q + sqrt(3) * r)
     // -----------------------------------------------------------------------
 
-    const SHIPS       = {{ ships_json | safe }};
-    const PATHS       = {{ paths_json | safe }};
-    const FIRE_ORDERS = {{ fire_orders_json | safe }};
+    const SHIPS           = {{ ships_json | safe }};
+    const SQUADRONS       = {{ squadrons_json | safe }};
+    const PATHS           = {{ paths_json | safe }};
+    const FIRE_ORDERS     = {{ fire_orders_json | safe }};
+    const STRIKE_ORDERS   = {{ strike_orders_json | safe }};
+    const INTERCEPT_PATHS = {{ intercept_paths_json | safe }};
+    const INTERCEPT_ZONES = {{ intercept_zones_json | safe }};
     const RADIUS = 8;
     const SIZE = 28;           // hex circumradius in px
     const SQ3 = Math.sqrt(3);
@@ -120,14 +129,12 @@
           ctx.lineWidth = 1;
           ctx.stroke();
 
-          // Coord label at origin only
-          if (q === 0 && r === 0) {
-            ctx.fillStyle = "#333355";
-            ctx.font = "9px monospace";
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText("0,0", x, y);
-          }
+          // Coord label on every hex
+          ctx.fillStyle = "#2e2e55";
+          ctx.font = "7px monospace";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(`${q},${r}`, x, y);
         }
       }
     }
@@ -288,6 +295,123 @@
       ctx.fillText(FACING_NAMES[ship.facing], x, y + SIZE * 0.62);
     }
 
+    function drawSquadronPath(ctx, pathData, cx, cy) {
+      const { owner, hexes } = pathData;
+      if (hexes.length < 2) return;
+      const color = OWNER_COLORS[owner] || "#ffffff";
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.65;
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      const first = hexToPixel(hexes[0].q, hexes[0].r, cx, cy);
+      ctx.moveTo(first.x, first.y);
+      for (let i = 1; i < hexes.length; i++) {
+        const p = hexToPixel(hexes[i].q, hexes[i].r, cx, cy);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      // Ghost diamond at destination
+      const last = hexToPixel(hexes[hexes.length - 1].q, hexes[hexes.length - 1].r, cx, cy);
+      const gr = SIZE * 0.48;
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath();
+      ctx.moveTo(last.x,      last.y - gr);
+      ctx.lineTo(last.x + gr, last.y     );
+      ctx.lineTo(last.x,      last.y + gr);
+      ctx.lineTo(last.x - gr, last.y     );
+      ctx.closePath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Edge i (vertex i → vertex i+1) faces the neighbour at these offsets.
+    // Derived from flat-top axial geometry (see coord comment at top).
+    const EDGE_NEIGHBOR = [
+      { dq:  1, dr: -1 },  // edge 0: SE
+      { dq:  0, dr: -1 },  // edge 1: S
+      { dq: -1, dr:  0 },  // edge 2: SW
+      { dq: -1, dr:  1 },  // edge 3: NW
+      { dq:  0, dr:  1 },  // edge 4: N
+      { dq:  1, dr:  0 },  // edge 5: NE
+    ];
+
+    function hexesInRadius(cq, cr, radius) {
+      const set = new Set();
+      for (let dq = -radius; dq <= radius; dq++) {
+        const rMin = Math.max(-radius, -dq - radius);
+        const rMax = Math.min( radius, -dq + radius);
+        for (let dr = rMin; dr <= rMax; dr++) {
+          set.add(`${cq + dq},${cr + dr}`);
+        }
+      }
+      return set;
+    }
+
+    function drawInterceptZone(ctx, zone, cx, cy) {
+      const color    = OWNER_COLORS[zone.owner] || "#ffffff";
+      const zoneSet  = hexesInRadius(zone.q, zone.r, zone.radius);
+
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 1.5;
+      ctx.globalAlpha = 0.55;
+
+      for (const key of zoneSet) {
+        const [q, r] = key.split(",").map(Number);
+        // Skip hexes outside the map radius so we don't draw phantom outlines
+        if (Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) > RADIUS) continue;
+        const { x, y } = hexToPixel(q, r, cx, cy);
+        for (let i = 0; i < 6; i++) {
+          const nb = EDGE_NEIGHBOR[i];
+          if (zoneSet.has(`${q + nb.dq},${r + nb.dr}`)) continue; // interior edge
+          const a0 = (i       * Math.PI) / 3;
+          const a1 = ((i + 1) * Math.PI) / 3;
+          ctx.beginPath();
+          ctx.moveTo(x + SIZE * Math.cos(a0), y + SIZE * Math.sin(a0));
+          ctx.lineTo(x + SIZE * Math.cos(a1), y + SIZE * Math.sin(a1));
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawSquadron(ctx, sq, cx, cy) {
+      const { x, y } = hexToPixel(sq.q, sq.r, cx, cy);
+      const color = OWNER_COLORS[sq.owner] || "#ffffff";
+      const dark  = OWNER_DARK[sq.owner]   || "#444444";
+      const r     = SIZE * 0.48;
+
+      // Diamond shape
+      ctx.beginPath();
+      ctx.moveTo(x,     y - r);
+      ctx.lineTo(x + r, y    );
+      ctx.lineTo(x,     y + r);
+      ctx.lineTo(x - r, y    );
+      ctx.closePath();
+      ctx.fillStyle   = dark;
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+
+      // Strength label
+      ctx.fillStyle    = color;
+      ctx.font         = "bold 10px monospace";
+      ctx.textAlign    = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${sq.id}`, x, y - 1);
+      ctx.font      = "9px monospace";
+      ctx.fillStyle = "#aaaaaa";
+      ctx.fillText(`${sq.strength}/${sq.max}`, x, y + SIZE * 0.55);
+    }
+
     function render() {
       const canvas = document.getElementById("hexmap");
       const ctx = canvas.getContext("2d");
@@ -296,10 +420,14 @@
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawGrid(ctx, cx, cy);
+      for (const z of INTERCEPT_ZONES) drawInterceptZone(ctx, z, cx, cy);
+      for (const p of INTERCEPT_PATHS) drawSquadronPath(ctx, p, cx, cy);
       // Draft paths and fire-order arrows render behind ships
       for (const p of PATHS)  drawDraftPath(ctx, p, cx, cy);
-      for (const fo of FIRE_ORDERS) drawFireOrder(ctx, fo, cx, cy);
+      for (const fo of FIRE_ORDERS)   drawFireOrder(ctx, fo, cx, cy);
+      for (const so of STRIKE_ORDERS) drawFireOrder(ctx, so, cx, cy);
       for (const ship of SHIPS) drawShip(ctx, ship, cx, cy);
+      for (const sq of SQUADRONS) drawSquadron(ctx, sq, cx, cy);
     }
 
     render();

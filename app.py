@@ -24,6 +24,11 @@ from tactical.web import router as tactical_router
 app.include_router(tactical_router)
 
 
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url="/tactical/")
+
+
 def _load_game(game_id: str):
     s = db.get_game_json(game_id)
     if s is None:

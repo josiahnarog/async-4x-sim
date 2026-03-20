@@ -6,10 +6,64 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
+from tactical.fighter_combat import AttackRunEvent, DogfightEvent
 from tactical.hull_types import FG
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
+from tactical.squadron_state import FighterLoadout, SquadronState
+from tactical.turn_orders import InterceptOrder, StrikeOrder
+from tactical.weapons import WeaponType
+
+
+def _fmt_squadron(sq: SquadronState) -> str:
+    internal = "".join(w.value for w in sq.loadout.internal)
+    external = "".join(w.value for w in sq.loadout.external)
+    loadout  = internal + (f"[{external}×{sq.loadout.external_shots_remaining}]" if external else "")
+    return (
+        f"{sq.squadron_id:>4} owner={sq.owner_id} pos=({sq.pos.q:+},{sq.pos.r:+})"
+        f"  str={sq.strength}/{sq.max_strength}"
+        f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
+        f"  load={loadout}  end={sq.endurance}"
+    )
+
+
+def _fmt_fighter_event(ev) -> str:
+    from itertools import groupby
+
+    def _shots_str(shots) -> str:
+        parts = []
+        for s in shots:
+            parts.append(f"{s.roll}{'✓' if s.hit else '✗'}")
+        return " ".join(parts)
+
+    if isinstance(ev, DogfightEvent):
+        lines = [f"  DOGFIGHT {ev.attacker_id}→{ev.target_id}"
+                 f"  mvr={ev.mvr_delta:+}  casualties={ev.total_casualties}"]
+        for weapon, group in groupby(ev.shots, key=lambda s: s.weapon):
+            shots = list(group)
+            th   = shots[0].to_hit
+            hits = sum(1 for s in shots if s.hit)
+            lines.append(f"    [{weapon.value}] to_hit={th}  {_shots_str(shots)}  hits={hits}")
+        return "\n".join(lines)
+
+    if isinstance(ev, AttackRunEvent):
+        pd_str = " ".join(f"{r}{'✓' if r<=3 else '✗'}" for r in ev.pd_rolls) or "—"
+        lines = [
+            f"  ATTACK RUN {ev.attacker_id}→{ev.target_id}",
+            f"    PD: [{pd_str}]  killed={ev.fighters_killed_by_pd}"
+            f"  survivors={ev.surviving_strength}",
+        ]
+        for weapon, group in groupby(ev.weapon_shots, key=lambda s: s.weapon):
+            shots = list(group)
+            th   = shots[0].to_hit
+            hits = sum(1 for s in shots if s.hit)
+            dmg  = sum(s.damage for s in shots)
+            lines.append(f"    [{weapon.value}] to_hit={th}  {_shots_str(shots)}  hits={hits}  dmg={dmg}")
+        lines.append(f"    total ship damage: {ev.total_ship_damage}")
+        return "\n".join(lines)
+
+    return f"  FIGHTER EVENT: {ev}"
 
 
 def _fmt_ship(s: ShipState) -> str:
@@ -83,6 +137,16 @@ def _print_state(enc: Encounter, drafts: dict | None = None) -> None:
     for sid in enc.battle.ship_ids_sorted():
         print(" ", _fmt_ship(enc.battle.ships[sid]))
 
+    if enc.battle.squadrons:
+        print("SQUADRONS:")
+        for sqid in enc.battle.squadron_ids_sorted():
+            print(" ", _fmt_squadron(enc.battle.squadrons[sqid]))
+        if enc.phase == Phase.COMBAT_SMALL:
+            committed = sorted(enc._squadron_committed)
+            staged    = {sqid: type(o).__name__ for sqid, o in enc._squadron_orders.items()}
+            print(f"  committed: {committed}")
+            print(f"  staged: {staged or 'none'}")
+
     print()
     print("MAP:")
     print(render_tactical_grid_ascii(enc.battle, radius=6, empty=".."))
@@ -134,6 +198,11 @@ def _help() -> None:
     print("  commit fire <side_id>              commit fire orders for a side")
     print("  commit fire                        commit fire orders for ALL sides")
     print()
+    print("  --- COMBAT_SMALL phase (fighters) ---")
+    print("  intercept <squad_id> <q> <r>          patrol hex, intercept enemies in range")
+    print("  strike <squad_id> <target_id>         vector toward ship or enemy squadron")
+    print("  commit squadrons [side_id]            commit and resolve fighter phase")
+    print()
     print("  --- Debug (bypasses submission system) ---")
     print("  quickfire <attacker_id> <target_id>   immediate fire-all")
     print("  shoot <attacker_id> <target_id> <w>   immediate single-weapon fire")
@@ -172,7 +241,54 @@ def main() -> None:
         hull_type=FG,
     )
 
-    battle = BattleState(ships={"A1": a, "B1": b})
+    # A's fighter squadrons — placed just off A1's position
+    af1 = SquadronState(          # interceptors: G×3, high MVR
+        squadron_id="AF1", owner_id="A", pos=Hex(1, 0),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(
+            base_mvr=4, base_mp=10,
+            internal=(WeaponType.GUN,),
+        ),
+        endurance=20, max_endurance=20,
+    )
+    af2 = SquadronState(          # strike fighters: L + R×2
+        squadron_id="AF2", owner_id="A", pos=Hex(0, 1),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(
+            base_mvr=3, base_mp=8,
+            internal=(WeaponType.LASER,),
+            external=(WeaponType.STANDARD_MISSILE,),
+            external_shots_remaining=2,
+        ),
+        endurance=20, max_endurance=20,
+    )
+
+    # B's fighter squadrons — placed just off B1's position
+    bf1 = SquadronState(          # interceptors: G×3, high MVR
+        squadron_id="BF1", owner_id="B", pos=Hex(5, 0),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(
+            base_mvr=4, base_mp=10,
+            internal=(WeaponType.GUN,),
+        ),
+        endurance=20, max_endurance=20,
+    )
+    bf2 = SquadronState(          # strike fighters: L + R×2
+        squadron_id="BF2", owner_id="B", pos=Hex(6, 1),
+        strength=5, max_strength=5,
+        loadout=FighterLoadout(
+            base_mvr=3, base_mp=8,
+            internal=(WeaponType.LASER,),
+            external=(WeaponType.STANDARD_MISSILE,),
+            external_shots_remaining=2,
+        ),
+        endurance=20, max_endurance=20,
+    )
+
+    battle = BattleState(
+        ships={"A1": a, "B1": b},
+        squadrons={"AF1": af1, "AF2": af2, "BF1": bf1, "BF2": bf2},
+    )
     enc = Encounter.start(battle, rng=rng)
 
     # Per-ship draft paths for movement construction
@@ -347,6 +463,7 @@ def main() -> None:
                                 ship.owner_id, ship_id,
                                 d["pos"], Facing.from_int(d["facing"]),
                                 path_cost=d["mp_used"],
+                                path=tuple(d["path"]),
                             )
                             print(f"Staged from draft: {ship_id} → ({d['pos'].q},{d['pos'].r})"
                                   f" facing={d['facing']} cost={d['mp_used']}")
@@ -356,12 +473,16 @@ def main() -> None:
                     sides_to_commit = (
                         [parts[2]] if len(parts) >= 3 else sorted(enc.sides() - enc._move_committed)
                     )
+                    all_mv_events: list = []
                     for s in sides_to_commit:
-                        enc = enc.commit_movement(s)
+                        enc, mv_events = enc.commit_movement(s, rng)
+                        all_mv_events.extend(mv_events)
                         print(f"Side {s!r} committed movement.")
                         if enc.phase == Phase.COMBAT_SUBMISSION:
                             print("→ Movement resolved. Entering COMBAT_SUBMISSION.")
                             break
+                    for ev in all_mv_events:
+                        print(_fmt_fighter_event(ev))
                     _print_state(enc, drafts)
                 elif sub == "fire":
                     if enc.phase != Phase.COMBAT_SUBMISSION:
@@ -375,14 +496,35 @@ def main() -> None:
                         enc, events = enc.commit_fire(s, rng)
                         all_events.extend(events)
                         print(f"Side {s!r} committed fire orders.")
-                        if enc.phase == Phase.COMBAT_SMALL:
-                            print("→ Fire resolved. Entering COMBAT_SMALL.")
+                        if enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION):
+                            phase_msg = "COMBAT_SMALL" if enc.phase == Phase.COMBAT_SMALL else "next turn (MOVE_SUBMISSION)"
+                            print(f"→ Fire resolved. Entering {phase_msg}.")
                             break
                     for ev in all_events:
                         print(_format_fire_event(ev))
                     _print_state(enc, drafts)
+
+                elif sub == "squadrons":
+                    if enc.phase != Phase.COMBAT_SMALL:
+                        print(f"Not in COMBAT_SMALL phase (current: {enc.phase.value})")
+                        continue
+                    sides_to_commit = (
+                        [parts[2]] if len(parts) >= 3 else sorted(enc.sides() - enc._squadron_committed)
+                    )
+                    all_events = []
+                    for s in sides_to_commit:
+                        enc, events = enc.commit_squadron_orders(s, rng)
+                        all_events.extend(events)
+                        print(f"Side {s!r} committed squadron orders.")
+                        if enc.phase == Phase.MOVE_SUBMISSION:
+                            print("→ Fighter phase resolved. Starting next turn.")
+                            break
+                    for ev in all_events:
+                        print(_fmt_fighter_event(ev))
+                    _print_state(enc, drafts)
+
                 else:
-                    print("usage: commit move [side_id]  |  commit fire [side_id]")
+                    print("usage: commit move [side_id]  |  commit fire [side_id]  |  commit squadrons [side_id]")
 
             elif cmd == "fireall":
                 if len(parts) != 3:
@@ -430,6 +572,41 @@ def main() -> None:
                 )
                 enc = dataclasses.replace(enc, battle=battle2)
                 print(_format_fire_event(ev))
+                _print_state(enc, drafts)
+
+            elif cmd == "intercept":
+                # intercept <squad_id> <q> <r>
+                if len(parts) != 4:
+                    print("usage: intercept <squad_id> <q> <r>")
+                    continue
+                sq_id = parts[1]
+                if sq_id not in enc.battle.squadrons:
+                    print(f"unknown squadron: {sq_id!r}")
+                    continue
+                if enc.phase != Phase.COMBAT_SMALL:
+                    print(f"Cannot order: phase is {enc.phase.value!r}")
+                    continue
+                patrol = Hex(int(parts[2]), int(parts[3]))
+                side   = enc.battle.squadrons[sq_id].owner_id
+                enc    = enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol))
+                print(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r})")
+                _print_state(enc, drafts)
+
+            elif cmd == "strike":
+                # strike <squad_id> <target_id>
+                if len(parts) != 3:
+                    print("usage: strike <squad_id> <target_id>")
+                    continue
+                sq_id, target_id = parts[1], parts[2]
+                if sq_id not in enc.battle.squadrons:
+                    print(f"unknown squadron: {sq_id!r}")
+                    continue
+                if enc.phase != Phase.COMBAT_SMALL:
+                    print(f"Cannot order: phase is {enc.phase.value!r}")
+                    continue
+                side = enc.battle.squadrons[sq_id].owner_id
+                enc  = enc.stage_squadron_order(side, sq_id, StrikeOrder(target_id=target_id))
+                print(f"Staged: {sq_id} STRIKE → {target_id}")
                 _print_state(enc, drafts)
 
             elif cmd == "quickfire":

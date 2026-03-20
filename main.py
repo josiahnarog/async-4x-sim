@@ -1,14 +1,5 @@
-# This is a sample Python script.
-
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-
-
-# Press the green button in the gutter to run the script.
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
-
-from tactical.repl import main
+import uvicorn
 
 if __name__ == "__main__":
-    main()
+    print("Tactical UI: http://127.0.0.1:8001/tactical/")
+    uvicorn.run("app:app", host="127.0.0.1", port=8001, reload=True)
