@@ -39,6 +39,7 @@ class FireEvent:
     remaining_hits: Optional[int] = None
     missile_rolls: Optional[tuple[int, ...]] = None  # per-missile roll results
     pd_rolls: Optional[tuple[int, ...]] = None       # per-PD-shot roll results
+    ammo_consumed: int = 0                           # rounds expended by this firing
 
 
 def resolve_large_fire(
@@ -101,11 +102,15 @@ def resolve_large_fire(
         hits = 0
         last_roll = 0
         all_rolls: list[int] = []
+        missiles_fired = 0
 
         if to_hit is not None:
-            # MVP: each intact 'R' launcher contributes one missile per firing
+            # Each intact 'R' launcher contributes one missile, capped by available ammo.
             launcher_count = attacker.systems.active_count("R") if attacker.systems is not None else 0
-            shots = launcher_count * spec.rate_of_fire
+            available_ammo = attacker.systems.ammo_count_for("R") if attacker.systems is not None else 0
+            effective_launchers = min(launcher_count, available_ammo)
+            shots = effective_launchers * spec.rate_of_fire
+            missiles_fired = shots
 
             for _ in range(shots):
                 last_roll = int(rng.randint(1, 10))
@@ -150,6 +155,7 @@ def resolve_large_fire(
             remaining_hits=remaining,
             missile_rolls=tuple(all_rolls),
             pd_rolls=pd_rolls_out,
+            ammo_consumed=missiles_fired,
         )
 
         if remaining <= 0 or target.systems is None:

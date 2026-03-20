@@ -12,7 +12,7 @@ from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
 from tactical.squadron_state import SquadronState
-from tactical.turn_orders import BreakOffOrder, InterceptOrder, StrikeOrder
+from tactical.turn_orders import BreakOffOrder, InterceptOrder, LaunchOrder, RecoverOrder, StrikeOrder
 from tactical.weapons import WeaponType
 
 
@@ -20,8 +20,12 @@ def _fmt_squadron(sq: SquadronState) -> str:
     internal = "".join(w.value for w in sq.loadout.internal)
     external = "".join(w.value for w in sq.loadout.external)
     loadout  = internal + (f"[{external}×{sq.loadout.external_shots_remaining}]" if external else "")
+    if sq.docked_at is not None:
+        pos_str = f"docked@{sq.docked_at}"
+    else:
+        pos_str = f"pos=({sq.pos.q:+},{sq.pos.r:+})"
     return (
-        f"{sq.squadron_id:>4} owner={sq.owner_id} pos=({sq.pos.q:+},{sq.pos.r:+})"
+        f"{sq.squadron_id:>4} owner={sq.owner_id} {pos_str}"
         f"  str={sq.strength}/{sq.max_strength}"
         f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
         f"  fuel={sq.endurance}/{sq.max_endurance}"
@@ -76,6 +80,13 @@ def _fmt_fighter_event(ev) -> str:
 
     if isinstance(ev, UnitDestroyedEvent):
         return f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***"
+
+    from tactical.events import LaunchEvent, RecoveryEvent
+    if isinstance(ev, LaunchEvent):
+        return f"  LAUNCH: {ev.squadron_id} launched from {ev.carrier_id} at ({ev.pos.q},{ev.pos.r})"
+
+    if isinstance(ev, RecoveryEvent):
+        return f"  RECOVERY: {ev.squadron_id} recovered aboard {ev.carrier_id}"
 
     if isinstance(ev, FuelWarningEvent):
         return f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed"
@@ -217,6 +228,7 @@ def _help() -> None:
     print("  tl/tr <ship_id>                    turn left/right in draft (requires full charge)")
     print("  spend <ship_id> <n>                spend N MP to charge turning")
     print("  move <ship_id> <q> <r> [facing]   stage move directly to hex (no draft)")
+    print("  launch <carrier_id> <squadron_id>  stage carrier launch (uses one Bl)")
     print("  commit move <side_id>              commit moves for a side")
     print("  commit move                        commit moves for ALL sides")
     print()
@@ -229,6 +241,7 @@ def _help() -> None:
     print("  --- COMBAT_SMALL phase (fighters) ---")
     print("  intercept <squad_id> <q> <r>          patrol hex, intercept enemies in range")
     print("  strike <squad_id> <target_id>         vector toward ship or enemy squadron")
+    print("  recover <squad_id> <carrier_id>       request recovery aboard carrier (must be at same hex)")
     print("  commit squadrons [side_id]            commit and resolve fighter phase")
     print()
     print("  --- Debug (bypasses submission system) ---")
@@ -398,6 +411,20 @@ def main() -> None:
                 print(f"Draft {ship_id}: spent {amount} MP"
                       f"  charge={d['turn_charge']}/{d['turn_cost']}"
                       f"  mp_left={d['mp_remaining']}")
+                _print_state(enc, drafts)
+
+            elif cmd == "launch":
+                # launch <carrier_id> <squadron_id>
+                if len(parts) != 3:
+                    print("usage: launch <carrier_id> <squadron_id>")
+                    continue
+                carrier_id, squadron_id = parts[1], parts[2]
+                if carrier_id not in enc.battle.ships:
+                    print(f"unknown ship: {carrier_id!r}")
+                    continue
+                side = enc.battle.ships[carrier_id].owner_id
+                enc = enc.stage_launch(side, carrier_id, squadron_id)
+                print(f"Staged: {carrier_id} will launch {squadron_id}")
                 _print_state(enc, drafts)
 
             elif cmd == "commit":
@@ -570,6 +597,23 @@ def main() -> None:
                 side = enc.battle.squadrons[sq_id].owner_id
                 enc  = enc.stage_squadron_order(side, sq_id, BreakOffOrder(dest=dest))
                 print(f"Staged: {sq_id} BREAK OFF → ({dest.q},{dest.r})")
+                _print_state(enc, drafts)
+
+            elif cmd == "recover":
+                # recover <squad_id> <carrier_id>
+                if len(parts) != 3:
+                    print("usage: recover <squad_id> <carrier_id>")
+                    continue
+                sq_id, carrier_id = parts[1], parts[2]
+                if sq_id not in enc.battle.squadrons:
+                    print(f"unknown squadron: {sq_id!r}")
+                    continue
+                if enc.phase != Phase.COMBAT_SMALL:
+                    print(f"Cannot order: phase is {enc.phase.value!r}")
+                    continue
+                side = enc.battle.squadrons[sq_id].owner_id
+                enc = enc.stage_squadron_order(side, sq_id, RecoverOrder(carrier_id=carrier_id))
+                print(f"Staged: {sq_id} RECOVER → {carrier_id}")
                 _print_state(enc, drafts)
 
             elif cmd == "strike":

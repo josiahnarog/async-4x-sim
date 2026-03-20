@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from sim.hexgrid import Hex
+
 
 class DestructionCause(str, Enum):
     ENEMY_FIRE    = "enemy fire"
@@ -26,6 +28,21 @@ class FuelWarningEvent:
     lands on a carrier before then.
     """
     squadron_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchEvent:
+    """A docked squadron was launched from a carrier."""
+    carrier_id: str
+    squadron_id: str
+    pos: Hex   # hex where the squadron appears (carrier's position at launch)
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryEvent:
+    """A squadron docked aboard a carrier."""
+    squadron_id: str
+    carrier_id: str
 
 
 @dataclass(frozen=True, slots=True)

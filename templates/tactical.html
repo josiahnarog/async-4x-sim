@@ -31,8 +31,14 @@
 
   <div class="row">
     <div class="col-map">
-      <h2>Map</h2>
-      <canvas id="hexmap" width="560" height="560"></canvas>
+      <h2>Map <span style="font-size:0.8em;font-weight:normal;color:#888">(drag to pan · scroll to zoom)</span></h2>
+      <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+        <button id="btn-zoom-in"  onclick="adjustZoom(1.25)">＋</button>
+        <button id="btn-zoom-out" onclick="adjustZoom(0.8)">－</button>
+        <button onclick="resetView()">⌖ Reset</button>
+        <span id="zoom-label" style="font-size:0.8em;color:#888;margin-left:4px">100%</span>
+      </div>
+      <canvas id="hexmap" width="640" height="640" style="cursor:grab"></canvas>
 
       <h2>Units</h2>
       <pre class="ships-pre">{{ units_text }}</pre>
@@ -91,9 +97,59 @@
     const STRIKE_ORDERS   = {{ strike_orders_json | safe }};
     const INTERCEPT_PATHS = {{ intercept_paths_json | safe }};
     const INTERCEPT_ZONES = {{ intercept_zones_json | safe }};
-    const RADIUS = 8;
-    const SIZE = 28;           // hex circumradius in px
-    const SQ3 = Math.sqrt(3);
+    const RADIUS = 8;         // intercept zone boundary guard
+    const SIZE   = 28;        // hex circumradius in px at zoom 1
+    const SQ3    = Math.sqrt(3);
+
+    // ---- Pan / zoom state ----
+    let panX = 0, panY = 0;
+    let zoom = 1.0;
+    const MIN_ZOOM = 0.25, MAX_ZOOM = 4.0;
+
+    function adjustZoom(factor) {
+      zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor));
+      document.getElementById("zoom-label").textContent = Math.round(zoom * 100) + "%";
+      render();
+    }
+    function resetView() {
+      panX = 0; panY = 0; zoom = 1.0;
+      document.getElementById("zoom-label").textContent = "100%";
+      render();
+    }
+
+    // ---- Mouse pan ----
+    let isPanning = false, lastMX = 0, lastMY = 0;
+    const canvas = document.getElementById("hexmap");
+    canvas.addEventListener("mousedown", e => {
+      isPanning = true; lastMX = e.clientX; lastMY = e.clientY;
+      canvas.style.cursor = "grabbing";
+    });
+    canvas.addEventListener("mousemove", e => {
+      if (!isPanning) return;
+      panX += e.clientX - lastMX; panY += e.clientY - lastMY;
+      lastMX = e.clientX; lastMY = e.clientY;
+      render();
+    });
+    canvas.addEventListener("mouseup",    () => { isPanning = false; canvas.style.cursor = "grab"; });
+    canvas.addEventListener("mouseleave", () => { isPanning = false; canvas.style.cursor = "grab"; });
+
+    // ---- Scroll zoom (zoom toward cursor) ----
+    canvas.addEventListener("wheel", e => {
+      e.preventDefault();
+      const rect   = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      // World coords of cursor before zoom
+      const wx = (mouseX - canvas.width/2  - panX) / zoom;
+      const wy = (mouseY - canvas.height/2 - panY) / zoom;
+      const factor = e.deltaY < 0 ? 1.1 : 1/1.1;
+      zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor));
+      // Adjust pan so cursor stays over same world point
+      panX = mouseX - canvas.width/2  - wx * zoom;
+      panY = mouseY - canvas.height/2 - wy * zoom;
+      document.getElementById("zoom-label").textContent = Math.round(zoom * 100) + "%";
+      render();
+    }, { passive: false });
 
     const OWNER_COLORS = { "A": "#4488ff", "B": "#ff4444" };
     const OWNER_DARK   = { "A": "#1a3a88", "B": "#881a1a" };
@@ -117,10 +173,10 @@
       ctx.closePath();
     }
 
-    function drawGrid(ctx, cx, cy) {
-      for (let q = -RADIUS; q <= RADIUS; q++) {
-        const rMin = Math.max(-RADIUS, -q - RADIUS);
-        const rMax = Math.min(RADIUS,  -q + RADIUS);
+    function drawGrid(ctx, cx, cy, drawR) {
+      for (let q = -drawR; q <= drawR; q++) {
+        const rMin = Math.max(-drawR, -q - drawR);
+        const rMax = Math.min(drawR,  -q + drawR);
         for (let r = rMin; r <= rMax; r++) {
           const { x, y } = hexToPixel(q, r, cx, cy);
           drawHexPath(ctx, x, y);
@@ -366,8 +422,8 @@
 
       for (const key of zoneSet) {
         const [q, r] = key.split(",").map(Number);
-        // Skip hexes outside the map radius so we don't draw phantom outlines
-        if (Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) > RADIUS) continue;
+        // Skip hexes far outside the visible area (avoids phantom outlines off-canvas)
+        if (Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) > 40) continue;
         const { x, y } = hexToPixel(q, r, cx, cy);
         for (let i = 0; i < 6; i++) {
           const nb = EDGE_NEIGHBOR[i];
@@ -414,21 +470,26 @@
     }
 
     function render() {
-      const canvas = document.getElementById("hexmap");
       const ctx = canvas.getContext("2d");
-      const cx = canvas.width  / 2;
-      const cy = canvas.height / 2;
-
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawGrid(ctx, cx, cy);
-      for (const z of INTERCEPT_ZONES) drawInterceptZone(ctx, z, cx, cy);
-      for (const p of INTERCEPT_PATHS) drawSquadronPath(ctx, p, cx, cy);
-      // Draft paths and fire-order arrows render behind ships
-      for (const p of PATHS)  drawDraftPath(ctx, p, cx, cy);
-      for (const fo of FIRE_ORDERS)   drawFireOrder(ctx, fo, cx, cy);
-      for (const so of STRIKE_ORDERS) drawFireOrder(ctx, so, cx, cy);
-      for (const ship of SHIPS) drawShip(ctx, ship, cx, cy);
-      for (const sq of SQUADRONS) drawSquadron(ctx, sq, cx, cy);
+
+      // Apply pan + zoom transform; all draw calls use cx=0, cy=0
+      ctx.save();
+      ctx.translate(canvas.width / 2 + panX, canvas.height / 2 + panY);
+      ctx.scale(zoom, zoom);
+
+      // Dynamic grid radius: show enough hexes to fill the canvas at current zoom
+      const drawR = Math.ceil((canvas.width / 2) / (SIZE * zoom * 1.3)) + 2;
+      drawGrid(ctx, 0, 0, drawR);
+      for (const z of INTERCEPT_ZONES) drawInterceptZone(ctx, z, 0, 0);
+      for (const p of INTERCEPT_PATHS) drawSquadronPath(ctx, p, 0, 0);
+      for (const p of PATHS)           drawDraftPath(ctx, p, 0, 0);
+      for (const fo of FIRE_ORDERS)    drawFireOrder(ctx, fo, 0, 0);
+      for (const so of STRIKE_ORDERS)  drawFireOrder(ctx, so, 0, 0);
+      for (const ship of SHIPS)        drawShip(ctx, ship, 0, 0);
+      for (const sq of SQUADRONS)      drawSquadron(ctx, sq, 0, 0);
+
+      ctx.restore();
     }
 
     render();

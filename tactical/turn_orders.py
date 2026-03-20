@@ -70,5 +70,17 @@ class BreakOffOrder:
     dest: Hex
 
 
+@dataclass(frozen=True, slots=True)
+class LaunchOrder:
+    """Carrier launches a docked squadron. Staged alongside ship movement orders."""
+    squadron_id: str   # SquadronID
+
+
+@dataclass(frozen=True, slots=True)
+class RecoverOrder:
+    """Squadron requests recovery aboard carrier_id at the current hex."""
+    carrier_id: str   # ShipID
+
+
 # Convenience type alias used in Encounter
-SquadronOrder = InterceptOrder | StrikeOrder | BreakOffOrder
+SquadronOrder = InterceptOrder | StrikeOrder | BreakOffOrder | RecoverOrder

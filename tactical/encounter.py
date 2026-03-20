@@ -62,6 +62,9 @@ class Encounter:
     _squadron_orders:    dict[SquadronID, SquadronOrder]
     _squadron_committed: frozenset[str]   # side_ids that have committed squadron orders
 
+    # MOVE_SUBMISSION carrier launch staging
+    _launch_orders: dict[str, list]   # ShipID → list[LaunchOrder]
+
     # ------------------------------------------------------------------ #
     # Factory                                                              #
     # ------------------------------------------------------------------ #
@@ -82,6 +85,7 @@ class Encounter:
             _mp_capacity        = mp_cap,
             _squadron_orders    = {},
             _squadron_committed = frozenset(),
+            _launch_orders      = {},
         )
 
     # ------------------------------------------------------------------ #
@@ -170,6 +174,43 @@ class Encounter:
         )}
         return dataclasses.replace(self, _move_orders=new_orders)
 
+    def stage_launch(
+        self,
+        side_id: str,
+        carrier_id: str,
+        squadron_id: str,
+    ) -> "Encounter":
+        """Stage a launch order: carrier will deploy squadron at start of movement.
+
+        Validates ownership, docking status, and active Bl count.
+        May be called multiple times to stage multiple launches (one per active Bl).
+        """
+        from tactical.turn_orders import LaunchOrder
+        self._require_phase(Phase.MOVE_SUBMISSION)
+        self._require_not_committed(side_id, self._move_committed)
+        if self._ship_owner(carrier_id) != side_id:
+            raise PermissionError(f"Ship {carrier_id!r} not controlled by side {side_id!r}")
+
+        if squadron_id not in self.battle.squadrons:
+            raise KeyError(f"Unknown squadron: {squadron_id!r}")
+        sq = self.battle.squadrons[squadron_id]
+        if sq.docked_at != carrier_id:
+            raise ValueError(
+                f"Squadron {squadron_id!r} is not docked at {carrier_id!r}"
+            )
+
+        carrier = self.battle.ships[carrier_id]
+        bl_count = carrier.systems.launch_bay_count() if carrier.systems else 0
+        existing = self._launch_orders.get(carrier_id, [])
+        if len(existing) >= bl_count:
+            raise ValueError(
+                f"No active launch bays remaining on {carrier_id!r} "
+                f"(has {bl_count}, already staging {len(existing)})"
+            )
+
+        new_launches = {**self._launch_orders, carrier_id: existing + [LaunchOrder(squadron_id=squadron_id)]}
+        return dataclasses.replace(self, _launch_orders=new_launches)
+
     def commit_movement(self, side_id: str, rng: RNG) -> tuple["Encounter", list[FighterCombatEvent]]:
         """Mark side_id as done submitting move orders.
 
@@ -194,10 +235,33 @@ class Encounter:
         Any squadron whose hex is transited by an enemy ship fires a free attack
         run immediately (the ship keeps moving regardless).
         """
-        from tactical.events import DestructionCause, UnitDestroyedEvent
+        from tactical.events import DestructionCause, LaunchEvent, UnitDestroyedEvent
         from tactical.fighter_combat import resolve_attack_run
+        from tactical.turn_orders import LaunchOrder
 
-        ships = self.battle.ships
+        # Process carrier launches before ship movement.
+        launch_events: list = []
+        new_battle = self.battle
+        for carrier_id, launches in self._launch_orders.items():
+            if carrier_id not in new_battle.ships:
+                continue
+            carrier = new_battle.ships[carrier_id]
+            for lo in launches:
+                sq_id = lo.squadron_id
+                if sq_id not in new_battle.squadrons:
+                    continue
+                sq = new_battle.squadrons[sq_id]
+                # Undock from hangar bay system
+                if carrier.systems is not None:
+                    new_sys = carrier.systems.undock_squadron(sq_id)
+                    carrier = dataclasses.replace(carrier, systems=new_sys)
+                    new_battle = new_battle.with_ship(carrier)
+                # Deploy squadron at carrier's current position
+                new_sq = sq.undock(carrier.pos)
+                new_battle = new_battle.with_squadron(new_sq)
+                launch_events.append(LaunchEvent(carrier_id=carrier_id, squadron_id=sq_id, pos=carrier.pos))
+
+        ships = new_battle.ships
 
         # Desired destination for each ship (default: stay in place)
         desired: dict[ShipID, Hex] = {sid: s.pos for sid, s in ships.items()}
@@ -242,7 +306,7 @@ class Encounter:
                 turn_charge  = new_charge,
             )
 
-        new_battle = dataclasses.replace(self.battle, ships=new_ships)
+        new_battle = dataclasses.replace(new_battle, ships=new_ships)
 
         # Transit attack run detection.
         # Squadron positions are fixed during MOVE_SUBMISSION; use pre-movement
@@ -300,8 +364,9 @@ class Encounter:
             phase           = Phase.COMBAT_SUBMISSION,
             _move_orders    = {},
             _move_committed = frozenset(),
+            _launch_orders  = {},
         )
-        return enc, transit_events
+        return enc, launch_events + transit_events
 
     # ------------------------------------------------------------------ #
     # COMBAT_SUBMISSION                                                     #
@@ -381,8 +446,9 @@ class Encounter:
         snapshot   = self.battle
         all_events: list[FireEvent] = []
 
-        # Accumulate (raw_damage, WeaponSpec) per target
+        # Accumulate (raw_damage, WeaponSpec) per target; ammo consumed per attacker
         damage_queue: dict[ShipID, list] = {}
+        ammo_queue: dict[ShipID, int] = {}
 
         for ship_id, order in self._fire_orders.items():
             if order is None:
@@ -407,6 +473,8 @@ class Encounter:
                     damage_queue.setdefault(ev.target_id, []).append(
                         (ev.raw_damage, WEAPONS[ev.weapon])
                     )
+                if ev.ammo_consumed > 0:
+                    ammo_queue[ship_id] = ammo_queue.get(ship_id, 0) + ev.ammo_consumed
 
         # Apply all accumulated damage to each target, starting from snapshot state
         new_battle = snapshot
@@ -418,6 +486,15 @@ class Encounter:
             for dmg, spec in damages:
                 new_systems = new_systems.apply_weapon_damage(dmg, weapon=spec)
             new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
+
+        # Apply ammo consumption to attackers.
+        for attacker_id, consumed in ammo_queue.items():
+            if attacker_id not in new_battle.ships:
+                continue
+            ship = new_battle.ships[attacker_id]
+            if ship.systems is not None:
+                new_systems = ship.systems.consume_ammo_for("R", consumed)
+                new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
 
         # Detect ships destroyed by fire this phase.
         from tactical.events import DestructionCause, UnitDestroyedEvent
@@ -507,15 +584,51 @@ class Encounter:
         rng: RNG,
     ) -> tuple["Encounter", list[FighterCombatEvent]]:
         """All sides committed.  Resolve fighter movement and combat."""
-        new_battle, events = resolve_combat_small(
-            self.battle,
-            self._squadron_orders,
+        from tactical.events import RecoveryEvent
+        from tactical.turn_orders import RecoverOrder
+
+        all_events: list = []
+        new_battle = self.battle
+
+        # Process recovery orders before fighter combat.
+        non_recovery_orders: dict = {}
+        for sq_id, order in self._squadron_orders.items():
+            if not isinstance(order, RecoverOrder):
+                non_recovery_orders[sq_id] = order
+                continue
+            carrier_id = order.carrier_id
+            if sq_id not in new_battle.squadrons or carrier_id not in new_battle.ships:
+                continue
+            sq = new_battle.squadrons[sq_id]
+            carrier = new_battle.ships[carrier_id]
+            if sq.pos != carrier.pos:
+                continue  # not at carrier hex — silently ignore
+            if carrier.systems is None:
+                continue
+            has_empty_bh = any(
+                s.is_active() and s.token == "Bh" and s.occupant is None
+                for s in carrier.systems
+            )
+            if not has_empty_bh:
+                continue  # no room — silently ignore
+            new_sys = carrier.systems.dock_squadron(sq_id)
+            carrier = dataclasses.replace(carrier, systems=new_sys)
+            new_battle = new_battle.with_ship(carrier)
+            new_sq = sq.dock(carrier_id)
+            new_battle = new_battle.with_squadron(new_sq)
+            all_events.append(RecoveryEvent(squadron_id=sq_id, carrier_id=carrier_id))
+
+        new_battle, fighter_events = resolve_combat_small(
+            new_battle,
+            non_recovery_orders,
             rng=rng,
         )
+        all_events.extend(fighter_events)
+
         # Check for battle end before advancing to next turn.
         end_ev = self._battle_end_event(new_battle)
         if end_ev is not None:
-            events.append(end_ev)
+            all_events.append(end_ev)
             enc = dataclasses.replace(
                 self,
                 battle              = new_battle,
@@ -523,7 +636,7 @@ class Encounter:
                 _squadron_orders    = {},
                 _squadron_committed = frozenset(),
             )
-            return enc, events
+            return enc, all_events
 
         enc = dataclasses.replace(
             self,
@@ -532,7 +645,7 @@ class Encounter:
             _squadron_committed = frozenset(),
         )
         enc, turn_events = enc.next_turn()
-        return enc, events + turn_events
+        return enc, all_events + turn_events
 
     def next_turn(self) -> tuple["Encounter", list]:
         """Advance to a fresh MOVE_SUBMISSION phase for the next turn.
@@ -562,6 +675,9 @@ class Encounter:
         new_squads = {}
         turn_events: list = []
         for sqid, sq in self.battle.squadrons.items():
+            if not sq.is_deployed:
+                new_squads[sqid] = sq  # docked squadrons are preserved as-is
+                continue
             if sq.endurance == 1:
                 # Will reach 0 after this decrement — warn before destroying.
                 turn_events.append(FuelWarningEvent(sqid))
@@ -591,6 +707,7 @@ class Encounter:
             _mp_capacity        = new_mp_capacity,
             _squadron_orders    = carried_squadron_orders,
             _squadron_committed = frozenset(),
+            _launch_orders      = {},
         )
         return enc, turn_events
 

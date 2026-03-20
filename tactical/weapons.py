@@ -86,6 +86,9 @@ class WeaponSpec:
     # Firing arc restriction (in addition to the universal blind-spot rule):
     firing_arc: WeaponArc = WeaponArc.ALL
 
+    # Ammunition: if True, weapon consumes charges from its system (or a magazine).
+    requires_ammo: bool = False
+
     # Fighter combat rules:
     # anti_fighter_modifier: added to the to-hit target number when attacking a squadron
     # can_target_fighters:   if False, weapon is skipped entirely in dogfights
@@ -141,6 +144,7 @@ STANDARD_MISSILE = WeaponSpec(
     to_hit=RangeTable.from_list([6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 4, 4, 3, 3, "-"]),
     # 1 damage at all ranges
     damage=RangeTable.from_list([1]),
+    requires_ammo=True,
     # Missiles cannot be used in fighter dogfights (only attack runs vs ships)
     can_target_fighters=False,
 )

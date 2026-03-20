@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Iterator, Tuple
 
 from tactical.weapons import WeaponSpec
+
+
+# Default charges loaded into each system when parsed from compact notation.
+_DEFAULT_CHARGES: dict[str, int] = {
+    "R":  10,   # Standard Missile launcher: 10 internal rounds
+    "Mg": 50,   # Magazine: 50 shared rounds
+}
+
+# Maps weapon base code → magazine token that feeds it.
+_WEAPON_MAGAZINE: dict[str, str] = {"R": "Mg"}
 
 
 class SystemStatus(str, Enum):
@@ -31,6 +42,8 @@ class System:
     mods: str = ""
     status: SystemStatus = SystemStatus.INTACT
     group: int | None = None
+    charges: int = 0        # shots remaining (non-zero only for ammo-bearing systems)
+    occupant: str | None = None  # squadron ID docked here (Bh only)
 
     def is_active(self) -> bool:
         return self.status == SystemStatus.INTACT
@@ -43,6 +56,8 @@ class System:
             mods=self.mods,
             status=SystemStatus.DESTROYED,
             group=self.group,
+            charges=self.charges,
+            occupant=self.occupant,
         )
 
     @property
@@ -98,7 +113,9 @@ class ShipSystems:
                 j += 1
 
             mods = s[start + 1 : j]
-            systems.append(System(base=base, mods=mods, group=group))
+            token = base + mods
+            charges = _DEFAULT_CHARGES.get(token, _DEFAULT_CHARGES.get(base, 0))
+            systems.append(System(base=base, mods=mods, group=group, charges=charges))
             return j
 
         while i < len(s):
@@ -161,7 +178,14 @@ class ShipSystems:
                     out.append("(")
                     current_group = b.group
 
-            out.append(f"!{b.token}" if b.status == SystemStatus.DESTROYED else b.token)
+            token_str = f"!{b.token}" if b.status == SystemStatus.DESTROYED else b.token
+            # Annotate ammo-bearing systems with remaining charges.
+            if b.token in _DEFAULT_CHARGES or b.base in _DEFAULT_CHARGES:
+                token_str += f"[{b.charges}]"
+            # Annotate hangar bays with occupant (- when empty).
+            elif b.token == "Bh":
+                token_str += f"[{b.occupant if b.occupant is not None else '-'}]"
+            out.append(token_str)
 
         close_group()
         return "".join(out)
@@ -174,6 +198,8 @@ class ShipSystems:
                     "mods": b.mods,
                     "status": b.status.value,
                     "group": b.group,
+                    "charges": b.charges,
+                    "occupant": b.occupant,
                 }
                 for b in self.systems
             ]
@@ -200,6 +226,8 @@ class ShipSystems:
                     mods=mods,
                     status=status,
                     group=b.get("group"),
+                    charges=int(b.get("charges", 0)),
+                    occupant=b.get("occupant"),
                 )
             )
 
@@ -358,6 +386,80 @@ class ShipSystems:
         Each active Bl can launch or recover one squadron per turn.
         """
         return sum(1 for s in self.systems if s.is_active() and s.token == "Bl")
+
+    def ammo_count_for(self, weapon_base: str) -> int:
+        """Total available ammunition for a weapon: magazine charges + internal launcher charges.
+
+        Only active systems are counted; a destroyed launcher or magazine contributes 0.
+        """
+        wb = weapon_base.upper()
+        mag_token = _WEAPON_MAGAZINE.get(wb)
+        total = 0
+        for s in self.systems:
+            if not s.is_active():
+                continue
+            if mag_token and s.token == mag_token:
+                total += s.charges
+            elif s.base == wb:
+                total += s.charges
+        return total
+
+    def consume_ammo_for(self, weapon_base: str, count: int = 1) -> "ShipSystems":
+        """Return new ShipSystems with `count` rounds consumed for `weapon_base`.
+
+        Drains leftmost active magazine first, then leftmost active launcher.
+        """
+        if count <= 0:
+            return self
+        wb = weapon_base.upper()
+        mag_token = _WEAPON_MAGAZINE.get(wb)
+        systems = list(self.systems)
+        remaining = count
+
+        # Drain from magazines first (leftmost active Mg).
+        if mag_token:
+            for i, s in enumerate(systems):
+                if remaining <= 0:
+                    break
+                if s.is_active() and s.token == mag_token and s.charges > 0:
+                    drain = min(s.charges, remaining)
+                    systems[i] = dataclasses.replace(s, charges=s.charges - drain)
+                    remaining -= drain
+
+        # Then drain from internal launcher charges — 1 shot per launcher,
+        # so two launchers each lose 1 round rather than one losing 2.
+        for i, s in enumerate(systems):
+            if remaining <= 0:
+                break
+            if s.is_active() and s.base == wb and s.charges > 0:
+                systems[i] = dataclasses.replace(s, charges=s.charges - 1)
+                remaining -= 1
+
+        return ShipSystems(tuple(systems))
+
+    def dock_squadron(self, squadron_id: str) -> "ShipSystems":
+        """Mark the first empty active Bh as occupied by squadron_id.
+
+        Raises ValueError if no empty active hangar bay is available.
+        """
+        systems = list(self.systems)
+        for i, s in enumerate(systems):
+            if s.is_active() and s.token == "Bh" and s.occupant is None:
+                systems[i] = dataclasses.replace(s, occupant=squadron_id)
+                return ShipSystems(tuple(systems))
+        raise ValueError(f"No empty active hangar bay available for {squadron_id!r}")
+
+    def undock_squadron(self, squadron_id: str) -> "ShipSystems":
+        """Clear the Bh that holds squadron_id.
+
+        Raises ValueError if the squadron is not found in any hangar bay.
+        """
+        systems = list(self.systems)
+        for i, s in enumerate(systems):
+            if s.token == "Bh" and s.occupant == squadron_id:
+                systems[i] = dataclasses.replace(s, occupant=None)
+                return ShipSystems(tuple(systems))
+        raise ValueError(f"Squadron {squadron_id!r} not found in any hangar bay")
 
     def point_defense(self) -> Tuple[int, int]:
         """

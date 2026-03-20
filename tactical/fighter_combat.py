@@ -193,9 +193,11 @@ def resolve_all_dogfights(
     """
     from collections import defaultdict
 
-    # Group squadrons by hex
+    # Group squadrons by hex (docked squadrons are excluded)
     hex_squads: dict[Hex, list[SquadronState]] = defaultdict(list)
     for sq in snapshot.squadrons.values():
+        if not sq.is_deployed:
+            continue
         hex_squads[sq.pos].append(sq)
 
     events: list[DogfightEvent] = []
@@ -414,6 +416,7 @@ def resolve_combat_small(
     # calculation (radius = remaining_mp_after_reaching_patrol + 1).
     original_positions: dict[SquadronID, Hex] = {
         sq_id: sq.pos for sq_id, sq in battle.squadrons.items()
+        if sq.is_deployed
     }
 
     # Track which squadrons are striking a ship (for attack-run step)
@@ -426,6 +429,8 @@ def resolve_combat_small(
         if sq_id not in battle.squadrons:
             continue
         sq = battle.squadrons[sq_id]
+        if not sq.is_deployed:
+            continue  # docked squadrons cannot receive movement orders
 
         if isinstance(order, BreakOffOrder):
             break_off_orders[sq_id] = order
@@ -523,6 +528,8 @@ def resolve_combat_small(
         if not isinstance(order, InterceptOrder):
             continue
         sq = battle.squadrons[sq_id]
+        if not sq.is_deployed:
+            continue  # docked squadrons cannot intercept
         orig_pos = original_positions.get(sq_id, sq.pos)
         dist_to_patrol   = hex_distance(orig_pos, order.patrol_hex)
         remaining_mp     = max(0, sq.effective_mp - dist_to_patrol)
@@ -532,6 +539,7 @@ def resolve_combat_small(
             (hex_distance(sq.pos, esq.pos), eid)
             for eid, esq in battle.squadrons.items()
             if esq.owner_id != sq.owner_id
+            and esq.is_deployed
             and hex_distance(sq.pos, esq.pos) <= intercept_radius
         ]
         if enemies_in_range:

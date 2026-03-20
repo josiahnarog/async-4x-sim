@@ -11,7 +11,7 @@ import random
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.facing import Facing
-from tactical.hull_types import FG
+from tactical.hull_types import CV, FG
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
 from tactical.squadron_state import FighterLoadout, SquadronState
@@ -70,8 +70,20 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
         endurance=20, max_endurance=20,
     )
 
+    cv_systems_str = "SSSAAAF(I)(I)BhBhBlBl"
+    a2 = ShipState(
+        ship_id="A2", owner_id="A", pos=Hex(-10, 0), facing=Facing.NE,
+        mp=4, turn_cost=CV.turn_cost, turn_charge=0,
+        systems=ShipSystems.parse(cv_systems_str), hull_type=CV,
+    )
+    b2 = ShipState(
+        ship_id="B2", owner_id="B", pos=Hex(10, 0), facing=Facing.SW,
+        mp=4, turn_cost=CV.turn_cost, turn_charge=0,
+        systems=ShipSystems.parse(cv_systems_str), hull_type=CV,
+    )
+
     battle = BattleState(
-        ships={"A1": a, "B1": b},
+        ships={"A1": a, "A2": a2, "B1": b, "B2": b2},
         squadrons={"AF1": af1, "AF2": af2, "BF1": bf1, "BF2": bf2},
     )
     return battle, rng

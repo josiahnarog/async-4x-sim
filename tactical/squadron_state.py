@@ -91,6 +91,8 @@ class SquadronState:
     endurance:     int  # turns of operation remaining
     max_endurance: int
 
+    docked_at: str | None = None  # carrier ship_id when docked, None when deployed
+
     # ------------------------------------------------------------------
     # Derived stats (convenience wrappers onto loadout)
     # ------------------------------------------------------------------
@@ -106,6 +108,11 @@ class SquadronState:
     # ------------------------------------------------------------------
     # State queries
     # ------------------------------------------------------------------
+
+    @property
+    def is_deployed(self) -> bool:
+        """False when the squadron is docked aboard a carrier."""
+        return self.docked_at is None
 
     def is_destroyed(self) -> bool:
         return self.strength <= 0
@@ -129,3 +136,11 @@ class SquadronState:
     def move_to(self, dest: Hex) -> SquadronState:
         """Return squadron at new position (facing-less move)."""
         return dataclasses.replace(self, pos=dest)
+
+    def dock(self, carrier_id: str) -> SquadronState:
+        """Return squadron in docked state aboard carrier_id."""
+        return dataclasses.replace(self, docked_at=carrier_id)
+
+    def undock(self, pos: Hex) -> SquadronState:
+        """Return squadron deployed at pos."""
+        return dataclasses.replace(self, docked_at=None, pos=pos)
