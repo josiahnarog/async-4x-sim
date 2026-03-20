@@ -143,15 +143,31 @@ class Encounter:
             raise PermissionError(f"Ship {ship_id!r} not controlled by side {side_id!r}")
 
         ship = self.battle.ships[ship_id]
-        dist = path_cost if path_cost is not None else hex_distance(ship.pos, dest)
         cap  = self._mp_capacity.get(ship_id, ship.mp)
-        if dist > cap:
+
+        if path_cost is not None:
+            # Draft-based move: trust the caller's cost (already turn-enforced
+            # incrementally by the draft UI).
+            total_cost = path_cost
+        else:
+            # Direct hex move: compute minimum MP needed from scratch.
+            dist         = hex_distance(ship.pos, dest)
+            facing_delta = (int(dest_facing) - int(ship.facing)) % 6
+            turns_needed = min(facing_delta, 6 - facing_delta)
+            # Minimum total MP = enough to move AND to earn all needed turns.
+            # Formula: max(dist, turns_needed * turn_cost - current_charge)
+            # Derivation: total_mp + charge ≥ turns_needed * turn_cost
+            total_cost = max(dist, turns_needed * ship.turn_cost - ship.turn_charge)
+
+        if total_cost > cap:
             raise ValueError(
-                f"Ship {ship_id!r} cannot reach {dest}: "
-                f"movement cost {dist} exceeds MP capacity {cap}"
+                f"Ship {ship_id!r} cannot reach {dest} facing {int(dest_facing)}: "
+                f"movement cost {total_cost} exceeds MP capacity {cap}"
             )
 
-        new_orders = {**self._move_orders, ship_id: ShipMoveOrder(dest=dest, dest_facing=dest_facing, path=path)}
+        new_orders = {**self._move_orders, ship_id: ShipMoveOrder(
+            dest=dest, dest_facing=dest_facing, path=path, total_mp_cost=total_cost,
+        )}
         return dataclasses.replace(self, _move_orders=new_orders)
 
     def commit_movement(self, side_id: str, rng: RNG) -> tuple["Encounter", list[FighterCombatEvent]]:
@@ -178,6 +194,7 @@ class Encounter:
         Any squadron whose hex is transited by an enemy ship fires a free attack
         run immediately (the ship keeps moving regardless).
         """
+        from tactical.events import DestructionCause, UnitDestroyedEvent
         from tactical.fighter_combat import resolve_attack_run
 
         ships = self.battle.ships
@@ -211,12 +228,18 @@ class Encounter:
             if ship_id in cancelled:
                 continue
             ship = new_ships[ship_id]
-            dist = hex_distance(ship.pos, order.dest)
+            cost = order.total_mp_cost or hex_distance(ship.pos, order.dest)
+            # Update turn_charge: (old_charge + mp_spent) mod turn_cost
+            new_charge = (
+                (ship.turn_charge + cost) % ship.turn_cost
+                if ship.turn_cost > 0 else 0
+            )
             new_ships[ship_id] = dataclasses.replace(
                 ship,
-                pos    = order.dest,
-                facing = order.dest_facing,
-                mp     = max(0, ship.mp - dist),
+                pos          = order.dest,
+                facing       = order.dest_facing,
+                mp           = max(0, ship.mp - cost),
+                turn_charge  = new_charge,
             )
 
         new_battle = dataclasses.replace(self.battle, ships=new_ships)
@@ -254,8 +277,22 @@ class Encounter:
                             attacker_id=sq_id,
                             target_ship_id=ship_id,
                             rng=rng,
+                            simultaneous=True,
                         )
                         transit_events.append(ev)
+
+                        # Attacker destroyed by PD during transit
+                        if sq_id not in new_battle.squadrons:
+                            transit_events.append(
+                                UnitDestroyedEvent(sq_id, DestructionCause.POINT_DEFENSE)
+                            )
+                        # Ship destroyed by transit attack run
+                        if ship_id in new_battle.ships:
+                            s = new_battle.ships[ship_id]
+                            if s.systems is not None and s.systems.is_destroyed():
+                                transit_events.append(
+                                    UnitDestroyedEvent(ship_id, DestructionCause.ENEMY_FIRE)
+                                )
 
         enc = dataclasses.replace(
             self,
@@ -382,6 +419,15 @@ class Encounter:
                 new_systems = new_systems.apply_weapon_damage(dmg, weapon=spec)
             new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
 
+        # Detect ships destroyed by fire this phase.
+        from tactical.events import DestructionCause, UnitDestroyedEvent
+        for target_id in damage_queue:
+            if target_id not in new_battle.ships:
+                continue
+            ship = new_battle.ships[target_id]
+            if ship.systems is not None and ship.systems.is_destroyed():
+                all_events.append(UnitDestroyedEvent(target_id, DestructionCause.ENEMY_FIRE))
+
         enc = dataclasses.replace(
             self,
             battle          = new_battle,
@@ -391,7 +437,8 @@ class Encounter:
         )
         # If no squadrons are deployed, skip COMBAT_SMALL entirely.
         if not enc.battle.squadrons:
-            return enc.next_turn(), all_events
+            enc, turn_events = enc.next_turn()
+            return enc, all_events + turn_events
         return enc, all_events
 
     # ------------------------------------------------------------------ #
@@ -458,15 +505,25 @@ class Encounter:
             _squadron_orders    = {},
             _squadron_committed = frozenset(),
         )
-        return enc.next_turn(), events
+        enc, turn_events = enc.next_turn()
+        return enc, events + turn_events
 
-    def next_turn(self) -> "Encounter":
+    def next_turn(self) -> tuple["Encounter", list]:
         """Advance to a fresh MOVE_SUBMISSION phase for the next turn.
 
         Recomputes each ship's MP capacity from its current systems state so
         that engine damage is reflected in movement allowance going forward.
         Turn charge is preserved (it persists across turns by design).
+
+        Returns (new_encounter, events) where events may contain:
+          - FuelWarningEvent  — squadron has 1 turn of fuel left (fires now,
+                                squadron still active next turn)
+          - UnitDestroyedEvent(cause=FUEL_EXHAUSTED) — squadron ran out of
+                                fuel and is destroyed
         """
+        from tactical.events import DestructionCause, FuelWarningEvent, UnitDestroyedEvent
+        from tactical.turn_orders import InterceptOrder
+
         new_ships: dict[ShipID, object] = {}
         new_mp_capacity: dict[ShipID, int] = {}
 
@@ -475,22 +532,29 @@ class Encounter:
             new_ships[ship_id] = dataclasses.replace(ship, mp=cap)
             new_mp_capacity[ship_id] = cap
 
-        # Decrement endurance for all deployed squadrons
-        new_squads = {
-            sqid: sq.decrement_endurance()
-            for sqid, sq in self.battle.squadrons.items()
-        }
+        # Decrement endurance; emit warnings and destruction events.
+        new_squads = {}
+        turn_events: list = []
+        for sqid, sq in self.battle.squadrons.items():
+            if sq.endurance == 1:
+                # Will reach 0 after this decrement — warn before destroying.
+                turn_events.append(FuelWarningEvent(sqid))
+            updated = sq.decrement_endurance()
+            if updated.endurance > 0:
+                new_squads[sqid] = updated
+            else:
+                # Fuel exhausted — squadron destroyed.
+                turn_events.append(UnitDestroyedEvent(sqid, DestructionCause.FUEL_EXHAUSTED))
 
         # Preserve InterceptOrders as standing patrol orders across turns.
         # StrikeOrders are one-time and are cleared.
-        from tactical.turn_orders import InterceptOrder
         carried_squadron_orders = {
             sq_id: order
             for sq_id, order in self._squadron_orders.items()
             if isinstance(order, InterceptOrder) and sq_id in new_squads
         }
 
-        return dataclasses.replace(
+        enc = dataclasses.replace(
             self,
             battle              = dataclasses.replace(self.battle, ships=new_ships, squadrons=new_squads),
             phase               = Phase.MOVE_SUBMISSION,
@@ -502,6 +566,7 @@ class Encounter:
             _squadron_orders    = carried_squadron_orders,
             _squadron_committed = frozenset(),
         )
+        return enc, turn_events
 
     @staticmethod
     def _mp_capacity_for(ship) -> int:

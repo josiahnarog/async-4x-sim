@@ -6,13 +6,13 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
-from tactical.fighter_combat import AttackRunEvent, DogfightEvent
-from tactical.hull_types import FG
+from tactical.events import FuelWarningEvent, UnitDestroyedEvent
+from tactical.fighter_combat import AttackRunEvent, BreakOffEvent, DogfightEvent
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
-from tactical.squadron_state import FighterLoadout, SquadronState
-from tactical.turn_orders import InterceptOrder, StrikeOrder
+from tactical.squadron_state import SquadronState
+from tactical.turn_orders import BreakOffOrder, InterceptOrder, StrikeOrder
 from tactical.weapons import WeaponType
 
 
@@ -24,7 +24,8 @@ def _fmt_squadron(sq: SquadronState) -> str:
         f"{sq.squadron_id:>4} owner={sq.owner_id} pos=({sq.pos.q:+},{sq.pos.r:+})"
         f"  str={sq.strength}/{sq.max_strength}"
         f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
-        f"  load={loadout}  end={sq.endurance}"
+        f"  fuel={sq.endurance}/{sq.max_endurance}"
+        f"  load={loadout}"
     )
 
 
@@ -63,6 +64,22 @@ def _fmt_fighter_event(ev) -> str:
         lines.append(f"    total ship damage: {ev.total_ship_damage}")
         return "\n".join(lines)
 
+    if isinstance(ev, BreakOffEvent):
+        parting_summary = ", ".join(
+            f"{p.attacker_id}→{ev.squadron_id} cas={p.total_casualties}"
+            for p in ev.parting_shots
+        ) or "none"
+        return (
+            f"  BREAK OFF {ev.squadron_id} → ({ev.final_pos.q},{ev.final_pos.r})"
+            f"  parting=[{parting_summary}]  total_cas={ev.casualties_taken}"
+        )
+
+    if isinstance(ev, UnitDestroyedEvent):
+        return f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***"
+
+    if isinstance(ev, FuelWarningEvent):
+        return f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed"
+
     return f"  FIGHTER EVENT: {ev}"
 
 
@@ -75,6 +92,8 @@ def _fmt_ship(s: ShipState) -> str:
 
 
 def _format_fire_event(ev) -> str:
+    if isinstance(ev, UnitDestroyedEvent):
+        return f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***"
     if getattr(ev, "missile_rolls", None) is not None:
         to_hit = ev.to_hit
         roll_detail = ", ".join(
@@ -215,80 +234,8 @@ def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    rng = random.Random(1)
-
-    _fg_systems = "SSSSSAAAAA(I)FFRRD(I)(I)(I)"
-    a = ShipState(
-        ship_id="A1",
-        owner_id="A",
-        pos=Hex(0, 0),
-        facing=Facing.NE,
-        mp=5,
-        turn_cost=2,
-        turn_charge=0,
-        systems=ShipSystems.parse(_fg_systems),
-        hull_type=FG,
-    )
-    b = ShipState(
-        ship_id="B1",
-        owner_id="B",
-        pos=Hex(6, 0),
-        facing=Facing.S,
-        mp=5,
-        turn_cost=2,
-        turn_charge=0,
-        systems=ShipSystems.parse(_fg_systems),
-        hull_type=FG,
-    )
-
-    # A's fighter squadrons — placed just off A1's position
-    af1 = SquadronState(          # interceptors: G×3, high MVR
-        squadron_id="AF1", owner_id="A", pos=Hex(1, 0),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(
-            base_mvr=4, base_mp=10,
-            internal=(WeaponType.GUN,),
-        ),
-        endurance=20, max_endurance=20,
-    )
-    af2 = SquadronState(          # strike fighters: L + R×2
-        squadron_id="AF2", owner_id="A", pos=Hex(0, 1),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(
-            base_mvr=3, base_mp=8,
-            internal=(WeaponType.LASER,),
-            external=(WeaponType.STANDARD_MISSILE,),
-            external_shots_remaining=2,
-        ),
-        endurance=20, max_endurance=20,
-    )
-
-    # B's fighter squadrons — placed just off B1's position
-    bf1 = SquadronState(          # interceptors: G×3, high MVR
-        squadron_id="BF1", owner_id="B", pos=Hex(5, 0),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(
-            base_mvr=4, base_mp=10,
-            internal=(WeaponType.GUN,),
-        ),
-        endurance=20, max_endurance=20,
-    )
-    bf2 = SquadronState(          # strike fighters: L + R×2
-        squadron_id="BF2", owner_id="B", pos=Hex(6, 1),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(
-            base_mvr=3, base_mp=8,
-            internal=(WeaponType.LASER,),
-            external=(WeaponType.STANDARD_MISSILE,),
-            external_shots_remaining=2,
-        ),
-        endurance=20, max_endurance=20,
-    )
-
-    battle = BattleState(
-        ships={"A1": a, "B1": b},
-        squadrons={"AF1": af1, "AF2": af2, "BF1": bf1, "BF2": bf2},
-    )
+    from tactical.scenarios import default_scenario
+    battle, rng = default_scenario()
     enc = Encounter.start(battle, rng=rng)
 
     # Per-ship draft paths for movement construction
@@ -590,6 +537,24 @@ def main() -> None:
                 side   = enc.battle.squadrons[sq_id].owner_id
                 enc    = enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol))
                 print(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r})")
+                _print_state(enc, drafts)
+
+            elif cmd == "breakoff":
+                # breakoff <squad_id> <q> <r>
+                if len(parts) != 4:
+                    print("usage: breakoff <squad_id> <q> <r>")
+                    continue
+                sq_id = parts[1]
+                if sq_id not in enc.battle.squadrons:
+                    print(f"unknown squadron: {sq_id!r}")
+                    continue
+                if enc.phase != Phase.COMBAT_SMALL:
+                    print(f"Cannot order: phase is {enc.phase.value!r}")
+                    continue
+                dest = Hex(int(parts[2]), int(parts[3]))
+                side = enc.battle.squadrons[sq_id].owner_id
+                enc  = enc.stage_squadron_order(side, sq_id, BreakOffOrder(dest=dest))
+                print(f"Staged: {sq_id} BREAK OFF → ({dest.q},{dest.r})")
                 _print_state(enc, drafts)
 
             elif cmd == "strike":

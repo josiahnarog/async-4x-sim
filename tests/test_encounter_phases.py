@@ -161,8 +161,9 @@ class TestCollisionResolution:
     def test_no_collision_when_different_destinations(self):
         battle = _two_ship_battle(a_pos=Hex(0, 0), b_pos=Hex(10, 0), mp=6)
         enc = Encounter.start(battle, rng=random.Random(1))
+        # Keep starting facings (a1=N, b1=S) to avoid turn cost
         enc = enc.stage_move("A", "a1", Hex(3, 0), Facing.N)
-        enc = enc.stage_move("B", "b1", Hex(7, 0), Facing.N)
+        enc = enc.stage_move("B", "b1", Hex(7, 0), Facing.S)
         enc, _ = enc.commit_movement("A", random.Random(0))
         enc, _ = enc.commit_movement("B", random.Random(0))
         assert enc.battle.ships["a1"].pos == Hex(3, 0)
@@ -287,6 +288,8 @@ class TestSimultaneousFire:
         enc, events = enc.commit_fire("B", rng)
 
         # Both ships fired: there should be 2 fire events (one per attacker)
-        assert len(events) == 2
-        attacker_ids = {ev.attacker_id for ev in events}
+        from tactical.combat import FireEvent
+        fire_events = [ev for ev in events if isinstance(ev, FireEvent)]
+        assert len(fire_events) == 2
+        attacker_ids = {ev.attacker_id for ev in fire_events}
         assert attacker_ids == {"a1", "b1"}

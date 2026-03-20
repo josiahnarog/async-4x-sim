@@ -1,16 +1,13 @@
 """Fighter combat resolution for the COMBAT_SMALL phase.
 
 Resolution sequence within COMBAT_SMALL:
-  1. Squadrons move according to their orders (INTERCEPT → patrol hex;
-     STRIKE → toward target).
-  2. Dogfights resolve simultaneously: all fire against the pre-combat snapshot;
-     casualties accumulated per target and applied in one pass.
-  3. Attack runs resolve simultaneously (against post-dogfight state):
-     PD fires at incoming fighters first; surviving fighters fire weapons.
-
-NOTE: intercept interception of strikers (interceptor bubble catching a
-striker en route) is not yet implemented.  INTERCEPT orders currently
-only reposition the squadron to its patrol hex.
+  1. Squadrons move according to their orders:
+       INTERCEPT  → patrol hex (partial movement if unreachable)
+       STRIKE     → toward target (partial movement if unreachable)
+       BREAK_OFF  → parting shots fired by each co-hex enemy, then move to dest
+  1b. Intercept engagement: interceptors check enemies within radius and close.
+  2. Dogfights resolve simultaneously (snapshot fire, one-pass casualties).
+  3. Attack runs resolve simultaneously (post-dogfight state).
 """
 from __future__ import annotations
 
@@ -20,6 +17,7 @@ from typing import Optional, Protocol, Union
 
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState, ShipID
+from tactical.events import DestructionCause, UnitDestroyedEvent
 from tactical.squadron_state import SquadronID, SquadronState
 from tactical.to_hit import roll_hits_target, clamp_int
 from tactical.weapons import WEAPONS, WeaponType
@@ -27,6 +25,35 @@ from tactical.weapons import WEAPONS, WeaponType
 
 class RNG(Protocol):
     def randint(self, a: int, b: int) -> int: ...
+
+
+# ---------------------------------------------------------------------------
+# Movement utility
+# ---------------------------------------------------------------------------
+
+# Axial neighbours in the six flat-top directions
+_NEIGHBOURS = [
+    Hex( 0,  1), Hex( 1,  0), Hex( 1, -1),
+    Hex( 0, -1), Hex(-1,  0), Hex(-1,  1),
+]
+
+
+def _step_toward(origin: Hex, dest: Hex, mp: int) -> Hex:
+    """Move up to `mp` steps from origin toward dest along the shortest path.
+
+    Each step moves to whichever neighbour minimises remaining distance to dest.
+    Returns the hex reached after consuming up to `mp` steps (or dest if reachable).
+    """
+    pos = origin
+    for _ in range(mp):
+        if pos == dest:
+            break
+        best = min(
+            _NEIGHBOURS,
+            key=lambda dh: hex_distance(Hex(pos.q + dh.q, pos.r + dh.r), dest),
+        )
+        pos = Hex(pos.q + best.q, pos.r + best.r)
+    return pos
 
 
 def hex_distance(a: Hex, b: Hex) -> int:
@@ -76,7 +103,21 @@ class AttackRunEvent:
     total_ship_damage:    int
 
 
-FighterCombatEvent = Union[DogfightEvent, AttackRunEvent]
+@dataclass(frozen=True, slots=True)
+class BreakOffEvent:
+    """A squadron broke off from a dogfight.
+
+    Parting shots are taken by each enemy squadron that shared the hex.
+    The breaking squadron then moves to its destination (or as far as MP allows).
+    """
+    squadron_id:        SquadronID
+    dest:               "Hex"           # noqa: F821
+    parting_shots:      tuple[DogfightEvent, ...]   # one per attacking enemy squad
+    casualties_taken:   int
+    final_pos:          "Hex"           # noqa: F821
+
+
+FighterCombatEvent = Union[DogfightEvent, AttackRunEvent, BreakOffEvent, UnitDestroyedEvent]
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +234,7 @@ def resolve_all_dogfights(
         new_sq = sq.take_casualties(casualties)
         if new_sq.is_destroyed():
             new_battle = new_battle.without_squadron(sq_id)
+            events.append(UnitDestroyedEvent(sq_id, DestructionCause.DOGFIGHT))
         else:
             new_battle = new_battle.with_squadron(new_sq)
 
@@ -209,6 +251,7 @@ def resolve_attack_run(
     attacker_id: SquadronID,
     target_ship_id: ShipID,
     rng: RNG,
+    simultaneous: bool = False,
 ) -> tuple[BattleState, AttackRunEvent]:
     """Resolve a fighter squadron's attack run on a capital ship.
 
@@ -217,14 +260,19 @@ def resolve_attack_run(
       Each PD hit kills one fighter (reduces attacker strength by 1).
       PD fires regardless of the ship's facing (fighters swoop from all angles).
 
-    Phase 2 — Surviving fighters fire weapons:
-      Internal weapons: each surviving fighter fires each internal weapon
-        once at range 0.  No arc checks — the fighter has maneuvered to
-        firing position.
-      External weapons: if external_shots_remaining > 0, each surviving
-        fighter also fires each external weapon once at range 0.  One
-        external shot is expended after the salvo.
+    Phase 2 — Fighters fire weapons:
+      Internal weapons: each fighter fires each internal weapon once at
+        range 0.  No arc checks — the fighter has maneuvered to firing
+        position.
+      External weapons: if external_shots_remaining > 0, each fighter
+        also fires each external weapon once at range 0.  One external
+        shot is expended after the salvo.
       Weapon damage accumulated and applied to target ship systems.
+
+    If simultaneous=True (transit attack runs), all fighters at full
+    strength fire their weapons regardless of PD casualties — both the
+    fighters and the PD fire at the same time.  PD casualties are still
+    applied to the squadron after the exchange.
     """
     attacker = battle.squadrons[attacker_id]
     target   = battle.ships[target_ship_id]
@@ -251,6 +299,10 @@ def resolve_attack_run(
 
     surviving_strength = max(0, attacker.strength - fighters_killed)
 
+    # In simultaneous mode (transit), all fighters fire before PD casualties
+    # are applied — determine how many fighters fire their weapons.
+    firing_strength = attacker.strength if simultaneous else surviving_strength
+
     # Apply PD casualties to battle state
     if fighters_killed > 0:
         updated = attacker.take_casualties(fighters_killed)
@@ -260,16 +312,16 @@ def resolve_attack_run(
             battle = battle.with_squadron(updated)
 
     # ------------------------------------------------------------------ #
-    # Phase 2: Surviving fighters fire weapons                            #
+    # Phase 2: Fighters fire weapons                                      #
     # ------------------------------------------------------------------ #
     weapon_shots: list[FighterShotEvent] = []
     damage_queue: list[tuple[int, object]] = []   # (damage, WeaponSpec)
     fire_external = (
-        surviving_strength > 0
+        firing_strength > 0
         and attacker.loadout.external_shots_remaining > 0
     )
 
-    for _ in range(surviving_strength):
+    for _ in range(firing_strength):
         for weapon_type in attacker.loadout.internal:
             spec = WEAPONS[weapon_type]
             base_to_hit = spec.to_hit_at(0)
@@ -351,7 +403,7 @@ def resolve_combat_small(
       STRIKE squadrons that reached an enemy ship make an attack run.
       Resolved simultaneously (against post-dogfight state).
     """
-    from tactical.turn_orders import InterceptOrder, StrikeOrder
+    from tactical.turn_orders import BreakOffOrder, InterceptOrder, StrikeOrder
 
     all_events: list[FighterCombatEvent] = []
 
@@ -367,37 +419,94 @@ def resolve_combat_small(
     # Track which squadrons are striking a ship (for attack-run step)
     strike_ship_targets: dict[SquadronID, ShipID] = {}
 
+    # Break-off orders are handled separately after all other movement
+    break_off_orders: dict[SquadronID, BreakOffOrder] = {}
+
     for sq_id, order in squadron_orders.items():
         if sq_id not in battle.squadrons:
             continue
         sq = battle.squadrons[sq_id]
 
-        if isinstance(order, InterceptOrder):
-            dist = hex_distance(sq.pos, order.patrol_hex)
-            if dist <= sq.effective_mp:
-                battle = battle.with_squadron(sq.move_to(order.patrol_hex))
-            # If unreachable, squadron stays put (no partial movement for MVP)
+        if isinstance(order, BreakOffOrder):
+            break_off_orders[sq_id] = order
+
+        elif isinstance(order, InterceptOrder):
+            # Move as far as MP allows toward patrol hex (partial movement)
+            new_pos = _step_toward(sq.pos, order.patrol_hex, sq.effective_mp)
+            battle = battle.with_squadron(sq.move_to(new_pos))
 
         elif isinstance(order, StrikeOrder):
             target_id = order.target_id
 
             if target_id in battle.ships:
-                # Strike a capital ship
+                # Strike a capital ship — partial movement toward it
                 ship_pos = battle.ships[target_id].pos
-                dist = hex_distance(sq.pos, ship_pos)
-                if dist <= sq.effective_mp:
-                    battle = battle.with_squadron(sq.move_to(ship_pos))
+                new_pos  = _step_toward(sq.pos, ship_pos, sq.effective_mp)
+                battle   = battle.with_squadron(sq.move_to(new_pos))
+                if new_pos == ship_pos:
                     strike_ship_targets[sq_id] = target_id
-                # If unreachable, squadron moves as far as possible but doesn't engage
-                # (partial movement deferred to future pass)
 
             elif target_id in battle.squadrons:
-                # Strike an enemy squadron
-                enemy_sq = battle.squadrons[target_id]
-                dist = hex_distance(sq.pos, enemy_sq.pos)
-                if dist <= sq.effective_mp:
-                    battle = battle.with_squadron(sq.move_to(enemy_sq.pos))
-                # Dogfight will be detected positionally in Step 2
+                # Strike an enemy squadron — partial movement toward it
+                enemy_pos = battle.squadrons[target_id].pos
+                new_pos   = _step_toward(sq.pos, enemy_pos, sq.effective_mp)
+                battle    = battle.with_squadron(sq.move_to(new_pos))
+                # Dogfight detected positionally in Step 2
+
+    # ------------------------------------------------------------------ #
+    # Step 1c: Resolve break-off orders                                   #
+    # ------------------------------------------------------------------ #
+    # Each enemy squadron in the same hex fires parting shots at the
+    # breaking squadron before it moves.  The breaker then moves as far
+    # as its MP allows toward its destination.
+    for sq_id, order in break_off_orders.items():
+        if sq_id not in battle.squadrons:
+            continue
+        sq = battle.squadrons[sq_id]
+
+        # Parting shots from every co-hex enemy
+        parting: list[DogfightEvent] = []
+        total_parting_cas = 0
+        co_hex_enemies = [
+            esq for esq in battle.squadrons.values()
+            if esq.owner_id != sq.owner_id and esq.pos == sq.pos
+        ]
+        for enemy in co_hex_enemies:
+            cas, shots = _squadron_fires_at_squadron(enemy, sq, rng=rng)
+            parting.append(DogfightEvent(
+                attacker_id=enemy.squadron_id,
+                target_id=sq_id,
+                mvr_delta=enemy.effective_mvr - sq.effective_mvr,
+                shots=shots,
+                total_casualties=cas,
+            ))
+            total_parting_cas += cas
+
+        # Apply parting casualties
+        if total_parting_cas > 0 and sq_id in battle.squadrons:
+            sq_now = battle.squadrons[sq_id]
+            updated = sq_now.take_casualties(total_parting_cas)
+            if updated.is_destroyed():
+                battle = battle.without_squadron(sq_id)
+                all_events.append(UnitDestroyedEvent(sq_id, DestructionCause.DOGFIGHT))
+            else:
+                battle = battle.with_squadron(updated)
+
+        # Move as far as MP allows toward dest (even if took casualties)
+        if sq_id in battle.squadrons:
+            sq_now  = battle.squadrons[sq_id]
+            new_pos = _step_toward(sq_now.pos, order.dest, sq_now.effective_mp)
+            battle  = battle.with_squadron(sq_now.move_to(new_pos))
+        else:
+            new_pos = sq.pos   # destroyed — no movement
+
+        all_events.append(BreakOffEvent(
+            squadron_id=sq_id,
+            dest=order.dest,
+            parting_shots=tuple(parting),
+            casualties_taken=total_parting_cas,
+            final_pos=new_pos,
+        ))
 
     # ------------------------------------------------------------------ #
     # Step 1b: Intercept engagement                                       #
@@ -467,5 +576,15 @@ def resolve_combat_small(
             rng=rng,
         )
         all_events.append(ar_event)
+
+        # Attacker destroyed by PD
+        if sq_id not in battle.squadrons:
+            all_events.append(UnitDestroyedEvent(sq_id, DestructionCause.POINT_DEFENSE))
+
+        # Target ship destroyed by attack run
+        if ship_id in battle.ships:
+            ship = battle.ships[ship_id]
+            if ship.systems is not None and ship.systems.is_destroyed():
+                all_events.append(UnitDestroyedEvent(ship_id, DestructionCause.ENEMY_FIRE))
 
     return battle, all_events

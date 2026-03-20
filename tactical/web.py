@@ -35,62 +35,10 @@ _drafts: dict = {}
 
 
 def _build_default() -> tuple:
-    from sim.hexgrid import Hex
-    from tactical.battle_state import BattleState
     from tactical.encounter import Encounter
-    from tactical.facing import Facing
-    from tactical.hull_types import FG
-    from tactical.ship_state import ShipState
-    from tactical.ship_systems import ShipSystems
-    from tactical.squadron_state import FighterLoadout, SquadronState
-    from tactical.weapons import WeaponType
+    from tactical.scenarios import default_scenario
 
-    rng = random.Random(1)
-    fg = "SSSSSAAAAA(I)FFRRD(I)(I)(I)"
-    a = ShipState(ship_id="A1", owner_id="A", pos=Hex(0, 0), facing=Facing.NE,
-                  mp=5, turn_cost=2, turn_charge=0,
-                  systems=ShipSystems.parse(fg), hull_type=FG)
-    b = ShipState(ship_id="B1", owner_id="B", pos=Hex(6, 0), facing=Facing.S,
-                  mp=5, turn_cost=2, turn_charge=0,
-                  systems=ShipSystems.parse(fg), hull_type=FG)
-
-    af1 = SquadronState(
-        squadron_id="AF1", owner_id="A", pos=Hex(1, 0),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=4, base_mp=10,
-                               internal=(WeaponType.GUN,)),
-        endurance=20, max_endurance=20,
-    )
-    af2 = SquadronState(
-        squadron_id="AF2", owner_id="A", pos=Hex(0, 1),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=3, base_mp=8,
-                               internal=(WeaponType.LASER,),
-                               external=(WeaponType.STANDARD_MISSILE,),
-                               external_shots_remaining=2),
-        endurance=20, max_endurance=20,
-    )
-    bf1 = SquadronState(
-        squadron_id="BF1", owner_id="B", pos=Hex(5, 0),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=4, base_mp=10,
-                               internal=(WeaponType.GUN,)),
-        endurance=20, max_endurance=20,
-    )
-    bf2 = SquadronState(
-        squadron_id="BF2", owner_id="B", pos=Hex(6, 1),
-        strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=3, base_mp=8,
-                               internal=(WeaponType.LASER,),
-                               external=(WeaponType.STANDARD_MISSILE,),
-                               external_shots_remaining=2),
-        endurance=20, max_endurance=20,
-    )
-
-    battle = BattleState(
-        ships={"A1": a, "B1": b},
-        squadrons={"AF1": af1, "AF2": af2, "BF1": bf1, "BF2": bf2},
-    )
+    battle, rng = default_scenario()
     enc = Encounter.start(battle, rng=rng)
     return enc, rng
 
@@ -209,13 +157,13 @@ def _fmt_dogfight(ev) -> list[str]:
     return lines
 
 
-def _fmt_attack_run(ev) -> list[str]:
+def _fmt_attack_run(ev, label: str = "ATTACK RUN") -> list[str]:
     from tactical.fighter_combat import AttackRunEvent
     pd_rolls = " ".join(
         f"{r}{'✓' if r <= 3 else '✗'}" for r in ev.pd_rolls
     ) or "—"
     lines = [
-        f"  ATTACK RUN {ev.attacker_id}→{ev.target_id}",
+        f"  {label} {ev.attacker_id}→{ev.target_id}",
         f"    PD: [{pd_rolls}]  killed={ev.fighters_killed_by_pd}"
         f"  survivors={ev.surviving_strength}",
     ]
@@ -363,19 +311,16 @@ def _process(cmd_line: str) -> list[str]:
                     [parts[2]] if len(parts) >= 3
                     else sorted(_enc.sides() - _enc._move_committed)
                 )
+                from tactical.events import FuelWarningEvent, UnitDestroyedEvent
                 from tactical.fighter_combat import AttackRunEvent, DogfightEvent
                 for s in sides_to_commit:
                     _enc, mv_events = _enc.commit_movement(s, _rng)
                     out.append(f"Side {s!r} committed movement.")
                     for ev in mv_events:
                         if isinstance(ev, AttackRunEvent):
-                            out.append(
-                                f"  TRANSIT: {ev.attacker_id}→{ev.target_id}"
-                                f" pd_killed={ev.fighters_killed_by_pd}"
-                                f" survivors={ev.surviving_strength}"
-                                f" hits={sum(1 for s in ev.weapon_shots if s.hit)}"
-                                f" dmg={ev.total_ship_damage}"
-                            )
+                            out.extend(_fmt_attack_run(ev, label="TRANSIT"))
+                        elif isinstance(ev, UnitDestroyedEvent):
+                            out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
                     if _enc.phase == Phase.COMBAT_SUBMISSION:
                         out.append("→ Movement resolved. Now in COMBAT_SUBMISSION.")
                         break
@@ -388,10 +333,17 @@ def _process(cmd_line: str) -> list[str]:
                     [parts[2]] if len(parts) >= 3
                     else sorted(_enc.sides() - _enc._fire_committed)
                 )
+                from tactical.events import FuelWarningEvent, UnitDestroyedEvent
                 for s in sides_to_commit:
                     _enc, events = _enc.commit_fire(s, _rng)
                     out.append(f"Side {s!r} committed fire orders.")
-                    out += [_fmt_fire(ev) for ev in events]
+                    for ev in events:
+                        if isinstance(ev, UnitDestroyedEvent):
+                            out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
+                        elif isinstance(ev, FuelWarningEvent):
+                            out.append(f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed")
+                        else:
+                            out.append(_fmt_fire(ev))
                     if _enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION):
                         phase_label = "COMBAT_SMALL" if _enc.phase == Phase.COMBAT_SMALL else "next turn"
                         out.append(f"→ Fire resolved. Entering {phase_label}.")
@@ -405,7 +357,8 @@ def _process(cmd_line: str) -> list[str]:
                     [parts[2]] if len(parts) >= 3
                     else sorted(_enc.sides() - _enc._squadron_committed)
                 )
-                from tactical.fighter_combat import AttackRunEvent, DogfightEvent
+                from tactical.events import FuelWarningEvent, UnitDestroyedEvent
+                from tactical.fighter_combat import AttackRunEvent, BreakOffEvent, DogfightEvent
                 for s in sides_to_commit:
                     _enc, events = _enc.commit_squadron_orders(s, _rng)
                     out.append(f"Side {s!r} committed squadron orders.")
@@ -414,6 +367,20 @@ def _process(cmd_line: str) -> list[str]:
                             out.extend(_fmt_dogfight(ev))
                         elif isinstance(ev, AttackRunEvent):
                             out.extend(_fmt_attack_run(ev))
+                        elif isinstance(ev, BreakOffEvent):
+                            parting = ", ".join(
+                                f"{p.attacker_id} cas={p.total_casualties}"
+                                for p in ev.parting_shots
+                            ) or "none"
+                            out.append(
+                                f"  BREAK OFF {ev.squadron_id}"
+                                f" → ({ev.final_pos.q},{ev.final_pos.r})"
+                                f"  parting=[{parting}]  cas={ev.casualties_taken}"
+                            )
+                        elif isinstance(ev, UnitDestroyedEvent):
+                            out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
+                        elif isinstance(ev, FuelWarningEvent):
+                            out.append(f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed")
                     if _enc.phase == Phase.MOVE_SUBMISSION:
                         out.append("→ Fighter phase resolved. Starting next turn.")
                         break
@@ -465,6 +432,23 @@ def _process(cmd_line: str) -> list[str]:
             side   = _enc.battle.squadrons[sq_id].owner_id
             _enc   = _enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol))
             out.append(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r})")
+
+        elif cmd == "breakoff":
+            # breakoff <squad_id> <q> <r>
+            if len(parts) != 4:
+                out.append("usage: breakoff <squad_id> <q> <r>"); return out
+            sq_id = parts[1]
+            if sq_id not in _enc.battle.squadrons:
+                out.append(f"unknown squadron: {sq_id!r}"); return out
+            from tactical.encounter import Phase
+            if _enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {_enc.phase.value!r}"); return out
+            from sim.hexgrid import Hex
+            from tactical.turn_orders import BreakOffOrder
+            dest = Hex(int(parts[2]), int(parts[3]))
+            side = _enc.battle.squadrons[sq_id].owner_id
+            _enc = _enc.stage_squadron_order(side, sq_id, BreakOffOrder(dest=dest))
+            out.append(f"Staged: {sq_id} BREAK OFF → ({dest.q},{dest.r})")
 
         elif cmd == "strike":
             # strike <squad_id> <target_id>
@@ -545,6 +529,7 @@ def _render_units() -> str:
             f"{sqid:>4}  owner={sq.owner_id}  pos=({sq.pos.q:+},{sq.pos.r:+})"
             f"  str={sq.strength}/{sq.max_strength}"
             f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
+            f"  fuel={sq.endurance}/{sq.max_endurance}"
             f"  load={loadout}"
         )
     return "\n".join(lines)

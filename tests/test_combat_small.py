@@ -80,7 +80,8 @@ class TestDogfights:
         sq_b = _interceptor("B1", "B", Hex(0, 0))
         battle = BattleState(ships={}, squadrons={"A1": sq_a, "B1": sq_b})
         battle2, events = resolve_all_dogfights(battle, rng=random.Random(1))
-        attacker_ids = {ev.attacker_id for ev in events}
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        attacker_ids = {ev.attacker_id for ev in dogfights}
         assert attacker_ids == {"A1", "B1"}
 
     def test_dogfight_causes_casualties(self):
@@ -90,7 +91,8 @@ class TestDogfights:
         battle = BattleState(ships={}, squadrons={"A1": sq_a, "B1": sq_b})
         # Seed 42 gives varied rolls; at least some hits expected with to-hit 9 (7+2)
         battle2, events = resolve_all_dogfights(battle, rng=random.Random(42))
-        total_casualties = sum(ev.total_casualties for ev in events)
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        total_casualties = sum(ev.total_casualties for ev in dogfights)
         assert total_casualties > 0
 
     def test_dogfight_simultaneity(self):
@@ -107,7 +109,8 @@ class TestDogfights:
 
         battle2, events = resolve_all_dogfights(battle, rng=AlwaysOne())
         # Both A1 and B1 should have fired (two DogfightEvents)
-        attacker_ids = {ev.attacker_id for ev in events}
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        attacker_ids = {ev.attacker_id for ev in dogfights}
         assert attacker_ids == {"A1", "B1"}
 
     def test_dogfight_higher_mvr_bonus(self):
@@ -117,8 +120,9 @@ class TestDogfights:
         battle = BattleState(ships={}, squadrons={"A1": sq_a, "B1": sq_b})
 
         battle2, events = resolve_all_dogfights(battle, rng=random.Random(1))
-        a_fires = [ev for ev in events if ev.attacker_id == "A1"]
-        b_fires = [ev for ev in events if ev.attacker_id == "B1"]
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        a_fires = [ev for ev in dogfights if ev.attacker_id == "A1"]
+        b_fires = [ev for ev in dogfights if ev.attacker_id == "B1"]
         assert len(a_fires) == 1 and len(b_fires) == 1
 
         # A's mvr_delta should be positive (4 - 1 = 3)
@@ -130,8 +134,8 @@ class TestDogfights:
         sq_b = _interceptor("B1", "B", Hex(0, 0))
         battle = BattleState(ships={}, squadrons={"A1": sq_a, "B1": sq_b})
         battle2, events = resolve_all_dogfights(battle, rng=random.Random(1))
-
-        a_fires = [ev for ev in events if ev.attacker_id == "A1"]
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        a_fires = [ev for ev in dogfights if ev.attacker_id == "A1"]
         assert len(a_fires) == 1
         # Only L shots should appear — no R shots
         for shot in a_fires[0].shots:
@@ -168,7 +172,8 @@ class TestDogfights:
             ships={}, squadrons={"A1": sq_a, "B1": sq_b1, "B2": sq_b2}
         )
         battle2, events = resolve_all_dogfights(battle, rng=random.Random(1))
-        a_events = [ev for ev in events if ev.attacker_id == "A1"]
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        a_events = [ev for ev in dogfights if ev.attacker_id == "A1"]
         assert len(a_events) == 1
         assert a_events[0].target_id == "B1"
 
@@ -272,14 +277,19 @@ class TestResolveCombatSmall:
         battle2, _ = resolve_combat_small(battle, orders, rng=random.Random(1))
         assert battle2.squadrons["A1"].pos == Hex(5, 0)
 
-    def test_unreachable_strike_target_stays_put(self):
-        """Squad with MP 10 cannot reach a hex 20 away — stays in place."""
+    def test_unreachable_strike_target_moves_partial(self):
+        """Squad with MP 10 cannot reach a hex 20 away — advances as far as MP allows."""
         sq = _interceptor("A1", "A", Hex(0, 0))  # effective_mp=10
         ship = _ship_no_systems("B1", "B", Hex(20, 0))
         battle = BattleState(ships={"B1": ship}, squadrons={"A1": sq})
         orders = {"A1": StrikeOrder(target_id="B1")}
         battle2, _ = resolve_combat_small(battle, orders, rng=random.Random(1))
-        assert battle2.squadrons["A1"].pos == Hex(0, 0)
+        # Should have moved 10 hexes toward (20,0)
+        assert battle2.squadrons["A1"].pos == Hex(10, 0)
+        # Did not reach target — no attack run
+        assert not any(hasattr(e, "target_id") and e.target_id == "B1"
+                       and type(e).__name__ == "AttackRunEvent"
+                       for e in _)
 
     def test_strike_on_ship_triggers_attack_run(self):
         sq = _strike_fighter("A1", "A", Hex(0, 0), shots=0)

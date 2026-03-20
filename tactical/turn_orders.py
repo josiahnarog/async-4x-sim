@@ -23,6 +23,7 @@ class ShipMoveOrder:
     dest: Hex
     dest_facing: Facing
     path: tuple[Hex, ...] = dataclasses.field(default_factory=tuple)
+    total_mp_cost: int = 0   # total MP consumed (hex distance + turning cost)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,5 +59,16 @@ class StrikeOrder:
     target_id: str  # ShipID or SquadronID
 
 
+@dataclass(frozen=True, slots=True)
+class BreakOffOrder:
+    """Attempt to disengage from a dogfight and move to dest.
+
+    The squadron takes a parting shot from each enemy squadron sharing its
+    hex before moving.  If dest is unreachable within effective_mp the
+    squadron moves as far as possible toward dest instead.
+    """
+    dest: Hex
+
+
 # Convenience type alias used in Encounter
-SquadronOrder = InterceptOrder | StrikeOrder
+SquadronOrder = InterceptOrder | StrikeOrder | BreakOffOrder

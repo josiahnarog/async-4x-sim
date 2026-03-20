@@ -333,6 +333,18 @@ class ShipSystems:
 
         return ShipSystems(tuple(systems))
 
+    def is_destroyed(self) -> bool:
+        """A ship is destroyed when all non-shield, non-armor systems are gone.
+
+        S (shield) and A (armor) are passive defenses.  Once every weapon,
+        engine, and utility system is destroyed the ship is a dead hulk.
+        """
+        _PASSIVE = {"S", "A"}
+        return not any(
+            s.is_active() and s.base not in _PASSIVE
+            for s in self.systems
+        )
+
     def point_defense(self) -> Tuple[int, int]:
         """
         Returns (shots, to_hit) for point defense for the current incoming volley.
