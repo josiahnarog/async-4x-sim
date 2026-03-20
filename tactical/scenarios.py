@@ -25,12 +25,12 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
     fg_systems = "SSSSSAAAAA(I)FFRRD(I)(I)(I)"
     a = ShipState(
         ship_id="A1", owner_id="A", pos=Hex(0, 0), facing=Facing.NE,
-        mp=5, turn_cost=2, turn_charge=0,
+        mp=5, turn_cost=FG.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(fg_systems), hull_type=FG,
     )
     b = ShipState(
         ship_id="B1", owner_id="B", pos=Hex(6, 0), facing=Facing.S,
-        mp=5, turn_cost=2, turn_charge=0,
+        mp=5, turn_cost=FG.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(fg_systems), hull_type=FG,
     )
 

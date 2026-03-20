@@ -11,6 +11,7 @@ class HullType:
     engine_power_ratio: Fraction  # MP granted per active engine system
     engines_per_room: int     # number of I systems that form one engine room (parentheses cluster)
     max_speed: int            # hard cap on MP capacity per subphase refresh
+    turn_cost: int            # MP that must be spent to earn one facing change
 
     def movement_points(self, active_engine_count: int) -> int:
         """MP capacity from engine count, floored and capped at max_speed."""
@@ -24,6 +25,7 @@ FG = HullType(
     engine_power_ratio=Fraction(2, 3),
     engines_per_room=3,
     max_speed=5,
+    turn_cost=2,
 )
 
 DD = HullType(
@@ -32,6 +34,7 @@ DD = HullType(
     engine_power_ratio=Fraction(1, 1),
     engines_per_room=2,
     max_speed=5,
+    turn_cost=2,
 )
 
 CA = HullType(
@@ -40,15 +43,16 @@ CA = HullType(
     engine_power_ratio=Fraction(2, 1),
     engines_per_room=1,
     max_speed=4,
+    turn_cost=3,
 )
 
 CV = HullType(
     designation="CV",
     name="Carrier",
-    engine_power_ratio=Fraction(2, 1),   # same EPR as CA
+    engine_power_ratio=Fraction(2, 1),
     engines_per_room=1,
     max_speed=4,
-    # turn_cost=3 is set on ShipState at instantiation
+    turn_cost=3,
 )
 
 HULL_TYPES: dict[str, HullType] = {h.designation: h for h in (FG, DD, CA, CV)}
