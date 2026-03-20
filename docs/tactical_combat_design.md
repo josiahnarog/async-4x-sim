@@ -160,6 +160,50 @@ a furballed squadron:
 
 ---
 
+## Ammunition
+
+Standard Missile launchers (`R`) carry ammunition. The ammo system is tracked per-system via `System.charges`.
+
+- Each `R` launcher starts with **10 internal charges**.
+- A `Mg` (Magazine) system starts with **50 shared charges** and feeds all `R` launchers on the same ship.
+- **Draw order**: Mg charges are consumed before internal launcher charges. Within Mg, the leftmost active Mg is drained first. When drawing from internal launcher charges, exactly 1 shot is taken from each active launcher in order (not greedy drain from leftmost).
+- The number of missiles fired in a volley is `min(active_launchers, total_ammo_available)`.
+- Ammo consumption is applied to the attacker simultaneously with damage application (not mid-resolution).
+- If a launcher is destroyed, its internal charges are lost (system becomes inactive; `ammo_count_for` only counts active systems).
+
+---
+
+## Carriers
+
+Carriers (`CV` hull type) support fighter launch and recovery via hangar bay (`Bh`) and launch bay (`Bl`) systems.
+
+### Docking State
+
+A squadron with `docked_at = carrier_id` is **docked**. Docked squadrons:
+- Are excluded from all fighter combat, intercept checks, and hex-based logic.
+- Do **not** lose endurance (fuel) each turn — they are refuelling aboard the carrier.
+- Have a placeholder hex position that is ignored while docked.
+
+### Launch
+
+- Staged during `MOVE_SUBMISSION` via `stage_launch(side, carrier_id, squadron_id)`.
+- Validated against active `Bl` count (one launch per active `Bl` per turn).
+- Processed at the **start** of `_resolve_movement`, before ships move.
+- The squadron appears at the carrier's pre-move hex.
+- Emits `LaunchEvent`.
+
+### Recovery
+
+- Submitted as `RecoverOrder(carrier_id)` in `COMBAT_SMALL`.
+- Processed at the **start** of `_resolve_combat_small`, before fighter combat.
+- The squadron must be at the carrier's current hex.
+- Requires an empty active `Bh` on the carrier.
+- Emits `RecoveryEvent`.
+- **[TBD]**: Recovery should also consume a `Bl` slot (currently only checks `Bh`).
+- **[TBD]**: Refuel/rearm while docked — restore endurance and external ordnance over one or more turns.
+
+---
+
 ## Design Notes & Future Extensions
 
 **Collapsing Phases 1 and 3:** allowing large units to also submit "target and pursue"
