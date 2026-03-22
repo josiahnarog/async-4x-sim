@@ -528,6 +528,8 @@ def _render_units() -> str:
     lines = []
     for sid in _enc.battle.ship_ids_sorted():
         ship = _enc.battle.ships[sid]
+        if ship.systems is not None and ship.systems.is_destroyed():
+            continue  # omit destroyed ships from the summary
         lines.append(
             f"{sid:>4}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
             f"  face={int(ship.facing)}  mp={ship.mp}"
@@ -567,7 +569,11 @@ def _render_phase() -> str:
 
 def _ships_json() -> str:
     return json.dumps([
-        {"id": sid, "owner": s.owner_id, "q": s.pos.q, "r": s.pos.r, "facing": int(s.facing)}
+        {
+            "id": sid, "owner": s.owner_id, "q": s.pos.q, "r": s.pos.r,
+            "facing": int(s.facing),
+            "is_destroyed": bool(s.systems is not None and s.systems.is_destroyed()),
+        }
         for sid, s in _enc.battle.ships.items()
     ])
 

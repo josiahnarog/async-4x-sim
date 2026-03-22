@@ -302,7 +302,38 @@
       ctx.restore();
     }
 
+    function drawDebris(ctx, ship, cx, cy) {
+      const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
+      const color = OWNER_COLORS[ship.owner] || "#ffffff";
+      // Deterministic debris positions seeded from the ship id string.
+      let seed = 0;
+      for (let i = 0; i < ship.id.length; i++) seed = (seed * 31 + ship.id.charCodeAt(i)) | 0;
+      const rand = () => { seed = (seed * 1664525 + 1013904223) | 0; return (seed >>> 0) / 0xffffffff; };
+
+      ctx.save();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = color;
+      const chunks = 5;
+      const spread = SIZE * 0.45;
+      for (let i = 0; i < chunks; i++) {
+        const angle  = rand() * Math.PI * 2;
+        const dist   = rand() * spread;
+        const cx2    = x + Math.cos(angle) * dist;
+        const cy2    = y + Math.sin(angle) * dist;
+        const w      = (2 + rand() * 4);
+        const h      = (2 + rand() * 3);
+        const rot    = rand() * Math.PI;
+        ctx.save();
+        ctx.translate(cx2, cy2);
+        ctx.rotate(rot);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
     function drawShip(ctx, ship, cx, cy) {
+      if (ship.is_destroyed) { drawDebris(ctx, ship, cx, cy); return; }
       const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
       const color = OWNER_COLORS[ship.owner] || "#ffffff";
       const dark  = OWNER_DARK[ship.owner]  || "#444444";
