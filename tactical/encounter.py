@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -65,15 +65,21 @@ class Encounter:
     # MOVE_SUBMISSION carrier launch staging
     _launch_orders: dict[str, list]   # ShipID → list[LaunchOrder]
 
+    # Fog of war: per-side knowledge of enemy unit detection levels
+    # side_id → {unit_id → detection_level}
+    _knowledge: dict[str, dict[str, int]] = field(default_factory=dict)
+
     # ------------------------------------------------------------------ #
     # Factory                                                              #
     # ------------------------------------------------------------------ #
 
     @staticmethod
     def start(battle: BattleState, *, rng: RNG | None = None) -> "Encounter":
+        from tactical.sensor_rules import compute_detections
         sides = {s.owner_id for s in battle.ships.values()}
         init  = Initiative.roll(sides, rng=rng)
         mp_cap = {sid: ship.mp for sid, ship in battle.ships.items()}
+        knowledge = {side: compute_detections(battle, side) for side in sides}
         return Encounter(
             battle              = battle,
             initiative          = init,
@@ -86,6 +92,7 @@ class Encounter:
             _squadron_orders    = {},
             _squadron_committed = frozenset(),
             _launch_orders      = {},
+            _knowledge          = knowledge,
         )
 
     # ------------------------------------------------------------------ #
@@ -714,9 +721,17 @@ class Encounter:
             if isinstance(order, InterceptOrder) and sq_id in new_squads
         }
 
+        from tactical.sensor_rules import compute_detections, update_knowledge
+        new_battle_state = dataclasses.replace(self.battle, ships=new_ships, squadrons=new_squads)
+        all_sides = {s.owner_id for s in new_ships.values()}
+        new_knowledge = {}
+        for side in all_sides:
+            current = compute_detections(new_battle_state, side)
+            new_knowledge[side] = update_knowledge(self._knowledge.get(side, {}), current)
+
         enc = dataclasses.replace(
             self,
-            battle              = dataclasses.replace(self.battle, ships=new_ships, squadrons=new_squads),
+            battle              = new_battle_state,
             phase               = Phase.MOVE_SUBMISSION,
             _move_orders        = {},
             _move_committed     = frozenset(),
@@ -726,6 +741,7 @@ class Encounter:
             _squadron_orders    = carried_squadron_orders,
             _squadron_committed = frozenset(),
             _launch_orders      = {},
+            _knowledge          = new_knowledge,
         )
         return enc, turn_events
 

@@ -524,29 +524,74 @@ def _process(cmd_line: str) -> list[str]:
 # State rendering helpers
 # ---------------------------------------------------------------------------
 
-def _render_units() -> str:
+def _render_units(view: str = "master") -> str:
+    from tactical.sensor_rules import major_status_flags
     lines = []
     for sid in _enc.battle.ship_ids_sorted():
         ship = _enc.battle.ships[sid]
         if ship.systems is not None and ship.systems.is_destroyed():
             continue  # omit destroyed ships from the summary
-        lines.append(
-            f"{sid:>4}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
-            f"  face={int(ship.facing)}  mp={ship.mp}"
-            f"\n      systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
-        )
+
+        # Determine detection level
+        if view == "master" or ship.owner_id == view:
+            det = 3
+        else:
+            det = _enc._knowledge.get(view, {}).get(sid, 0)
+
+        if det == 0:
+            continue
+        elif det == 1:
+            flags = major_status_flags(ship)
+            flag_str = f"  [{', '.join(flags)}]" if flags else ""
+            lines.append(
+                f"  ???  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}"
+            )
+        elif det == 2:
+            hull_class = ship.hull_type.designation if ship.hull_type else "??"
+            n = len(list(ship.systems)) if ship.systems else 0
+            lines.append(
+                f"  {hull_class}?  pos=({ship.pos.q:+},{ship.pos.r:+})"
+                f"  class={hull_class}  systems=[?×{n}]"
+            )
+        else:
+            lines.append(
+                f"{sid:>4}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
+                f"  face={int(ship.facing)}  mp={ship.mp}"
+                f"\n      systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
+            )
     for sqid in _enc.battle.squadron_ids_sorted():
         sq = _enc.battle.squadrons[sqid]
-        internal = "".join(w.value for w in sq.loadout.internal)
-        external = "".join(w.value for w in sq.loadout.external)
-        loadout  = internal + (f"[{external}×{sq.loadout.external_shots_remaining}]" if external else "")
-        lines.append(
-            f"{sqid:>4}  owner={sq.owner_id}  pos=({sq.pos.q:+},{sq.pos.r:+})"
-            f"  str={sq.strength}/{sq.max_strength}"
-            f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
-            f"  fuel={sq.endurance}/{sq.max_endurance}"
-            f"  load={loadout}"
-        )
+        if not sq.is_deployed:
+            continue
+
+        # Determine detection level
+        if view == "master" or sq.owner_id == view:
+            det = 3
+        else:
+            det = _enc._knowledge.get(view, {}).get(sqid, 0)
+
+        if det == 0:
+            continue
+        elif det == 1:
+            lines.append(
+                f"   ?  pos=({sq.pos.q:+},{sq.pos.r:+})"
+            )
+        elif det == 2:
+            lines.append(
+                f"   ?  pos=({sq.pos.q:+},{sq.pos.r:+})"
+                f"  str={sq.strength}/{sq.max_strength}"
+            )
+        else:
+            internal = "".join(w.value for w in sq.loadout.internal)
+            external = "".join(w.value for w in sq.loadout.external)
+            loadout  = internal + (f"[{external}×{sq.loadout.external_shots_remaining}]" if external else "")
+            lines.append(
+                f"{sqid:>4}  owner={sq.owner_id}  pos=({sq.pos.q:+},{sq.pos.r:+})"
+                f"  str={sq.strength}/{sq.max_strength}"
+                f"  mvr={sq.effective_mvr}  mp={sq.effective_mp}"
+                f"  fuel={sq.endurance}/{sq.max_endurance}"
+                f"  load={loadout}"
+            )
     return "\n".join(lines)
 
 
@@ -567,29 +612,99 @@ def _render_phase() -> str:
 # Routes
 # ---------------------------------------------------------------------------
 
-def _ships_json() -> str:
-    return json.dumps([
-        {
-            "id": sid, "owner": s.owner_id, "q": s.pos.q, "r": s.pos.r,
-            "facing": int(s.facing),
-            "is_destroyed": bool(s.systems is not None and s.systems.is_destroyed()),
-        }
-        for sid, s in _enc.battle.ships.items()
-    ])
+def _ships_json(view: str = "master") -> str:
+    from tactical.sensor_rules import major_status_flags
+    result = []
+    for sid, s in _enc.battle.ships.items():
+        is_destroyed = bool(s.systems is not None and s.systems.is_destroyed())
+
+        # Determine detection level
+        if view == "master" or s.owner_id == view:
+            det = 3
+        else:
+            det = _enc._knowledge.get(view, {}).get(sid, 0)
+
+        if det == 0:
+            continue
+        elif det == 1:
+            result.append({
+                "id": "???",
+                "owner": "?",
+                "q": s.pos.q,
+                "r": s.pos.r,
+                "is_destroyed": is_destroyed,
+                "detection": 1,
+                "major_status": major_status_flags(s),
+            })
+        elif det == 2:
+            hull_class = s.hull_type.designation if s.hull_type else "??"
+            n = len(list(s.systems)) if s.systems else 0
+            result.append({
+                "id": hull_class + "?",
+                "owner": "?",
+                "q": s.pos.q,
+                "r": s.pos.r,
+                "hull_class": hull_class,
+                "system_count": n,
+                "is_destroyed": is_destroyed,
+                "detection": 2,
+            })
+        else:
+            result.append({
+                "id": sid,
+                "owner": s.owner_id,
+                "q": s.pos.q,
+                "r": s.pos.r,
+                "facing": int(s.facing),
+                "is_destroyed": is_destroyed,
+                "detection": 3,
+            })
+    return json.dumps(result)
 
 
-def _squadrons_json() -> str:
-    return json.dumps([
-        {
-            "id":       sqid,
-            "owner":    sq.owner_id,
-            "q":        sq.pos.q,
-            "r":        sq.pos.r,
-            "strength": sq.strength,
-            "max":      sq.max_strength,
-        }
-        for sqid, sq in _enc.battle.squadrons.items()
-    ])
+def _squadrons_json(view: str = "master") -> str:
+    result = []
+    for sqid, sq in _enc.battle.squadrons.items():
+        if not sq.is_deployed:
+            continue
+
+        # Determine detection level
+        if view == "master" or sq.owner_id == view:
+            det = 3
+        else:
+            det = _enc._knowledge.get(view, {}).get(sqid, 0)
+
+        if det == 0:
+            continue
+        elif det == 1:
+            result.append({
+                "id": "?",
+                "owner": "?",
+                "q": sq.pos.q,
+                "r": sq.pos.r,
+                "detection": 1,
+            })
+        elif det == 2:
+            result.append({
+                "id": "?",
+                "owner": sq.owner_id if view == "master" else "?",
+                "q": sq.pos.q,
+                "r": sq.pos.r,
+                "strength": sq.strength,
+                "max": sq.max_strength,
+                "detection": 2,
+            })
+        else:
+            result.append({
+                "id": sqid,
+                "owner": sq.owner_id,
+                "q": sq.pos.q,
+                "r": sq.pos.r,
+                "strength": sq.strength,
+                "max": sq.max_strength,
+                "detection": 3,
+            })
+    return json.dumps(result)
 
 
 def _paths_json() -> str:
@@ -703,28 +818,30 @@ def _fire_orders_json() -> str:
 
 
 @router.get("/", response_class=HTMLResponse)
-async def tactical_ui(request: Request):
+async def tactical_ui(request: Request, view: str = "master"):
     return templates.TemplateResponse("tactical.html", {
         "request":          request,
         "phase":            _render_phase(),
-        "units_text":           _render_units(),
-        "ships_json":           _ships_json(),
-        "squadrons_json":       _squadrons_json(),
+        "units_text":           _render_units(view),
+        "ships_json":           _ships_json(view),
+        "squadrons_json":       _squadrons_json(view),
         "paths_json":           _paths_json(),
         "fire_orders_json":     _fire_orders_json(),
         "strike_orders_json":   _strike_orders_json(),
         "intercept_paths_json": _intercept_paths_json(),
         "intercept_zones_json": _intercept_zones_json(),
         "log":              "\n".join(_log[-40:]),
+        "view":             view,
     })
 
 
 @router.post("/command")
-async def tactical_command(cmd: str = Form(...)):
+async def tactical_command(request: Request, cmd: str = Form(...)):
     global _log
+    view = request.query_params.get("view", "master")
     _log.append(f"> {cmd}")
     output = _process(cmd)
     _log.extend(output)
     if len(_log) > _MAX_LOG:
         _log = _log[-_MAX_LOG:]
-    return RedirectResponse(url="/tactical/", status_code=303)
+    return RedirectResponse(url=f"/tactical/?view={view}", status_code=303)

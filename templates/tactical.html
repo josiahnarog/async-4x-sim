@@ -23,11 +23,20 @@
     button:hover { background: #3a3a6a; }
     .hint { font-size: 0.78em; color: #888; margin-top: 6px; line-height: 1.7; }
     .hint b { color: #aaa; }
+    .tab-bar { display: flex; gap: 4px; margin-bottom: 10px; }
+    .tab { padding: 6px 16px; border-radius: 6px 6px 0 0; border: 1px solid #444; background: #1a1a2e; color: #888; text-decoration: none; font-size: 0.88em; }
+    .tab.active { background: #2a2a4a; color: #a8d8ea; border-bottom-color: #2a2a4a; }
   </style>
 </head>
 <body>
   <h1>Tactical Encounter</h1>
   <div class="phase">{{ phase }}</div>
+
+  <div class="tab-bar">
+    <a href="/tactical/?view=A"      class="tab {% if view == 'A' %}active{% endif %}">Side A</a>
+    <a href="/tactical/?view=B"      class="tab {% if view == 'B' %}active{% endif %}">Side B</a>
+    <a href="/tactical/?view=master" class="tab {% if view == 'master' %}active{% endif %}">Master</a>
+  </div>
 
   <div class="row">
     <div class="col-map">
@@ -46,7 +55,7 @@
 
     <div class="col-right">
       <h2>Command</h2>
-      <form method="post" action="/tactical/command">
+      <form method="post" action="/tactical/command?view={{ view }}">
         <div class="cmd-row">
           <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. move A1 3  |  fireall A1 B1"/>
           <button type="submit">Send</button>
@@ -332,8 +341,70 @@
       ctx.restore();
     }
 
+    function drawContactMarker(ctx, ship, cx, cy) {
+      const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
+      ctx.save();
+      // Dashed hex outline in grey
+      drawHexPath(ctx, x, y);
+      ctx.strokeStyle = "#666688";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Interior label
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      if (ship.detection === 1) {
+        ctx.fillStyle = "#888899";
+        ctx.font = "bold 13px monospace";
+        ctx.fillText("?", x, y);
+        if (ship.major_status && ship.major_status.length > 0) {
+          ctx.fillStyle = "#ff8866";
+          ctx.font = "7px monospace";
+          ctx.fillText(ship.major_status.join(" · "), x, y + SIZE * 0.62);
+        }
+      } else {  // detection === 2
+        ctx.fillStyle = "#aaaacc";
+        ctx.font = "bold 10px monospace";
+        ctx.fillText(ship.hull_class || "??", x, y);
+        if (ship.system_count) {
+          ctx.fillStyle = "#666688";
+          ctx.font = "7px monospace";
+          ctx.fillText("?×" + ship.system_count, x, y + SIZE * 0.5);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawSquadronContact(ctx, sq, cx, cy) {
+      const { x, y } = hexToPixel(sq.q, sq.r, cx, cy);
+      const r = SIZE * 0.48;
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "#666688";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y - r); ctx.lineTo(x + r, y);
+      ctx.lineTo(x, y + r); ctx.lineTo(x - r, y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#888899";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      if (sq.detection === 2 && sq.strength != null) {
+        ctx.font = "9px monospace";
+        ctx.fillText(sq.strength + "/" + sq.max, x, y);
+      } else {
+        ctx.font = "bold 12px monospace";
+        ctx.fillText("?", x, y);
+      }
+      ctx.restore();
+    }
+
     function drawShip(ctx, ship, cx, cy) {
       if (ship.is_destroyed) { drawDebris(ctx, ship, cx, cy); return; }
+      if (ship.detection < 3) { drawContactMarker(ctx, ship, cx, cy); return; }
       const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
       const color = OWNER_COLORS[ship.owner] || "#ffffff";
       const dark  = OWNER_DARK[ship.owner]  || "#444444";
@@ -473,6 +544,7 @@
     }
 
     function drawSquadron(ctx, sq, cx, cy) {
+      if (sq.detection !== undefined && sq.detection < 3) { drawSquadronContact(ctx, sq, cx, cy); return; }
       const { x, y } = hexToPixel(sq.q, sq.r, cx, cy);
       const color = OWNER_COLORS[sq.owner] || "#ffffff";
       const dark  = OWNER_DARK[sq.owner]   || "#444444";
