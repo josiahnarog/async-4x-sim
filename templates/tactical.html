@@ -367,10 +367,10 @@
         ctx.fillStyle = "#aaaacc";
         ctx.font = "bold 10px monospace";
         ctx.fillText(ship.hull_class || "??", x, y);
-        if (ship.system_count) {
+        if (ship.systems && ship.systems.length) {
           ctx.fillStyle = "#666688";
           ctx.font = "7px monospace";
-          ctx.fillText("?×" + ship.system_count, x, y + SIZE * 0.5);
+          ctx.fillText(ship.systems.join(""), x, y + SIZE * 0.5);
         }
       }
       ctx.restore();

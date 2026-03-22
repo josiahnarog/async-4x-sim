@@ -69,6 +69,10 @@ class Encounter:
     # side_id → {unit_id → detection_level}
     _knowledge: dict[str, dict[str, int]] = field(default_factory=dict)
 
+    # Weapon systems revealed by firing: ship_id → frozenset of system indices
+    # Persists across turns (a revealed weapon stays revealed).
+    _revealed_systems: dict[str, frozenset[int]] = field(default_factory=dict)
+
     # ------------------------------------------------------------------ #
     # Factory                                                              #
     # ------------------------------------------------------------------ #
@@ -521,6 +525,21 @@ class Encounter:
                 new_systems = ship.systems.consume_ammo_for("R", consumed)
                 new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
 
+        # Reveal weapon systems that fired (indices on the snapshot track).
+        new_revealed: dict[str, frozenset[int]] = dict(self._revealed_systems)
+        for ev in all_events:
+            if not isinstance(ev, FireEvent):
+                continue
+            attacker = snapshot.ships.get(ev.attacker_id)
+            if attacker is None or attacker.systems is None:
+                continue
+            weapon_base = ev.weapon.value
+            indices = set(new_revealed.get(ev.attacker_id, frozenset()))
+            for i, sys in enumerate(attacker.systems):
+                if sys.is_active() and sys.base == weapon_base:
+                    indices.add(i)
+            new_revealed[ev.attacker_id] = frozenset(indices)
+
         # Detect ships destroyed by fire this phase.
         from tactical.events import DestructionCause, UnitDestroyedEvent
         for target_id in damage_queue:
@@ -536,19 +555,21 @@ class Encounter:
             all_events.append(end_ev)
             enc = dataclasses.replace(
                 self,
-                battle          = new_battle,
-                phase           = Phase.COMPLETE,
-                _fire_orders    = {},
-                _fire_committed = frozenset(),
+                battle             = new_battle,
+                phase              = Phase.COMPLETE,
+                _fire_orders       = {},
+                _fire_committed    = frozenset(),
+                _revealed_systems  = new_revealed,
             )
             return enc, all_events
 
         enc = dataclasses.replace(
             self,
-            battle          = new_battle,
-            phase           = Phase.COMBAT_SMALL,
-            _fire_orders    = {},
-            _fire_committed = frozenset(),
+            battle             = new_battle,
+            phase              = Phase.COMBAT_SMALL,
+            _fire_orders       = {},
+            _fire_committed    = frozenset(),
+            _revealed_systems  = new_revealed,
         )
         # If no squadrons are deployed, skip COMBAT_SMALL entirely.
         if not enc.battle.squadrons:

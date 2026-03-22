@@ -548,10 +548,14 @@ def _render_units(view: str = "master") -> str:
             )
         elif det == 2:
             hull_class = ship.hull_type.designation if ship.hull_type else "??"
-            n = len(list(ship.systems)) if ship.systems else 0
+            revealed = _enc._revealed_systems.get(sid, frozenset())
+            track = "".join(
+                sys.token if i in revealed else "?"
+                for i, sys in enumerate(ship.systems)
+            ) if ship.systems else ""
             lines.append(
                 f"  {hull_class}?  pos=({ship.pos.q:+},{ship.pos.r:+})"
-                f"  class={hull_class}  systems=[?×{n}]"
+                f"  class={hull_class}  systems=[{track}]"
             )
         else:
             lines.append(
@@ -638,14 +642,18 @@ def _ships_json(view: str = "master") -> str:
             })
         elif det == 2:
             hull_class = s.hull_type.designation if s.hull_type else "??"
-            n = len(list(s.systems)) if s.systems else 0
+            revealed = _enc._revealed_systems.get(sid, frozenset())
+            sys_list = [
+                sys.token if i in revealed else "?"
+                for i, sys in enumerate(s.systems)
+            ] if s.systems else []
             result.append({
                 "id": hull_class + "?",
                 "owner": "?",
                 "q": s.pos.q,
                 "r": s.pos.r,
                 "hull_class": hull_class,
-                "system_count": n,
+                "systems": sys_list,
                 "is_destroyed": is_destroyed,
                 "detection": 2,
             })
