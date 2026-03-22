@@ -19,11 +19,17 @@ class ShipMoveOrder:
     path: ordered sequence of hexes traversed (including start and dest).
     Used during movement resolution to detect transit through enemy-held hexes.
     If empty, only the destination hex is checked for transit interceptions.
+
+    final_turn_charge: the turn_charge the ship should have after movement
+    resolves.  Set at staging time (from draft state or computed analytically
+    for direct-hex moves) so _resolve_movement() can apply it precisely rather
+    than approximating via modular arithmetic.
     """
     dest: Hex
     dest_facing: Facing
     path: tuple[Hex, ...] = dataclasses.field(default_factory=tuple)
     total_mp_cost: int = 0   # total MP consumed (hex distance + turning cost)
+    final_turn_charge: int = 0  # turn_charge to restore after this move resolves
 
 
 @dataclass(frozen=True, slots=True)

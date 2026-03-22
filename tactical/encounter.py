@@ -132,6 +132,7 @@ class Encounter:
         *,
         path_cost: Optional[int] = None,
         path: tuple[Hex, ...] = (),
+        final_turn_charge: Optional[int] = None,
     ) -> "Encounter":
         """Stage a movement order for ship_id.  May be called repeatedly to
         override a previous order, as long as the side hasn't committed yet.
@@ -140,6 +141,10 @@ class Encounter:
         (allows curved paths that use more MP than the straight-line distance).
         path: full sequence of hexes traversed (including start); used for
         transit interception detection during movement resolution.
+        final_turn_charge: if provided, this exact value is stored in the order
+        and applied to turn_charge after movement resolves.  Draft-based callers
+        should always supply this (from d["turn_charge"]).  For direct-hex moves
+        it is computed analytically below.
         """
         self._require_phase(Phase.MOVE_SUBMISSION)
         self._require_not_committed(side_id, self._move_committed)
@@ -153,6 +158,14 @@ class Encounter:
             # Draft-based move: trust the caller's cost (already turn-enforced
             # incrementally by the draft UI).
             total_cost = path_cost
+            if final_turn_charge is None:
+                # Caller should supply this; approximate as a fallback.
+                turns_made = total_cost // ship.turn_cost if ship.turn_cost > 0 else 0
+                final_turn_charge = (
+                    min(max(0, ship.turn_charge + total_cost - turns_made * ship.turn_cost),
+                        ship.turn_cost)
+                    if ship.turn_cost > 0 else 0
+                )
         else:
             # Direct hex move: compute minimum MP needed from scratch.
             dist         = hex_distance(ship.pos, dest)
@@ -162,6 +175,15 @@ class Encounter:
             # Formula: max(dist, turns_needed * turn_cost - current_charge)
             # Derivation: total_mp + charge ≥ turns_needed * turn_cost
             total_cost = max(dist, turns_needed * ship.turn_cost - ship.turn_charge)
+            if final_turn_charge is None:
+                # After turns_needed turns the remaining charge is:
+                #   initial_charge + total_cost - turns_needed * turn_cost
+                # clamped to [0, turn_cost].
+                if ship.turn_cost > 0:
+                    remaining = ship.turn_charge + total_cost - turns_needed * ship.turn_cost
+                    final_turn_charge = min(max(0, remaining), ship.turn_cost)
+                else:
+                    final_turn_charge = 0
 
         if total_cost > cap:
             raise ValueError(
@@ -171,6 +193,7 @@ class Encounter:
 
         new_orders = {**self._move_orders, ship_id: ShipMoveOrder(
             dest=dest, dest_facing=dest_facing, path=path, total_mp_cost=total_cost,
+            final_turn_charge=final_turn_charge,
         )}
         return dataclasses.replace(self, _move_orders=new_orders)
 
@@ -293,17 +316,12 @@ class Encounter:
                 continue
             ship = new_ships[ship_id]
             cost = order.total_mp_cost or hex_distance(ship.pos, order.dest)
-            # Update turn_charge: (old_charge + mp_spent) mod turn_cost
-            new_charge = (
-                (ship.turn_charge + cost) % ship.turn_cost
-                if ship.turn_cost > 0 else 0
-            )
             new_ships[ship_id] = dataclasses.replace(
                 ship,
-                pos          = order.dest,
-                facing       = order.dest_facing,
-                mp           = max(0, ship.mp - cost),
-                turn_charge  = new_charge,
+                pos         = order.dest,
+                facing      = order.dest_facing,
+                mp          = max(0, ship.mp - cost),
+                turn_charge = order.final_turn_charge,
             )
 
         new_battle = dataclasses.replace(new_battle, ships=new_ships)

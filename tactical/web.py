@@ -298,6 +298,7 @@ def _process(cmd_line: str) -> list[str]:
                             d["pos"], Facing.from_int(d["facing"]),
                             path_cost=d["mp_used"],
                             path=tuple(d["path"]),
+                            final_turn_charge=d["turn_charge"],
                         )
                         out.append(
                             f"Staged from draft: {ship_id} → ({d['pos'].q},{d['pos'].r}) "

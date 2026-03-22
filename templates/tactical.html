@@ -173,11 +173,13 @@
       ctx.closePath();
     }
 
-    function drawGrid(ctx, cx, cy, drawR) {
-      for (let q = -drawR; q <= drawR; q++) {
-        const rMin = Math.max(-drawR, -q - drawR);
-        const rMax = Math.min(drawR,  -q + drawR);
-        for (let r = rMin; r <= rMax; r++) {
+    function drawGrid(ctx, cx, cy, cq, cr, drawR) {
+      for (let dq = -drawR; dq <= drawR; dq++) {
+        const drMin = Math.max(-drawR, -dq - drawR);
+        const drMax = Math.min(drawR,  -dq + drawR);
+        for (let dr = drMin; dr <= drMax; dr++) {
+          const q = cq + dq;
+          const r = cr + dr;
           const { x, y } = hexToPixel(q, r, cx, cy);
           drawHexPath(ctx, x, y);
           ctx.fillStyle = "#111128";
@@ -478,9 +480,19 @@
       ctx.translate(canvas.width / 2 + panX, canvas.height / 2 + panY);
       ctx.scale(zoom, zoom);
 
-      // Dynamic grid radius: show enough hexes to fill the canvas at current zoom
-      const drawR = Math.ceil((canvas.width / 2) / (SIZE * zoom * 1.3)) + 2;
-      drawGrid(ctx, 0, 0, drawR);
+      // Find which hex is at the screen centre so the grid is drawn around it.
+      // Screen centre in world coords (inside the scaled context): (-panX/zoom, -panY/zoom)
+      const wxCenter = -panX / zoom;
+      const wyCenter = -panY / zoom;
+      const qCenterF = wxCenter / (SIZE * 1.5);
+      const rCenterF = -wyCenter / (SIZE * SQ3) - qCenterF / 2;
+      const cq = Math.round(qCenterF);
+      const cr = Math.round(rCenterF);
+
+      // Dynamic grid radius: enough hexes to fill the canvas at current zoom.
+      // Using the larger canvas dimension so both axes are covered.
+      const drawR = Math.ceil(Math.max(canvas.width, canvas.height) / 2 / (SIZE * zoom * 1.3)) + 2;
+      drawGrid(ctx, 0, 0, cq, cr, drawR);
       for (const z of INTERCEPT_ZONES) drawInterceptZone(ctx, z, 0, 0);
       for (const p of INTERCEPT_PATHS) drawSquadronPath(ctx, p, 0, 0);
       for (const p of PATHS)           drawDraftPath(ctx, p, 0, 0);

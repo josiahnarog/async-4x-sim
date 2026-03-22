@@ -447,6 +447,7 @@ def main() -> None:
                                 d["pos"], Facing.from_int(d["facing"]),
                                 path_cost=d["mp_used"],
                                 path=tuple(d["path"]),
+                                final_turn_charge=d["turn_charge"],
                             )
                             print(f"Staged from draft: {ship_id} → ({d['pos'].q},{d['pos'].r})"
                                   f" facing={d['facing']} cost={d['mp_used']}")
