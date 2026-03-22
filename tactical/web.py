@@ -538,28 +538,33 @@ def _render_units(view: str = "master") -> str:
         else:
             det = _enc._knowledge.get(view, {}).get(sid, 0)
 
+        num = sid[len(ship.owner_id):]
+        hull_class = ship.hull_type.designation if ship.hull_type else "??"
+
         if det == 0:
             continue
         elif det == 1:
             flags = major_status_flags(ship)
             flag_str = f"  [{', '.join(flags)}]" if flags else ""
+            display_id = ship.owner_id + "??" + num
             lines.append(
-                f"  ???  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}"
+                f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}"
             )
         elif det == 2:
-            hull_class = ship.hull_type.designation if ship.hull_type else "??"
             revealed = _enc._revealed_systems.get(sid, frozenset())
             track = "".join(
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(ship.systems)
             ) if ship.systems else ""
+            display_id = ship.owner_id + hull_class + num
             lines.append(
-                f"  {hull_class}?  pos=({ship.pos.q:+},{ship.pos.r:+})"
+                f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
                 f"  class={hull_class}  systems=[{track}]"
             )
         else:
+            display_id = ship.owner_id + hull_class + num
             lines.append(
-                f"{sid:>4}  owner={ship.owner_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
+                f"{display_id:>6}  pos=({ship.pos.q:+},{ship.pos.r:+})"
                 f"  face={int(ship.facing)}  mp={ship.mp}"
                 f"\n      systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
             )
@@ -628,12 +633,17 @@ def _ships_json(view: str = "master") -> str:
         else:
             det = _enc._knowledge.get(view, {}).get(sid, 0)
 
+        # Build a display ID using owner + class + number.
+        # The internal ship_id is e.g. "A1"; num strips the owner prefix → "1".
+        num = sid[len(s.owner_id):]
+        hull_class = s.hull_type.designation if s.hull_type else "??"
+
         if det == 0:
             continue
         elif det == 1:
             result.append({
-                "id": "???",
-                "owner": "?",
+                "id": s.owner_id + "??" + num,
+                "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
                 "is_destroyed": is_destroyed,
@@ -641,25 +651,24 @@ def _ships_json(view: str = "master") -> str:
                 "major_status": major_status_flags(s),
             })
         elif det == 2:
-            hull_class = s.hull_type.designation if s.hull_type else "??"
             revealed = _enc._revealed_systems.get(sid, frozenset())
             sys_list = [
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(s.systems)
             ] if s.systems else []
             result.append({
-                "id": hull_class + "?",
-                "owner": "?",
+                "id": s.owner_id + hull_class + num,
+                "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
-                "hull_class": hull_class,
+                "facing": int(s.facing),
                 "systems": sys_list,
                 "is_destroyed": is_destroyed,
                 "detection": 2,
             })
         else:
             result.append({
-                "id": sid,
+                "id": s.owner_id + hull_class + num,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
@@ -682,20 +691,22 @@ def _squadrons_json(view: str = "master") -> str:
         else:
             det = _enc._knowledge.get(view, {}).get(sqid, 0)
 
+        num = sqid[len(sq.owner_id):]  # e.g. "AF1" → "F1"
+
         if det == 0:
             continue
         elif det == 1:
             result.append({
-                "id": "?",
-                "owner": "?",
+                "id": sq.owner_id + "??" + num,
+                "owner": sq.owner_id,
                 "q": sq.pos.q,
                 "r": sq.pos.r,
                 "detection": 1,
             })
         elif det == 2:
             result.append({
-                "id": "?",
-                "owner": sq.owner_id if view == "master" else "?",
+                "id": sqid,
+                "owner": sq.owner_id,
                 "q": sq.pos.q,
                 "r": sq.pos.r,
                 "strength": sq.strength,

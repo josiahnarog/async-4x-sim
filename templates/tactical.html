@@ -342,41 +342,30 @@
     }
 
     function drawContactMarker(ctx, ship, cx, cy) {
+      // Detection level 1 only: dashed hex outline with masked ID.
       const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
       ctx.save();
-      // Dashed hex outline in grey
       drawHexPath(ctx, x, y);
       ctx.strokeStyle = "#666688";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
-      // Interior label
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      if (ship.detection === 1) {
-        ctx.fillStyle = "#888899";
-        ctx.font = "bold 13px monospace";
-        ctx.fillText("?", x, y);
-        if (ship.major_status && ship.major_status.length > 0) {
-          ctx.fillStyle = "#ff8866";
-          ctx.font = "7px monospace";
-          ctx.fillText(ship.major_status.join(" · "), x, y + SIZE * 0.62);
-        }
-      } else {  // detection === 2
-        ctx.fillStyle = "#aaaacc";
-        ctx.font = "bold 10px monospace";
-        ctx.fillText(ship.hull_class || "??", x, y);
-        if (ship.systems && ship.systems.length) {
-          ctx.fillStyle = "#666688";
-          ctx.font = "7px monospace";
-          ctx.fillText(ship.systems.join(""), x, y + SIZE * 0.5);
-        }
+      ctx.fillStyle = "#888899";
+      ctx.font = "bold 10px monospace";
+      ctx.fillText(ship.id, x, y);
+      if (ship.major_status && ship.major_status.length > 0) {
+        ctx.fillStyle = "#ff8866";
+        ctx.font = "7px monospace";
+        ctx.fillText(ship.major_status.join(" · "), x, y + SIZE * 0.62);
       }
       ctx.restore();
     }
 
     function drawSquadronContact(ctx, sq, cx, cy) {
+      // Detection level 1 only: dashed diamond with masked ID.
       const { x, y } = hexToPixel(sq.q, sq.r, cx, cy);
       const r = SIZE * 0.48;
       ctx.save();
@@ -390,21 +379,16 @@
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = "#888899";
+      ctx.font = "bold 10px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      if (sq.detection === 2 && sq.strength != null) {
-        ctx.font = "9px monospace";
-        ctx.fillText(sq.strength + "/" + sq.max, x, y);
-      } else {
-        ctx.font = "bold 12px monospace";
-        ctx.fillText("?", x, y);
-      }
+      ctx.fillText(sq.id, x, y);
       ctx.restore();
     }
 
     function drawShip(ctx, ship, cx, cy) {
       if (ship.is_destroyed) { drawDebris(ctx, ship, cx, cy); return; }
-      if (ship.detection < 3) { drawContactMarker(ctx, ship, cx, cy); return; }
+      if (ship.detection < 2) { drawContactMarker(ctx, ship, cx, cy); return; }
       const { x, y } = hexToPixel(ship.q, ship.r, cx, cy);
       const color = OWNER_COLORS[ship.owner] || "#ffffff";
       const dark  = OWNER_DARK[ship.owner]  || "#444444";
@@ -544,7 +528,7 @@
     }
 
     function drawSquadron(ctx, sq, cx, cy) {
-      if (sq.detection !== undefined && sq.detection < 3) { drawSquadronContact(ctx, sq, cx, cy); return; }
+      if (sq.detection !== undefined && sq.detection < 2) { drawSquadronContact(ctx, sq, cx, cy); return; }
       const { x, y } = hexToPixel(sq.q, sq.r, cx, cy);
       const color = OWNER_COLORS[sq.owner] || "#ffffff";
       const dark  = OWNER_DARK[sq.owner]   || "#444444";
