@@ -14,6 +14,7 @@ from tactical.facing import Facing
 from tactical.hull_types import CV, FG
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
+from tactical.fighter_class import F1
 from tactical.squadron_state import FighterLoadout, SquadronState
 from tactical.weapons import WeaponType
 
@@ -37,37 +38,39 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
     )
 
     # A's squadrons
-    af1 = SquadronState(          # interceptors: high MVR, gun-armed
+    af1 = SquadronState(          # F1 interceptors: gun armed, no external load
         squadron_id="AF1", owner_id="A", pos=Hex(1, 0),
         strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=4, base_mp=10,
+        loadout=FighterLoadout(fighter_class=F1,
                                internal=(WeaponType.GUN,)),
         endurance=20, max_endurance=20,
     )
-    af2 = SquadronState(          # strike fighters: laser + missiles
+    af2 = SquadronState(          # F1 strike package: laser + 2 external missiles
         squadron_id="AF2", owner_id="A", pos=Hex(0, 1),
         strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=3, base_mp=8,
+        loadout=FighterLoadout(fighter_class=F1,
                                internal=(WeaponType.LASER,),
-                               external=(WeaponType.STANDARD_MISSILE,),
+                               external=(WeaponType.STANDARD_MISSILE,
+                                         WeaponType.STANDARD_MISSILE),
                                external_shots_remaining=2),
         endurance=20, max_endurance=20,
     )
 
     # B's squadrons
-    bf1 = SquadronState(          # interceptors: high MVR, laser-armed
+    bf1 = SquadronState(          # F1 interceptors: laser armed, no external load
         squadron_id="BF1", owner_id="B", pos=Hex(5, 0),
         strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=4, base_mp=10,
+        loadout=FighterLoadout(fighter_class=F1,
                                internal=(WeaponType.LASER,)),
         endurance=0, max_endurance=20,
     )
-    bf2 = SquadronState(          # strike fighters: laser + missiles
+    bf2 = SquadronState(          # F1 strike package: laser + 2 external missiles
         squadron_id="BF2", owner_id="B", pos=Hex(6, 1),
         strength=5, max_strength=5,
-        loadout=FighterLoadout(base_mvr=3, base_mp=8,
+        loadout=FighterLoadout(fighter_class=F1,
                                internal=(WeaponType.LASER,),
-                               external=(WeaponType.STANDARD_MISSILE,),
+                               external=(WeaponType.STANDARD_MISSILE,
+                                         WeaponType.STANDARD_MISSILE),
                                external_shots_remaining=2),
         endurance=20, max_endurance=20,
     )

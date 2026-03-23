@@ -17,6 +17,7 @@ from tactical.fighter_combat import (
 from tactical.fighter_events import AttackRunEvent, DogfightEvent
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
+from tactical.fighter_class import F1
 from tactical.squadron_state import FighterLoadout, SquadronState
 from tactical.turn_orders import InterceptOrder, MoveOrder, StrikeOrder
 from tactical.weapons import WeaponType
@@ -31,8 +32,8 @@ def _interceptor(sq_id: str, owner: str, pos: Hex, strength: int = 5) -> Squadro
         squadron_id=sq_id, owner_id=owner, pos=pos,
         strength=strength, max_strength=5,
         loadout=FighterLoadout(
-            base_mvr=4, base_mp=10,
-            internal=(WeaponType.GUN, WeaponType.GUN, WeaponType.GUN),
+            fighter_class=F1,
+            internal=(WeaponType.GUN,),
         ),
         endurance=20, max_endurance=20,
     )
@@ -43,9 +44,9 @@ def _strike_fighter(sq_id: str, owner: str, pos: Hex, strength: int = 5, shots: 
         squadron_id=sq_id, owner_id=owner, pos=pos,
         strength=strength, max_strength=5,
         loadout=FighterLoadout(
-            base_mvr=3, base_mp=8,
+            fighter_class=F1,
             internal=(WeaponType.LASER,),
-            external=(WeaponType.STANDARD_MISSILE,),
+            external=(WeaponType.STANDARD_MISSILE, WeaponType.STANDARD_MISSILE),
             external_shots_remaining=shots,
         ),
         endurance=20, max_endurance=20,

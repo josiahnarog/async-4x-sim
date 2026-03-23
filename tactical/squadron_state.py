@@ -4,6 +4,7 @@ import dataclasses
 from dataclasses import dataclass
 
 from sim.hexgrid import Hex
+from tactical.fighter_class import FighterClass
 from tactical.weapons import WeaponType
 
 
@@ -17,6 +18,9 @@ class FighterLoadout:
     All fighters in the squadron carry identical loadouts; total output
     scales linearly with squadron strength.
 
+    fighter_class — defines the base stats (mvr, mp) for this generation of
+                fighter.  Ordnance penalties are computed against these base
+                values and disappear as external shots are expended.
     internal  — unlimited-ammo weapons (G, L, E, …); used in both dogfights
                 and attack runs.
     external  — limited-ammo weapons (R, …); used only in attack runs vs ships.
@@ -30,11 +34,22 @@ class FighterLoadout:
         effective_mvr = base_mvr - external_shots_remaining
     """
 
-    base_mvr: int                           # maneuverability, from fighter generation
-    base_mp:  int                           # movement points before ordnance penalty
+    fighter_class: FighterClass             # defines base_mvr and base_mp
     internal: tuple[WeaponType, ...]        # unlimited — e.g. (G, G, G)
     external: tuple[WeaponType, ...] = ()   # limited   — e.g. (R,)
     external_shots_remaining: int = 0       # shots per fighter; 0 if no external weapons
+
+    # ------------------------------------------------------------------
+    # Base stats (delegated to fighter_class)
+    # ------------------------------------------------------------------
+
+    @property
+    def base_mvr(self) -> int:
+        return self.fighter_class.base_mvr
+
+    @property
+    def base_mp(self) -> int:
+        return self.fighter_class.base_mp
 
     # ------------------------------------------------------------------
     # Derived stats

@@ -30,9 +30,9 @@ The repository contains two engines. **Only the tactical engine is actively deve
 
 ## Development Roadmap
 
-1. **Tight combat loop** *(largely complete)* — Win/loss detection, endurance/fuel expiry, transit simultaneity, magazine ammo, carrier launch/recovery all done. Remaining gaps: turn-cost enforcement at commit time, partial fighter movement, break-off validation.
-2. **Combat features** *(in progress)* — **Next: fog of war and sensor suites.** Then: carrier refuel/rearm mechanic (landed squadrons restore endurance/ordnance), AI opponents, expanded scenarios for playtesting.
-3. **Persistence and multiplayer** — Per-game tactical persistence (SQLite, keyed by game ID). Web hosting. Async multiplayer via turn-based submission.
+1. **Tight combat loop** *(complete)* — Win/loss detection, endurance/fuel expiry, transit simultaneity, magazine ammo, carrier launch/recovery, turn-cost enforcement, fighter class/loadout system all done.
+2. **Combat features** *(in progress)* — Fog of war and sensor suites done. **Next: carrier Bl limit enforcement for recovery.** Then: carrier refuel/rearm (landed squadrons restore endurance/ordnance), AI opponents, expanded scenarios for playtesting.
+3. **Persistence and multiplayer** *(largely complete)* — Per-game SQLite persistence, multi-game lobby, display ID alignment done. Remaining: async multiplayer turn submission.
 4. **Ship design interface** — Rules-enforced ship construction with systems validation, cost calculation, and construction-point budgets.
 5. **Strategic campaign** — System and interstellar maps, random map generation, economy, colonization, construction queues, technology trees.
 
@@ -43,7 +43,8 @@ The repository contains two engines. **Only the tactical engine is actively deve
 - **`encounter.py`** — State machine: `MOVE_SUBMISSION → COMBAT_SUBMISSION → COMBAT_SMALL → next_turn()`. Immutable frozen dataclass; all mutations return new instances. Also holds `_launch_orders` for carrier launch staging.
 - **`battle_state.py`** — Ships and squadrons during an encounter. `with_ship()`, `with_squadron()`, `without_squadron()`.
 - **`fighter_combat.py`** — COMBAT_SMALL resolver: squadron movement, intercept engagement, dogfights, attack runs. Skips docked squadrons.
-- **`squadron_state.py`** — `SquadronState` and `FighterLoadout`; `docked_at` field for carrier docking; `is_deployed` property; `dock()`/`undock()` mutations.
+- **`fighter_class.py`** — `FighterClass` dataclass (`designation`, `name`, `base_mvr`, `base_mp`); named instance `F1` (Gen 1 Fighter, mvr=4, mp=10, 1 internal mount, 2 external mounts); `FIGHTER_CLASSES` dict keyed by designation.
+- **`squadron_state.py`** — `SquadronState` and `FighterLoadout`; `FighterLoadout.fighter_class` references a `FighterClass` for base stats; ordnance penalties computed dynamically; `docked_at` field for carrier docking; `is_deployed` property; `dock()`/`undock()` mutations.
 - **`turn_orders.py`** — `ShipMoveOrder`, `ShipFireOrder`, `InterceptOrder`, `StrikeOrder`, `BreakOffOrder`, `LaunchOrder`, `RecoverOrder`.
 - **`combat.py`** — `resolve_large_fire` and `resolve_fire_all`; arc enforcement; `FireEvent` includes `ammo_consumed`.
 - **`weapons.py`** / **`missile_volley.py`** — Weapon specs (`requires_ammo` flag) and missile/PD resolution.
@@ -172,8 +173,6 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 
 ## Known Issues / Immediate Next Work
 
-- **Turn-cost enforcement (high priority)**: Ships freely choose any facing at their destination. The turn system is tracked in `ShipMoveOrder` and drafts but not validated at commitment time.
-- **Partial fighter movement**: Squadrons that can't reach a strike target stay put instead of moving as far as MP allows.
 - **Carrier Bl limit not enforced for recovery**: Recovery currently only checks for empty Bh; it does not consume a Bl slot.
 - **Fog of war / sensors** *(next feature)*: Sensor suite systems, detection ranges, hidden unit positions. Agreed next focus after current carrier work.
 - **Mid-turn movement damage** (lower priority): `ShipState.mp` reflects previous turn's capacity mid-turn. `next_turn()` recomputes correctly so this only affects the gap between damage application and turn end.

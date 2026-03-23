@@ -5,6 +5,7 @@ import pytest
 
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
+from tactical.fighter_class import F1, FighterClass
 from tactical.ship_state import ShipState
 from tactical.facing import Facing
 from tactical.squadron_state import FighterLoadout, SquadronState
@@ -43,15 +44,15 @@ class TestGunWeapon:
 class TestFighterLoadout:
     def _interceptor(self) -> FighterLoadout:
         return FighterLoadout(
-            base_mvr=4, base_mp=10,
-            internal=(WeaponType.GUN, WeaponType.GUN, WeaponType.GUN),
+            fighter_class=F1,
+            internal=(WeaponType.GUN,),
         )
 
     def _strike(self, shots: int = 2) -> FighterLoadout:
         return FighterLoadout(
-            base_mvr=3, base_mp=8,
+            fighter_class=F1,
             internal=(WeaponType.LASER,),
-            external=(WeaponType.STANDARD_MISSILE,),
+            external=(WeaponType.STANDARD_MISSILE, WeaponType.STANDARD_MISSILE),
             external_shots_remaining=shots,
         )
 
@@ -62,16 +63,16 @@ class TestFighterLoadout:
 
     def test_strike_mp_penalty_while_loaded(self):
         lo = self._strike(shots=2)
-        assert lo.effective_mp == 6  # 8 - 2
+        assert lo.effective_mp == 8  # 10 - 2
 
     def test_strike_mvr_penalty_per_shot(self):
-        assert self._strike(shots=2).effective_mvr == 1   # 3 - 2
-        assert self._strike(shots=1).effective_mvr == 2   # 3 - 1
+        assert self._strike(shots=2).effective_mvr == 2   # 4 - 2
+        assert self._strike(shots=1).effective_mvr == 3   # 4 - 1
 
     def test_strike_penalty_gone_when_expended(self):
         lo = self._strike(shots=0)
-        assert lo.effective_mp  == 8   # no penalty
-        assert lo.effective_mvr == 3   # no penalty
+        assert lo.effective_mp  == 10  # no penalty
+        assert lo.effective_mvr == 4   # no penalty
 
     def test_expend_external_shot_decrements(self):
         lo = self._strike(shots=2)
@@ -84,7 +85,8 @@ class TestFighterLoadout:
             lo.expend_external_shot()
 
     def test_effective_mvr_floor_zero(self):
-        lo = FighterLoadout(base_mvr=1, base_mp=6,
+        low_mvr_class = FighterClass(designation="T1", name="Test", base_mvr=1, base_mp=6)
+        lo = FighterLoadout(fighter_class=low_mvr_class,
                             internal=(WeaponType.GUN,),
                             external=(WeaponType.STANDARD_MISSILE,
                                       WeaponType.STANDARD_MISSILE),
@@ -102,7 +104,7 @@ def _basic_squadron(
     shots: int = 0,
 ) -> SquadronState:
     loadout = FighterLoadout(
-        base_mvr=4, base_mp=10,
+        fighter_class=F1,
         internal=(WeaponType.GUN, WeaponType.GUN),
         external=(WeaponType.STANDARD_MISSILE,) if shots > 0 else (),
         external_shots_remaining=shots,
@@ -180,7 +182,7 @@ class TestBattleStateSquadrons:
             squadron_id="S2", owner_id="B",
             pos=Hex(2, 0),  # same hex as S1 — they are engaged
             strength=5, max_strength=5,
-            loadout=FighterLoadout(base_mvr=3, base_mp=8,
+            loadout=FighterLoadout(fighter_class=F1,
                                    internal=(WeaponType.LASER,)),
             endurance=20, max_endurance=20,
         )

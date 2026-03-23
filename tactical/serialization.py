@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from sim.hexgrid import Hex
 from tactical.facing import Facing
+from tactical.fighter_class import FIGHTER_CLASSES, FighterClass
 from tactical.hull_types import HULL_TYPES, HullType
 from tactical.initiative import Initiative
 from tactical.ship_systems import System, ShipSystems, SystemStatus
@@ -125,10 +126,16 @@ def decode_ship_state(d: dict) -> ShipState:
 # FighterLoadout / SquadronState
 # ---------------------------------------------------------------------------
 
+def encode_fighter_class(fc: FighterClass) -> str:
+    return fc.designation
+
+def decode_fighter_class(s: str) -> FighterClass:
+    return FIGHTER_CLASSES[s]
+
+
 def encode_fighter_loadout(fl: FighterLoadout) -> dict:
     return {
-        "base_mvr": fl.base_mvr,
-        "base_mp": fl.base_mp,
+        "fighter_class": encode_fighter_class(fl.fighter_class),
         "internal": [wt.value for wt in fl.internal],
         "external": [wt.value for wt in fl.external],
         "external_shots_remaining": fl.external_shots_remaining,
@@ -136,8 +143,7 @@ def encode_fighter_loadout(fl: FighterLoadout) -> dict:
 
 def decode_fighter_loadout(d: dict) -> FighterLoadout:
     return FighterLoadout(
-        base_mvr=d["base_mvr"],
-        base_mp=d["base_mp"],
+        fighter_class=decode_fighter_class(d["fighter_class"]),
         internal=tuple(WeaponType(w) for w in d.get("internal", [])),
         external=tuple(WeaponType(w) for w in d.get("external", [])),
         external_shots_remaining=d.get("external_shots_remaining", 0),
