@@ -8,6 +8,7 @@ be catalogued here before they are given full tactical implementations.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Optional
 
 
@@ -68,29 +69,44 @@ class HullEntry:
 
 
 HULL_CATALOG: list[HullEntry] = [
-    HullEntry("EX", "Escort",            tier=0,  req_el=1,  hs_min=5,    hs_max=7,    cost_per_hs=3.50, epr_i="1/4",  ia="6(2-)"),
-    HullEntry("ES", "Escort Scout",      tier=1,  req_el=1,  hs_min=8,    hs_max=12,   cost_per_hs=3.85, epr_i="1/3",  ia="6(2)"),
-    HullEntry("CT", "Corvette",          tier=2,  req_el=1,  hs_min=13,   hs_max=16,   cost_per_hs=4.20, epr_i="1/2",  ia="6(2)"),
-    HullEntry("FG", "Frigate",           tier=3,  req_el=1,  hs_min=17,   hs_max=22,   cost_per_hs=4.55, epr_i="2/3",  ia="5(2)", max_speed=5, turn_cost=2),
-    HullEntry("DD", "Destroyer",         tier=4,  req_el=1,  hs_min=23,   hs_max=30,   cost_per_hs=4.90, epr_i="1",    ia="5(3-)", max_speed=5, turn_cost=2),
-    HullEntry("CL", "Light Cruiser",     tier=5,  req_el=2,  hs_min=31,   hs_max=45,   cost_per_hs=5.25, epr_i="3/2",  ia="4(3)"),
-    HullEntry("CA", "Heavy Cruiser",     tier=6,  req_el=3,  hs_min=46,   hs_max=60,   cost_per_hs=5.60, epr_i="2",    ia="4(3)", max_speed=4, turn_cost=3),
-    HullEntry("BC", "Battle Cruiser",    tier=7,  req_el=5,  hs_min=61,   hs_max=80,   cost_per_hs=5.95, epr_i="5/2",  ia="4(4-)"),
-    HullEntry("BB", "Battleship",        tier=8,  req_el=6,  hs_min=81,   hs_max=100,  cost_per_hs=6.30, epr_i="3",    ia="3(4)"),
-    HullEntry("DN", "Dreadnought",       tier=9,  req_el=7,  hs_min=101,  hs_max=130,  cost_per_hs=6.65, epr_i="4",    ia="3(4)"),
-    HullEntry("SD", "Superdreadnought",  tier=10, req_el=9,  hs_min=131,  hs_max=165,  cost_per_hs=7.00, epr_i="5",    ia="3(5-)"),
-    HullEntry("MT", "Monitor",           tier=11, req_el=11, hs_min=166,  hs_max=200,  cost_per_hs=7.35, epr_i="6",    ia="2(5)"),
-    HullEntry("HM", "Heavy Monitor",     tier=12, req_el=13, hs_min=201,  hs_max=250,  cost_per_hs=7.70, epr_i="15/2", ia="2(5)"),
-    HullEntry("SM", "Super Monitor",     tier=13, req_el=15, hs_min=251,  hs_max=350,  cost_per_hs=8.05, epr_i="9",    ia="2(6-)"),
-    HullEntry("LN", "Line Ship",         tier=14, req_el=18, hs_min=351,  hs_max=500,  cost_per_hs=8.40, epr_i="10",   ia="1(6)"),
-    HullEntry("JG", "Juggernaut",        tier=15, req_el=22, hs_min=501,  hs_max=750,  cost_per_hs=8.50, epr_i="14",   ia="1(6)"),
-    HullEntry("MM", "Mammoth",           tier=16, req_el=27, hs_min=751,  hs_max=1000, cost_per_hs=8.50, epr_i="20",   ia="1(7-)"),
-    HullEntry("CO", "Colossus",          tier=17, req_el=33, hs_min=1001, hs_max=1300, cost_per_hs=8.50, epr_i="30",   ia="0(7)"),
-    HullEntry("GN", "Giant",             tier=18, req_el=40, hs_min=1301, hs_max=1600, cost_per_hs=8.50, epr_i="35",   ia="0(7)"),
-    HullEntry("TN", "Titan",             tier=19, req_el=48, hs_min=1601, hs_max=2000, cost_per_hs=8.50, epr_i="40",   ia="0(8-)"),
+    HullEntry("EX", "Escort",            tier=0,  req_el=1,  hs_min=5,    hs_max=7,    cost_per_hs=3.50, epr_i="1/4",  ia="6(2-)",  max_speed=6, turn_cost=2),
+    HullEntry("ES", "Escort Scout",      tier=1,  req_el=1,  hs_min=8,    hs_max=12,   cost_per_hs=3.85, epr_i="1/3",  ia="6(2)",   max_speed=6, turn_cost=2),
+    HullEntry("CT", "Corvette",          tier=2,  req_el=1,  hs_min=13,   hs_max=16,   cost_per_hs=4.20, epr_i="1/2",  ia="6(2)",   max_speed=6, turn_cost=2),
+    HullEntry("FG", "Frigate",           tier=3,  req_el=1,  hs_min=17,   hs_max=22,   cost_per_hs=4.55, epr_i="2/3",  ia="5(2)",   max_speed=5, turn_cost=2),
+    HullEntry("DD", "Destroyer",         tier=4,  req_el=1,  hs_min=23,   hs_max=30,   cost_per_hs=4.90, epr_i="1",    ia="5(3-)",  max_speed=5, turn_cost=3),
+    HullEntry("CL", "Light Cruiser",     tier=5,  req_el=2,  hs_min=31,   hs_max=45,   cost_per_hs=5.25, epr_i="3/2",  ia="4(3)",   max_speed=4, turn_cost=3),
+    HullEntry("CA", "Heavy Cruiser",     tier=6,  req_el=3,  hs_min=46,   hs_max=60,   cost_per_hs=5.60, epr_i="2",    ia="4(3)",   max_speed=4, turn_cost=3),
+    HullEntry("BC", "Battle Cruiser",    tier=7,  req_el=5,  hs_min=61,   hs_max=80,   cost_per_hs=5.95, epr_i="5/2",  ia="4(4-)",  max_speed=4, turn_cost=4),
+    HullEntry("BB", "Battleship",        tier=8,  req_el=6,  hs_min=81,   hs_max=100,  cost_per_hs=6.30, epr_i="3",    ia="3(4)",   max_speed=3, turn_cost=4),
+    HullEntry("DN", "Dreadnought",       tier=9,  req_el=7,  hs_min=101,  hs_max=130,  cost_per_hs=6.65, epr_i="4",    ia="3(4)",   max_speed=3, turn_cost=4),
+    HullEntry("SD", "Superdreadnought",  tier=10, req_el=9,  hs_min=131,  hs_max=165,  cost_per_hs=7.00, epr_i="5",    ia="3(5-)",  max_speed=3, turn_cost=5),
+    HullEntry("MT", "Monitor",           tier=11, req_el=11, hs_min=166,  hs_max=200,  cost_per_hs=7.35, epr_i="6",    ia="2(5)",   max_speed=2, turn_cost=5),
+    HullEntry("HM", "Heavy Monitor",     tier=12, req_el=13, hs_min=201,  hs_max=250,  cost_per_hs=7.70, epr_i="15/2", ia="2(5)",   max_speed=2, turn_cost=5),
+    HullEntry("SM", "Super Monitor",     tier=13, req_el=15, hs_min=251,  hs_max=350,  cost_per_hs=8.05, epr_i="9",    ia="2(6-)",  max_speed=2, turn_cost=6),
+    HullEntry("LN", "Line Ship",         tier=14, req_el=18, hs_min=351,  hs_max=500,  cost_per_hs=8.40, epr_i="10",   ia="1(6)",   max_speed=1, turn_cost=6),
+    HullEntry("JG", "Juggernaut",        tier=15, req_el=22, hs_min=501,  hs_max=750,  cost_per_hs=8.50, epr_i="14",   ia="1(6)",   max_speed=1, turn_cost=6),
+    HullEntry("MM", "Mammoth",           tier=16, req_el=27, hs_min=751,  hs_max=1000, cost_per_hs=8.50, epr_i="20",   ia="1(7-)",  max_speed=1, turn_cost=7),
+    HullEntry("CO", "Colossus",          tier=17, req_el=33, hs_min=1001, hs_max=1300, cost_per_hs=8.50, epr_i="30",   ia="0(7)",   max_speed=0, turn_cost=7),
+    HullEntry("GN", "Giant",             tier=18, req_el=40, hs_min=1301, hs_max=1600, cost_per_hs=8.50, epr_i="35",   ia="0(7)",   max_speed=0, turn_cost=7),
+    HullEntry("TN", "Titan",             tier=19, req_el=48, hs_min=1601, hs_max=2000, cost_per_hs=8.50, epr_i="40",   ia="0(8-)",  max_speed=0, turn_cost=8),
 ]
 
 HULL_BY_DESIGNATION: dict[str, HullEntry] = {h.designation: h for h in HULL_CATALOG}
+
+
+def hull_engines_per_room(hull: HullEntry) -> int:
+    """Return the standard number of engine systems placed in one engine room.
+
+    Rules:
+      EPR ≤ 1  → 1 engine per room (each room yields floor(1/EPR) MP)
+      EPR > 1  → EPR engines per room (each room yields 1 MP)
+                 For non-integer EPR the *last* room gets ceil(EPR) engines;
+                 this function returns floor(EPR) as the standard room size.
+    """
+    epr = Fraction(hull.epr_i)
+    if epr <= 1:
+        return 1
+    return int(epr)  # floor for non-integer EPR > 1
 
 
 def hull_base_cost(hull: HullEntry, hull_spaces: int) -> float:

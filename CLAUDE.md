@@ -143,12 +143,12 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 
 **Hull types** — EPR semantics: `MP = active_engine_count / EPR`.
 
-| Hull | EPR | Max speed | Turn cost |
-|------|-----|-----------|-----------|
-| FG (Frigate) | 2/3 | 5 | 2 |
-| DD (Destroyer) | 1 | 5 | 2 |
-| CA (Cruiser) | 2 | 4 | 3 |
-| CV (Carrier) | 2 | 4 | 3 |
+| Hull | EPR | Engines/room | Max speed | Turn cost |
+|------|-----|-------------|-----------|-----------|
+| FG (Frigate) | 2/3 | 1 | 5 | 2 |
+| DD (Destroyer) | 1 | 1 | 5 | 3 |
+| CA (Cruiser) | 2 | 2 | 4 | 3 |
+| CV (Carrier) | 2 | 2 | 4 | 3 |
 
 ### Default Scenario
 

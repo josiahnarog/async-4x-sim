@@ -211,6 +211,8 @@
 <div id="stats-bar">
   <span>Hull spaces: <span id="stat-used">0</span> / <span id="stat-total">20</span></span>
   <span>Remaining: <span id="stat-remaining">20</span></span>
+  <span>Max speed: <span id="stat-max-mp">–</span></span>
+  <span>Turn cost: <span id="stat-turn-cost">–</span></span>
   <span>Hull cost: <span id="stat-hull-cost">–</span> cr</span>
   <span>Systems cost: <span id="stat-sys-cost">0</span> cr</span>
   <span>Total: <span id="stat-total-cost">–</span> cr</span>
@@ -343,8 +345,9 @@ const hullInfoEl  = document.getElementById("hull-info");
 function updateHullInfo() {
   const h = HULL_MAP[hullSelect.value];
   if (!h) return;
+  const speedStr = (h.max_speed != null) ? `  |  Spd: ${h.max_speed}  |  TC: ${h.turn_cost}` : "";
   hullInfoEl.textContent =
-    `${h.hs_min}–${h.hs_max} HS  |  Eng: ${h.epr_i}  |  Ia: ${h.ia}  |  EL: ${h.req_el}`;
+    `${h.hs_min}–${h.hs_max} HS  |  EPR: ${h.epr_i}  |  Ia: ${h.ia}  |  EL: ${h.req_el}${speedStr}`;
   const cur = parseInt(hullSizeEl.value) || h.hs_min;
   hullSizeEl.min   = h.hs_min;
   hullSizeEl.max   = h.hs_max;
@@ -358,12 +361,19 @@ hullSizeEl.addEventListener("input",  updateStats);
 // ---------------------------------------------------------------------------
 // Stats
 // ---------------------------------------------------------------------------
+function parseEpr(eprStr) {
+  // Parse fraction strings like "2/3", "3/2", "1", "15/2" → float
+  const parts = eprStr.split("/");
+  return parts.length === 2 ? parseFloat(parts[0]) / parseFloat(parts[1]) : parseFloat(parts[0]);
+}
+
 function updateStats() {
-  let usedHS = 0, sysCost = 0;
+  let usedHS = 0, sysCost = 0, totalEngines = 0;
   track.forEach(slot => {
     if (slot.type === "engine_room") {
-      usedHS  += slot.count;
-      sysCost += slot.count * 20;
+      usedHS       += slot.count;
+      sysCost      += slot.count * 20;
+      totalEngines += slot.count;
     } else {
       const s = SYS_MAP[slot.code];
       if (s) { usedHS += s.hull_spaces; sysCost += s.cost; }
@@ -375,11 +385,23 @@ function updateStats() {
   const hullCost  = h ? Math.round(h.cost_per_hs * totalHS * 100) / 100 : 0;
   const totalCost = Math.round((hullCost + sysCost) * 100) / 100;
 
+  // MP calculation: floor(engines / EPR), capped at max_speed
+  let mpStr = "–", tcStr = "–";
+  if (h && h.max_speed != null) {
+    const epr = parseEpr(h.epr_i);
+    const rawMp = Math.floor(totalEngines / epr);
+    const mp = Math.min(rawMp, h.max_speed);
+    mpStr = `${mp} / ${h.max_speed}`;
+    tcStr = String(h.turn_cost);
+  }
+
   document.getElementById("stat-used").textContent      = usedHS;
   document.getElementById("stat-total").textContent     = totalHS;
   const remEl = document.getElementById("stat-remaining");
   remEl.textContent  = remaining;
   remEl.className    = remaining < 0 ? "stat-warn" : remaining === 0 ? "stat-ok" : "";
+  document.getElementById("stat-max-mp").textContent    = mpStr;
+  document.getElementById("stat-turn-cost").textContent = tcStr;
   document.getElementById("stat-hull-cost").textContent  = hullCost.toFixed(2);
   document.getElementById("stat-sys-cost").textContent   = sysCost;
   document.getElementById("stat-total-cost").textContent = totalCost.toFixed(2);
@@ -445,7 +467,9 @@ function addSystem(code) {
 }
 
 function addEngineRoom() {
-  track.push({type:"engine_room", count:1});
+  const h = HULL_MAP[hullSelect.value];
+  const count = (h && h.engines_per_room) ? h.engines_per_room : 1;
+  track.push({type:"engine_room", count});
   renderTrack();
 }
 

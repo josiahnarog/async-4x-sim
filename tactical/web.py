@@ -19,7 +19,7 @@ from tactical.persistence import (
 from tactical.ship_catalog import (
     HULL_CATALOG, SYSTEMS, HULL_BY_DESIGNATION, SYSTEMS_BY_CODE,
     track_to_system_string, system_string_to_track,
-    hull_base_cost, systems_cost, systems_hull_spaces,
+    hull_base_cost, systems_cost, systems_hull_spaces, hull_engines_per_room,
 )
 
 router = APIRouter(prefix="/tactical")
@@ -1005,7 +1005,9 @@ async def designer_index(request: Request):
         "hulls":   [{"designation": h.designation, "name": h.name,
                      "hs_min": h.hs_min, "hs_max": h.hs_max,
                      "cost_per_hs": h.cost_per_hs, "epr_i": h.epr_i,
-                     "ia": h.ia, "req_el": h.req_el}
+                     "ia": h.ia, "req_el": h.req_el,
+                     "max_speed": h.max_speed, "turn_cost": h.turn_cost,
+                     "engines_per_room": hull_engines_per_room(h)}
                     for h in hulls],
         "systems": [{"code": s.code, "name": s.name,
                      "cost": s.cost, "hull_spaces": s.hull_spaces}

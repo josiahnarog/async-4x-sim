@@ -23,7 +23,7 @@ FG = HullType(
     designation="FG",
     name="Frigate",
     engine_power_ratio=Fraction(2, 3),
-    engines_per_room=3,
+    engines_per_room=1,
     max_speed=5,
     turn_cost=2,
 )
@@ -32,16 +32,16 @@ DD = HullType(
     designation="DD",
     name="Destroyer",
     engine_power_ratio=Fraction(1, 1),
-    engines_per_room=2,
+    engines_per_room=1,
     max_speed=5,
-    turn_cost=2,
+    turn_cost=3,
 )
 
 CA = HullType(
     designation="CA",
     name="Cruiser",
     engine_power_ratio=Fraction(2, 1),
-    engines_per_room=1,
+    engines_per_room=2,
     max_speed=4,
     turn_cost=3,
 )
@@ -50,7 +50,7 @@ CV = HullType(
     designation="CV",
     name="Carrier",
     engine_power_ratio=Fraction(2, 1),
-    engines_per_room=1,
+    engines_per_room=2,
     max_speed=4,
     turn_cost=3,
 )
