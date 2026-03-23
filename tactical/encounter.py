@@ -440,6 +440,8 @@ class Encounter:
         new_battle = self.battle
 
         # Process recovery orders before fighter combat.
+        # Each active Bl can support at most one recovery per turn.
+        recoveries_this_turn: dict[str, int] = {}  # carrier_id → count
         non_recovery_orders: dict = {}
         for sq_id, order in self._squadron_orders.items():
             if not isinstance(order, RecoverOrder):
@@ -454,17 +456,21 @@ class Encounter:
                 continue  # not at carrier hex — silently ignore
             if carrier.systems is None:
                 continue
+            bl_count = carrier.systems.launch_bay_count()
+            if recoveries_this_turn.get(carrier_id, 0) >= bl_count:
+                continue  # no Bl slots remaining — silently ignore
             has_empty_bh = any(
                 s.is_active() and s.token == "Bh" and s.occupant is None
                 for s in carrier.systems
             )
             if not has_empty_bh:
-                continue  # no room — silently ignore
+                continue  # no Bh room — silently ignore
             new_sys = carrier.systems.dock_squadron(sq_id)
             carrier = dataclasses.replace(carrier, systems=new_sys)
             new_battle = new_battle.with_ship(carrier)
             new_sq = sq.dock(carrier_id)
             new_battle = new_battle.with_squadron(new_sq)
+            recoveries_this_turn[carrier_id] = recoveries_this_turn.get(carrier_id, 0) + 1
             all_events.append(RecoveryEvent(squadron_id=sq_id, carrier_id=carrier_id))
 
         new_battle, fighter_events = resolve_combat_small(

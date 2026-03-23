@@ -31,7 +31,7 @@ The repository contains two engines. **Only the tactical engine is actively deve
 ## Development Roadmap
 
 1. **Tight combat loop** *(complete)* — Win/loss detection, endurance/fuel expiry, transit simultaneity, magazine ammo, carrier launch/recovery, turn-cost enforcement, fighter class/loadout system all done.
-2. **Combat features** *(in progress)* — Fog of war and sensor suites done. **Next: carrier Bl limit enforcement for recovery.** Then: carrier refuel/rearm (landed squadrons restore endurance/ordnance), AI opponents, expanded scenarios for playtesting.
+2. **Combat features** *(in progress)* — Fog of war, sensor suites, carrier Bl enforcement done. **Next: carrier refuel/rearm** (landed squadrons restore endurance/ordnance). Then: AI opponents, expanded scenarios for playtesting.
 3. **Persistence and multiplayer** *(largely complete)* — Per-game SQLite persistence, multi-game lobby, display ID alignment done. Remaining: async multiplayer turn submission.
 4. **Ship design interface** — Rules-enforced ship construction with systems validation, cost calculation, and construction-point budgets.
 5. **Strategic campaign** — System and interstellar maps, random map generation, economy, colonization, construction queues, technology trees.
@@ -173,6 +173,5 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 
 ## Known Issues / Immediate Next Work
 
-- **Carrier Bl limit not enforced for recovery**: Recovery currently only checks for empty Bh; it does not consume a Bl slot.
-- **Fog of war / sensors** *(next feature)*: Sensor suite systems, detection ranges, hidden unit positions. Agreed next focus after current carrier work.
+- **Carrier refuel/rearm**: Landed squadrons should restore endurance and ordnance while docked. Currently recovery docks the squadron but no refit logic runs.
 - **Mid-turn movement damage** (lower priority): `ShipState.mp` reflects previous turn's capacity mid-turn. `next_turn()` recomputes correctly so this only affects the gap between damage application and turn end.
