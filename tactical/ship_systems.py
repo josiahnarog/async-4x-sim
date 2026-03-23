@@ -461,6 +461,25 @@ class ShipSystems:
                 return ShipSystems(tuple(systems))
         raise ValueError(f"Squadron {squadron_id!r} not found in any hangar bay")
 
+    def shooting_mods(self) -> "ToHitMod":
+        """Aggregate to-hit modifiers arising from ship condition.
+
+        These are applied to every weapon fired by this ship.  Add new
+        condition checks here; the results are summed automatically.
+
+        Current conditions:
+          - All Q (crew quarters / life support) destroyed:
+              crew must fight in vacuum suits → −2 to all shooting (target_delta)
+        """
+        from tactical.attack_context import ToHitMod
+        target_delta = 0
+
+        q_systems = [s for s in self.systems if s.base == "Q"]
+        if q_systems and not any(s.is_active() for s in q_systems):
+            target_delta -= 2
+
+        return ToHitMod(target_delta=target_delta)
+
     def point_defense(self) -> Tuple[int, int]:
         """
         Returns (shots, to_hit) for point defense for the current incoming volley.

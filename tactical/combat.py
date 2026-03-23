@@ -81,7 +81,8 @@ def resolve_large_fire(
     # Arc modifiers: bonus to-hit when attacking from the target's blind spot.
     attacker_in_target_rear = arc_of(int(target.facing), -dq, -dr) == Arc.REAR
     arc_target_delta = REAR_ARC_TO_HIT_BONUS if attacker_in_target_rear else 0
-    mods = combine_mods([ToHitMod(target_delta=arc_target_delta)])
+    condition_mod = attacker.systems.shooting_mods() if attacker.systems is not None else ToHitMod()
+    mods = combine_mods([ToHitMod(target_delta=arc_target_delta), condition_mod])
 
     effective_range = max(0, base_range + mods.range_shift)
     ctx = AttackContext(

@@ -22,15 +22,16 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
     """Two frigates with four fighter squadrons for development playtesting."""
     rng = random.Random(seed)
 
-    a1_systems = "YSSSSSAAAAA(I)FFRRD(I)(I)(I)"
-    fg_systems  = "SSSSSAAAAA(I)FFRRD(I)(I)(I)"
+    fg_systems  = "SSSSSAAAAA(I)FFRRQD(I)(I)(I)"
+    cv_systems_str = "SSSAAAFQ(I)(I)BhBhBlBlR"
+
     a = ShipState(
-        ship_id="A1", owner_id="A", pos=Hex(0, 0), facing=Facing.NE,
+        ship_id="A1", owner_id="A", pos=Hex(-1, 0), facing=Facing.NE,
         mp=5, turn_cost=FG.turn_cost, turn_charge=0,
-        systems=ShipSystems.parse(a1_systems), hull_type=FG,
+        systems=ShipSystems.parse(fg_systems), hull_type=FG,
     )
     b = ShipState(
-        ship_id="B1", owner_id="B", pos=Hex(6, 0), facing=Facing.S,
+        ship_id="B1", owner_id="B", pos=Hex(7, 0), facing=Facing.S,
         mp=5, turn_cost=FG.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(fg_systems), hull_type=FG,
     )
@@ -70,15 +71,13 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
                                external_shots_remaining=2),
         endurance=20, max_endurance=20,
     )
-
-    cv_systems_str = "SSSAAAF(I)(I)BhBhBlBl"
     a2 = ShipState(
         ship_id="A2", owner_id="A", pos=Hex(-10, 0), facing=Facing.NE,
         mp=4, turn_cost=CV.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(cv_systems_str), hull_type=CV,
     )
     b2 = ShipState(
-        ship_id="B2", owner_id="B", pos=Hex(10, 0), facing=Facing.SW,
+        ship_id="B2", owner_id="B", pos=Hex(20, 0), facing=Facing.SW,
         mp=4, turn_cost=CV.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(cv_systems_str), hull_type=CV,
     )
