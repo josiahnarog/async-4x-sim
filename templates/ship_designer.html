@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Ship Designer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+      margin: 0; background: #1a1a2e; color: #e0e0e0;
+      display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+    }
+
+    /* ── Header ── */
+    #header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 16px; background: #12122a;
+      border-bottom: 1px solid #333; flex-shrink: 0; flex-wrap: wrap;
+    }
+    #header a { color: #a8d8ea; font-size: 0.85em; text-decoration: none; }
+    #header a:hover { text-decoration: underline; }
+    #ship-name {
+      flex: 1; min-width: 140px; padding: 6px 10px;
+      border: 1px solid #444; border-radius: 4px;
+      background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.95em;
+    }
+    #hull-select {
+      padding: 6px 10px; border: 1px solid #444; border-radius: 4px;
+      background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.88em;
+    }
+    #hull-size {
+      width: 72px; padding: 6px 10px;
+      border: 1px solid #444; border-radius: 4px;
+      background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.88em;
+    }
+    .label { color: #888; font-size: 0.82em; white-space: nowrap; }
+    .btn {
+      padding: 6px 14px; border-radius: 6px; border: 1px solid #555;
+      background: #2a2a4a; color: #e0e0e0; cursor: pointer;
+      font-family: inherit; font-size: 0.88em; text-decoration: none;
+    }
+    .btn:hover { background: #3a3a6a; }
+    .btn-danger { border-color: #663; background: #332a2a; color: #f08080; }
+    .btn-danger:hover { background: #4a2a2a; }
+    .btn-accent { border-color: #4a8; background: #1a3a2a; color: #8fd8b0; }
+    .btn-accent:hover { background: #2a4a3a; }
+
+    /* ── Stats bar ── */
+    #stats-bar {
+      display: flex; gap: 24px; align-items: center;
+      padding: 6px 16px; background: #111128; border-bottom: 1px solid #2a2a3a;
+      font-size: 0.82em; color: #aaa; flex-shrink: 0;
+    }
+    #stats-bar span { color: #e0e0e0; }
+    .stat-warn { color: #f08080 !important; font-weight: bold; }
+    .stat-ok   { color: #8fd8b0 !important; }
+
+    /* ── Main layout ── */
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Palette ── */
+    #palette {
+      width: 220px; flex-shrink: 0; overflow-y: auto;
+      background: #111128; border-right: 1px solid #2a2a3a; padding: 8px 0;
+    }
+    #palette h3 {
+      margin: 0 0 4px; padding: 6px 12px;
+      font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em;
+      color: #666; border-bottom: 1px solid #222;
+    }
+    .palette-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 12px; cursor: pointer; border-bottom: 1px solid #1a1a2a;
+      transition: background 0.1s;
+    }
+    .palette-item:hover { background: #2a2a4a; }
+    .palette-chip {
+      flex-shrink: 0; width: 36px; height: 28px;
+      border-radius: 4px; display: flex; align-items: center; justify-content: center;
+      font-size: 0.78em; font-weight: bold; border: 1px solid rgba(255,255,255,0.12);
+    }
+    .palette-info { flex: 1; min-width: 0; }
+    .palette-name { font-size: 0.82em; color: #ccc; }
+    .palette-meta { font-size: 0.72em; color: #666; margin-top: 1px; }
+    /* Add engine room button */
+    #add-engine-room {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 12px; cursor: pointer; border-bottom: 1px solid #1a1a2a;
+      border-top: 1px solid #333; transition: background 0.1s;
+    }
+    #add-engine-room:hover { background: #2a2a4a; }
+
+    /* ── Track area ── */
+    #track-area {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+    }
+    #track-header {
+      padding: 8px 16px; font-size: 0.75em; color: #555;
+      border-bottom: 1px solid #1a1a2a; flex-shrink: 0;
+    }
+    #track-scroll { flex: 1; overflow-x: auto; overflow-y: auto; padding: 16px; }
+    #track {
+      display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start;
+      min-height: 80px; padding: 10px;
+      border: 1px dashed #333; border-radius: 6px;
+    }
+    #track.drag-over { border-color: #a8d8ea; background: #1a2a3a; }
+
+    /* System tiles on track */
+    .track-tile {
+      position: relative; border-radius: 5px; cursor: grab;
+      border: 1px solid rgba(255,255,255,0.15); user-select: none;
+      transition: transform 0.1s, box-shadow 0.1s;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; padding: 4px 6px; min-width: 44px;
+    }
+    .track-tile:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    .track-tile.dragging { opacity: 0.4; transform: scale(0.95); }
+    .track-tile.drag-target { border-color: #a8d8ea; box-shadow: 0 0 0 2px #a8d8ea44; }
+    .tile-code { font-size: 0.9em; font-weight: bold; }
+    .tile-hs   { font-size: 0.65em; color: rgba(255,255,255,0.55); margin-top: 1px; }
+    .tile-remove {
+      position: absolute; top: -6px; right: -6px;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: #663; color: #f08080; border: 1px solid #f08080;
+      font-size: 0.65em; display: none; align-items: center; justify-content: center;
+      cursor: pointer; z-index: 10; line-height: 1;
+    }
+    .track-tile:hover .tile-remove { display: flex; }
+
+    /* Engine room tile */
+    .tile-engine-room {
+      border-style: dashed !important; border-width: 1px;
+      flex-direction: column; gap: 2px;
+    }
+    .tile-engine-room .tile-engines {
+      display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; max-width: 80px;
+    }
+    .engine-dot {
+      width: 12px; height: 12px; border-radius: 2px;
+      background: #c09840; border: 1px solid rgba(255,255,255,0.25);
+    }
+    .engine-count-ctrl {
+      display: flex; align-items: center; gap: 4px; margin-top: 3px;
+    }
+    .engine-count-ctrl button {
+      width: 16px; height: 16px; border-radius: 3px; border: 1px solid #555;
+      background: #2a2a3a; color: #ccc; cursor: pointer; font-size: 0.7em;
+      display: flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .engine-count-ctrl button:hover { background: #3a3a5a; }
+    .engine-count-label { font-size: 0.68em; color: #aaa; }
+
+    /* ── Saved designs ── */
+    #designs-panel {
+      width: 220px; flex-shrink: 0; overflow-y: auto;
+      background: #111128; border-left: 1px solid #2a2a3a; padding: 8px 0;
+    }
+    #designs-panel h3 {
+      margin: 0; padding: 6px 12px;
+      font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.08em;
+      color: #666; border-bottom: 1px solid #222;
+    }
+    .design-item {
+      padding: 8px 12px; border-bottom: 1px solid #1a1a2a;
+    }
+    .design-name { font-size: 0.85em; color: #a8d8ea; cursor: pointer; }
+    .design-name:hover { text-decoration: underline; }
+    .design-meta { font-size: 0.72em; color: #555; margin-top: 2px; }
+    .design-del  { font-size: 0.72em; color: #f08080; cursor: pointer; margin-left: 8px; }
+    .design-del:hover { text-decoration: underline; }
+
+    /* ── Hull info panel ── */
+    #hull-info {
+      font-size: 0.78em; color: #666; padding: 4px 8px;
+      background: #0d0d1a; border: 1px solid #2a2a3a; border-radius: 4px;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <a href="/tactical/">← Lobby</a>
+  <span class="label">Name:</span>
+  <input id="ship-name" type="text" placeholder="Ship name…" maxlength="60"/>
+  <span class="label">Hull:</span>
+  <select id="hull-select">
+    {% for h in hulls %}
+    <option value="{{ h.designation }}"
+            data-hs-min="{{ h.hs_min }}" data-hs-max="{{ h.hs_max }}"
+            data-cost="{{ h.cost_per_hs }}" data-epr="{{ h.epr_i }}"
+            data-ia="{{ h.ia }}" data-el="{{ h.req_el }}">
+      {{ h.designation }} — {{ h.name }}
+    </option>
+    {% endfor %}
+  </select>
+  <span class="label">Size (HS):</span>
+  <input id="hull-size" type="number" min="1" max="9999" value="20"/>
+  <div id="hull-info">17–22 HS &nbsp;|&nbsp; Eng: 2/3 &nbsp;|&nbsp; Ia: 5(2) &nbsp;|&nbsp; EL: 1</div>
+  <button class="btn btn-accent" onclick="saveDesign()">Save Design</button>
+  <button class="btn" onclick="newDesign()">New</button>
+  <form id="delete-form" method="post" style="display:inline">
+    <button type="button" class="btn btn-danger" onclick="deleteDesign()" id="delete-btn" style="display:none">Delete</button>
+  </form>
+</div>
+
+<!-- Stats bar -->
+<div id="stats-bar">
+  <span>Hull spaces: <span id="stat-used">0</span> / <span id="stat-total">20</span></span>
+  <span>Remaining: <span id="stat-remaining">20</span></span>
+  <span>Hull cost: <span id="stat-hull-cost">–</span> cr</span>
+  <span>Systems cost: <span id="stat-sys-cost">0</span> cr</span>
+  <span>Total: <span id="stat-total-cost">–</span> cr</span>
+</div>
+
+<!-- Main area -->
+<div id="main">
+
+  <!-- System palette -->
+  <div id="palette">
+    <h3>Systems</h3>
+    {% for s in systems %}
+    <div class="palette-item" onclick="addSystem('{{ s.code }}')">
+      <div class="palette-chip sys-color-{{ s.code | replace('Bf','Bf') | replace('Bl','Bl') }}"
+           style="{{ 'background:' + systemColor(s.code) if false else '' }}"
+           data-code="{{ s.code }}">{{ s.code }}</div>
+      <div class="palette-info">
+        <div class="palette-name">{{ s.name }}</div>
+        <div class="palette-meta">{{ s.hull_spaces }} HS &nbsp;·&nbsp; {{ s.cost }} cr</div>
+      </div>
+    </div>
+    {% endfor %}
+    <div id="add-engine-room" onclick="addEngineRoom()">
+      <div class="palette-chip" style="background:#3a3010; color:#c09840; border-color:#c09840aa;">(I)</div>
+      <div class="palette-info">
+        <div class="palette-name">Engine Room</div>
+        <div class="palette-meta">1+ I systems &nbsp;·&nbsp; 20 cr/eng</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Track area -->
+  <div id="track-area">
+    <div id="track-header">
+      Click a system to add it to the track &nbsp;·&nbsp; Drag tiles to reorder &nbsp;·&nbsp; Hover to remove
+    </div>
+    <div id="track-scroll">
+      <div id="track" ondragover="onDragOver(event)" ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
+        <span id="track-empty" style="color:#444; font-size:0.85em; align-self:center; padding:8px;">
+          No systems added yet — click from the palette to begin
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Saved designs -->
+  <div id="designs-panel">
+    <h3>Saved Designs</h3>
+    {% if designs %}
+      {% for d in designs %}
+      <div class="design-item">
+        <div>
+          <span class="design-name" onclick="loadDesignFromServer('{{ d.design_id }}')">{{ d.name }}</span>
+          <span class="design-del" onclick="deleteDesignById('{{ d.design_id }}', '{{ d.name }}')">✕</span>
+        </div>
+        <div class="design-meta">{{ d.hull_type }} · {{ d.hull_spaces }} HS</div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div style="padding:12px; color:#444; font-size:0.82em; font-style:italic;">No saved designs yet.</div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- Hidden form for delete -->
+<form id="real-delete-form" method="post" style="display:none">
+  <input type="hidden" name="_method" value="delete"/>
+</form>
+
+<!-- Pre-load edit data if opening an existing design -->
+{% if edit_design %}
+<script>
+  window._EDIT_DESIGN = {{ edit_design | tojson }};
+</script>
+{% endif %}
+
+<script>
+// ---------------------------------------------------------------------------
+// Catalog data injected from server
+// ---------------------------------------------------------------------------
+const HULLS   = {{ hulls   | tojson }};
+const SYSTEMS = {{ systems | tojson }};
+
+const SYS_MAP = {};
+SYSTEMS.forEach(s => SYS_MAP[s.code] = s);
+
+const HULL_MAP = {};
+HULLS.forEach(h => HULL_MAP[h.designation] = h);
+
+// ---------------------------------------------------------------------------
+// System color palette
+// ---------------------------------------------------------------------------
+const SYS_COLORS = {
+  S:  {bg:"#1a3a5a", fg:"#7ab8e8", bd:"#4a88c8"},
+  A:  {bg:"#2a2a1a", fg:"#c8b870", bd:"#888840"},
+  Q:  {bg:"#1a2a1a", fg:"#88c880", bd:"#488848"},
+  I:  {bg:"#3a3010", fg:"#c09840", bd:"#c09840"},
+  Y:  {bg:"#1a3a3a", fg:"#70d0d0", bd:"#409898"},
+  X:  {bg:"#1a2a3a", fg:"#80b0d0", bd:"#407898"},
+  D:  {bg:"#2a1a3a", fg:"#c080e0", bd:"#8040a8"},
+  L:  {bg:"#3a1a1a", fg:"#e87070", bd:"#c83030"},
+  N:  {bg:"#2a1a2a", fg:"#e070d0", bd:"#a030a0"},
+  R:  {bg:"#3a2a0a", fg:"#e0a040", bd:"#c07820"},
+  F:  {bg:"#1a3a1a", fg:"#70e890", bd:"#30a858"},
+  E:  {bg:"#1a2a3a", fg:"#70a8e8", bd:"#3068c8"},
+  K:  {bg:"#3a1a0a", fg:"#e07840", bd:"#c04820"},
+  Bl: {bg:"#2a1a2a", fg:"#d070b8", bd:"#901880"},
+  Bf: {bg:"#3a1a3a", fg:"#d888d0", bd:"#a848a0"},
+};
+function sysStyle(code) {
+  const c = SYS_COLORS[code] || {bg:"#2a2a2a", fg:"#aaa", bd:"#555"};
+  return `background:${c.bg}; color:${c.fg}; border-color:${c.bd};`;
+}
+
+// ---------------------------------------------------------------------------
+// Track state
+// ---------------------------------------------------------------------------
+// Each slot: {type:"system", code:"S"} | {type:"engine_room", count:1}
+let track = [];
+let currentDesignId = null;
+
+// ---------------------------------------------------------------------------
+// Hull info update
+// ---------------------------------------------------------------------------
+const hullSelect  = document.getElementById("hull-select");
+const hullSizeEl  = document.getElementById("hull-size");
+const hullInfoEl  = document.getElementById("hull-info");
+
+function updateHullInfo() {
+  const h = HULL_MAP[hullSelect.value];
+  if (!h) return;
+  hullInfoEl.textContent =
+    `${h.hs_min}–${h.hs_max} HS  |  Eng: ${h.epr_i}  |  Ia: ${h.ia}  |  EL: ${h.req_el}`;
+  const cur = parseInt(hullSizeEl.value) || h.hs_min;
+  hullSizeEl.min   = h.hs_min;
+  hullSizeEl.max   = h.hs_max;
+  if (cur < h.hs_min) hullSizeEl.value = h.hs_min;
+  if (cur > h.hs_max) hullSizeEl.value = h.hs_max;
+  updateStats();
+}
+hullSelect.addEventListener("change", updateHullInfo);
+hullSizeEl.addEventListener("input",  updateStats);
+
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+function updateStats() {
+  let usedHS = 0, sysCost = 0;
+  track.forEach(slot => {
+    if (slot.type === "engine_room") {
+      usedHS  += slot.count;
+      sysCost += slot.count * 20;
+    } else {
+      const s = SYS_MAP[slot.code];
+      if (s) { usedHS += s.hull_spaces; sysCost += s.cost; }
+    }
+  });
+  const totalHS   = parseInt(hullSizeEl.value) || 0;
+  const remaining = totalHS - usedHS;
+  const h         = HULL_MAP[hullSelect.value];
+  const hullCost  = h ? Math.round(h.cost_per_hs * totalHS * 100) / 100 : 0;
+  const totalCost = Math.round((hullCost + sysCost) * 100) / 100;
+
+  document.getElementById("stat-used").textContent      = usedHS;
+  document.getElementById("stat-total").textContent     = totalHS;
+  const remEl = document.getElementById("stat-remaining");
+  remEl.textContent  = remaining;
+  remEl.className    = remaining < 0 ? "stat-warn" : remaining === 0 ? "stat-ok" : "";
+  document.getElementById("stat-hull-cost").textContent  = hullCost.toFixed(2);
+  document.getElementById("stat-sys-cost").textContent   = sysCost;
+  document.getElementById("stat-total-cost").textContent = totalCost.toFixed(2);
+}
+
+// ---------------------------------------------------------------------------
+// Track rendering
+// ---------------------------------------------------------------------------
+function renderTrack() {
+  const el = document.getElementById("track");
+  el.innerHTML = "";
+
+  if (track.length === 0) {
+    el.innerHTML = '<span id="track-empty" style="color:#444;font-size:0.85em;align-self:center;padding:8px;">No systems added yet — click from the palette to begin</span>';
+    updateStats();
+    return;
+  }
+
+  track.forEach((slot, idx) => {
+    const tile = document.createElement("div");
+    tile.className = "track-tile";
+    tile.draggable = true;
+    tile.dataset.idx = idx;
+
+    if (slot.type === "engine_room") {
+      tile.classList.add("tile-engine-room");
+      tile.style.cssText = `background:#3a3010; color:#c09840; border-color:#c09840aa;`;
+      tile.innerHTML = `
+        <div class="tile-code" style="font-size:0.72em; color:#a08030;">(I×${slot.count})</div>
+        <div class="tile-engines">${'<div class="engine-dot"></div>'.repeat(slot.count)}</div>
+        <div class="engine-count-ctrl">
+          <button onclick="changeEngineCount(${idx},-1)" title="Remove engine">−</button>
+          <span class="engine-count-label">${slot.count} eng</span>
+          <button onclick="changeEngineCount(${idx},+1)" title="Add engine">+</button>
+        </div>
+        <div class="tile-hs" style="color:#8a6820;">${slot.count} HS · ${slot.count*20} cr</div>
+        <div class="tile-remove" onclick="removeSlot(${idx})">✕</div>
+      `;
+    } else {
+      const s = SYS_MAP[slot.code] || {code:slot.code, hull_spaces:"?", cost:"?"};
+      tile.style.cssText = sysStyle(slot.code);
+      tile.innerHTML = `
+        <div class="tile-code">${slot.code}</div>
+        <div class="tile-hs">${s.hull_spaces} HS</div>
+        <div class="tile-remove" onclick="removeSlot(${idx})">✕</div>
+      `;
+    }
+
+    tile.addEventListener("dragstart", e => onDragStart(e, idx));
+    tile.addEventListener("dragend",   e => onDragEnd(e));
+    el.appendChild(tile);
+  });
+
+  updateStats();
+}
+
+// ---------------------------------------------------------------------------
+// Add / remove / modify slots
+// ---------------------------------------------------------------------------
+function addSystem(code) {
+  track.push({type:"system", code});
+  renderTrack();
+}
+
+function addEngineRoom() {
+  track.push({type:"engine_room", count:1});
+  renderTrack();
+}
+
+function removeSlot(idx) {
+  track.splice(idx, 1);
+  renderTrack();
+}
+
+function changeEngineCount(idx, delta) {
+  const slot = track[idx];
+  if (!slot || slot.type !== "engine_room") return;
+  slot.count = Math.max(1, slot.count + delta);
+  renderTrack();
+}
+
+// ---------------------------------------------------------------------------
+// Drag and drop reorder
+// ---------------------------------------------------------------------------
+let dragIdx = null;
+
+function onDragStart(e, idx) {
+  dragIdx = idx;
+  e.currentTarget.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+}
+
+function onDragEnd(e) {
+  e.currentTarget.classList.remove("dragging");
+  document.querySelectorAll(".track-tile").forEach(t => t.classList.remove("drag-target"));
+  dragIdx = null;
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  document.getElementById("track").classList.add("drag-over");
+
+  // Find closest tile to drop before
+  const tiles = [...document.querySelectorAll(".track-tile")];
+  tiles.forEach(t => t.classList.remove("drag-target"));
+  const target = tiles.find(t => {
+    const r = t.getBoundingClientRect();
+    return e.clientX < r.left + r.width / 2;
+  });
+  if (target) target.classList.add("drag-target");
+}
+
+function onDragLeave(e) {
+  if (!document.getElementById("track").contains(e.relatedTarget)) {
+    document.getElementById("track").classList.remove("drag-over");
+  }
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById("track").classList.remove("drag-over");
+  if (dragIdx === null) return;
+
+  const tiles  = [...document.querySelectorAll(".track-tile")];
+  const target = tiles.find(t => t.classList.contains("drag-target"));
+  let dropIdx  = target ? parseInt(target.dataset.idx) : track.length;
+
+  if (dragIdx === dropIdx || dragIdx === dropIdx - 1) return;
+
+  const [moved] = track.splice(dragIdx, 1);
+  if (dropIdx > dragIdx) dropIdx--;
+  track.splice(dropIdx, 0, moved);
+  renderTrack();
+}
+
+// ---------------------------------------------------------------------------
+// Save / Load / New
+// ---------------------------------------------------------------------------
+function saveDesign() {
+  const name  = document.getElementById("ship-name").value.trim() || "Unnamed";
+  const hull  = hullSelect.value;
+  const size  = parseInt(hullSizeEl.value) || 0;
+  const did   = currentDesignId || "";
+
+  const form  = document.createElement("form");
+  form.method = "post";
+  form.action = "/tactical/designs/save";
+  form.style.display = "none";
+
+  const fields = {design_id: did, name, hull_type: hull, hull_spaces: size, track_json: JSON.stringify(track)};
+  for (const [k, v] of Object.entries(fields)) {
+    const inp = document.createElement("input");
+    inp.type = "hidden"; inp.name = k; inp.value = v;
+    form.appendChild(inp);
+  }
+  document.body.appendChild(form);
+  form.submit();
+}
+
+function newDesign() {
+  if (track.length > 0 && !confirm("Clear current design and start fresh?")) return;
+  currentDesignId = null;
+  document.getElementById("ship-name").value = "";
+  hullSelect.value = HULLS[0]?.designation || "";
+  updateHullInfo();
+  track = [];
+  renderTrack();
+  document.getElementById("delete-btn").style.display = "none";
+}
+
+function loadDesignFromServer(designId) {
+  window.location.href = `/tactical/designs/${designId}/edit`;
+}
+
+function deleteDesignById(designId, name) {
+  if (!confirm(`Delete design '${name}'?`)) return;
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = `/tactical/designs/${designId}/delete`;
+  form.style.display = "none";
+  document.body.appendChild(form);
+  form.submit();
+}
+
+function deleteDesign() {
+  if (!currentDesignId) return;
+  const name = document.getElementById("ship-name").value || "this design";
+  deleteDesignById(currentDesignId, name);
+}
+
+// ---------------------------------------------------------------------------
+// Initialise
+// ---------------------------------------------------------------------------
+// Apply chip colors in the palette
+document.querySelectorAll(".palette-chip[data-code]").forEach(chip => {
+  chip.style.cssText = sysStyle(chip.dataset.code);
+});
+
+// Load edit state if provided
+if (window._EDIT_DESIGN) {
+  const d = window._EDIT_DESIGN;
+  currentDesignId = d.design_id;
+  document.getElementById("ship-name").value = d.name;
+  // Set hull
+  for (let i = 0; i < hullSelect.options.length; i++) {
+    if (hullSelect.options[i].value === d.hull_type) {
+      hullSelect.selectedIndex = i;
+      break;
+    }
+  }
+  updateHullInfo();
+  hullSizeEl.value = d.hull_spaces;
+  track = d.track;
+  renderTrack();
+  document.getElementById("delete-btn").style.display = "";
+} else {
+  updateHullInfo();
+  renderTrack();
+}
+</script>
+</body>
+</html>

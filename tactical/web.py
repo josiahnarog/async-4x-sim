@@ -14,6 +14,12 @@ from fastapi.templating import Jinja2Templates
 from tactical.persistence import (
     init_db, list_games, save_game, load_game, delete_game as _db_delete,
     append_turn_snapshot, append_turn_events,
+    save_design, load_design, list_designs, delete_design as _db_delete_design,
+)
+from tactical.ship_catalog import (
+    HULL_CATALOG, SYSTEMS, HULL_BY_DESIGNATION, SYSTEMS_BY_CODE,
+    track_to_system_string, system_string_to_track,
+    hull_base_cost, systems_cost, systems_hull_spaces,
 )
 
 router = APIRouter(prefix="/tactical")
@@ -982,3 +988,74 @@ async def game_delete(game_id: str):
     _sessions.pop(game_id, None)
     _db_delete(game_id)
     return RedirectResponse(url="/tactical/", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Ship designer
+# ---------------------------------------------------------------------------
+
+@router.get("/designs/", response_class=HTMLResponse)
+async def designer_index(request: Request):
+    designs = list_designs()
+    hulls   = HULL_CATALOG
+    systems = SYSTEMS
+    return templates.TemplateResponse("ship_designer.html", {
+        "request": request,
+        "designs": designs,
+        "hulls":   [{"designation": h.designation, "name": h.name,
+                     "hs_min": h.hs_min, "hs_max": h.hs_max,
+                     "cost_per_hs": h.cost_per_hs, "epr_i": h.epr_i,
+                     "ia": h.ia, "req_el": h.req_el}
+                    for h in hulls],
+        "systems": [{"code": s.code, "name": s.name,
+                     "cost": s.cost, "hull_spaces": s.hull_spaces}
+                    for s in systems],
+    })
+
+
+@router.get("/designs/{design_id}/edit", response_class=HTMLResponse)
+async def designer_edit(request: Request, design_id: str):
+    try:
+        design = load_design(design_id)
+    except KeyError:
+        return RedirectResponse(url="/tactical/designs/", status_code=303)
+
+    designs = list_designs()
+    hulls   = HULL_CATALOG
+    systems = SYSTEMS
+    return templates.TemplateResponse("ship_designer.html", {
+        "request":       request,
+        "designs":       designs,
+        "hulls":         [{"designation": h.designation, "name": h.name,
+                           "hs_min": h.hs_min, "hs_max": h.hs_max,
+                           "cost_per_hs": h.cost_per_hs, "epr_i": h.epr_i,
+                           "ia": h.ia, "req_el": h.req_el}
+                          for h in hulls],
+        "systems":       [{"code": s.code, "name": s.name,
+                           "cost": s.cost, "hull_spaces": s.hull_spaces}
+                          for s in systems],
+        "edit_design":   design,
+    })
+
+
+@router.post("/designs/save")
+async def designer_save(
+    design_id:   str  = Form(default=""),
+    name:        str  = Form(...),
+    hull_type:   str  = Form(...),
+    hull_spaces: int  = Form(...),
+    track_json:  str  = Form(...),
+):
+    did = design_id.strip() or str(uuid.uuid4())
+    try:
+        track = json.loads(track_json)
+    except Exception:
+        track = []
+    save_design(did, name.strip() or "Unnamed", hull_type, hull_spaces, track)
+    return RedirectResponse(url=f"/tactical/designs/{did}/edit", status_code=303)
+
+
+@router.post("/designs/{design_id}/delete")
+async def designer_delete(design_id: str):
+    _db_delete_design(design_id)
+    return RedirectResponse(url="/tactical/designs/", status_code=303)

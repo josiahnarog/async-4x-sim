@@ -71,6 +71,16 @@ def init_db(db_path: Path | None = None) -> None:
                 event_type  TEXT NOT NULL,
                 event_data  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS designs (
+                design_id   TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                hull_type   TEXT NOT NULL,
+                hull_spaces INTEGER NOT NULL,
+                track       TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
         """)
     conn.close()
 
@@ -197,6 +207,72 @@ def append_turn_snapshot(game_id: str, turn_number: int, enc, rng) -> None:
             "INSERT INTO turns (game_id, turn_number, state, created_at) VALUES (?,?,?,?)",
             (game_id, turn_number, state_blob, now),
         )
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Ship designs
+# ---------------------------------------------------------------------------
+
+def save_design(design_id: str, name: str, hull_type: str, hull_spaces: int, track: list) -> None:
+    """Insert or replace a ship design."""
+    now = _now()
+    conn = _connect()
+    with conn:
+        conn.execute(
+            """INSERT INTO designs (design_id, name, hull_type, hull_spaces, track, created_at, updated_at)
+               VALUES (?,?,?,?,?,
+                       COALESCE((SELECT created_at FROM designs WHERE design_id=?), ?),
+                       ?)
+               ON CONFLICT(design_id) DO UPDATE SET
+                   name=excluded.name, hull_type=excluded.hull_type,
+                   hull_spaces=excluded.hull_spaces, track=excluded.track,
+                   updated_at=excluded.updated_at""",
+            (design_id, name, hull_type, hull_spaces, json.dumps(track),
+             design_id, now, now),
+        )
+    conn.close()
+
+
+def load_design(design_id: str) -> dict:
+    """Return design as a dict with keys: design_id, name, hull_type, hull_spaces, track."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM designs WHERE design_id=?", (design_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Design not found: {design_id!r}")
+        return {
+            "design_id":   row["design_id"],
+            "name":        row["name"],
+            "hull_type":   row["hull_type"],
+            "hull_spaces": row["hull_spaces"],
+            "track":       json.loads(row["track"]),
+            "created_at":  row["created_at"],
+            "updated_at":  row["updated_at"],
+        }
+    finally:
+        conn.close()
+
+
+def list_designs() -> list[dict]:
+    """Return all saved designs as list of dicts (without full track data)."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT design_id, name, hull_type, hull_spaces, updated_at "
+            "FROM designs ORDER BY updated_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def delete_design(design_id: str) -> None:
+    conn = _connect()
+    with conn:
+        conn.execute("DELETE FROM designs WHERE design_id=?", (design_id,))
     conn.close()
 
 
