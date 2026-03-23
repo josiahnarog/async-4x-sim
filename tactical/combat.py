@@ -3,24 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-from sim.hexgrid import Hex
+from sim.hexgrid import Hex, hex_distance
 from tactical.battle_state import BattleState, ShipID
 from tactical.weapons import WEAPONS, WeaponType, WeaponSpec, WeaponArc
 from tactical.missile_volley import resolve_missile_volley
 from tactical.attack_context import AttackContext, TargetClass, ToHitMod
-from tactical.to_hit import combine_mods, resolve_to_hit, check_hit, roll_hits_target
-from tactical.arcs import arc_of, relative_bearing, Arc, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS
+from tactical.to_hit import combine_mods, resolve_to_hit, roll_hits_target
+from tactical.arcs import arc_of, relative_bearing, Arc, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, assert_can_fire
 
 
 class RNG(Protocol):
     def randint(self, a: int, b: int) -> int: ...
-
-
-def hex_distance(a: Hex, b: Hex) -> int:
-    dq = abs(a.q - b.q)
-    dr = abs(a.r - b.r)
-    ds = abs((a.q + a.r) - (b.q + b.r))
-    return max(dq, dr, ds)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +33,9 @@ class FireEvent:
     missile_rolls: Optional[tuple[int, ...]] = None  # per-missile roll results
     pd_rolls: Optional[tuple[int, ...]] = None       # per-PD-shot roll results
     ammo_consumed: int = 0                           # rounds expended by this firing
+    # Needle beam fields (None for non-needle weapons)
+    needle_penetration_roll: Optional[int] = None   # d10 roll for penetration depth
+    needle_target_idx: Optional[int] = None         # index in target.systems that is hit
 
 
 def resolve_large_fire(
@@ -61,15 +57,9 @@ def resolve_large_fire(
 
     base_range = hex_distance(attacker.pos, target.pos)
 
-    # Blind-spot enforcement: cannot fire at a target in the attacker's rear arc.
     dq = target.pos.q - attacker.pos.q
     dr = target.pos.r - attacker.pos.r
-    rb_from_attacker = relative_bearing(int(attacker.facing), dq, dr)
-    if rb_from_attacker in REAR_BEARINGS:
-        raise ValueError(
-            f"{attacker_id} cannot fire at {target_id}: target is in blind spot "
-            f"(relative bearing {rb_from_attacker})"
-        )
+    rb_from_attacker = assert_can_fire(int(attacker.facing), attacker.pos, target.pos, attacker_id, target_id)
 
     # Per-weapon arc restriction (e.g. FORWARD-only weapons).
     if spec.firing_arc == WeaponArc.FORWARD and rb_from_attacker != 0:
@@ -177,6 +167,62 @@ def resolve_large_fire(
         return battle.with_ship(new_target), event
 
     # -------------------------
+    # Needle beam weapons
+    # -------------------------
+    if spec.needle_skip > 0:
+        roll = int(rng.randint(1, 10))
+        base_to_hit = spec.to_hit_at(effective_range)
+        res = resolve_to_hit(base_to_hit=base_to_hit, ctx=ctx, mods=mods)
+        to_hit = res.target
+
+        check = roll_hits_target(
+            roll=roll,
+            base_target=to_hit,
+            target_delta=0,
+            roll_delta=res.roll_delta,
+        )
+        hit = check.hit
+
+        needle_roll: Optional[int] = None
+        needle_idx: Optional[int] = None
+
+        if hit and target.systems is not None:
+            needle_roll = int(rng.randint(1, 10))
+            needle_idx = target.systems.needle_beam_target(needle_roll, spec.needle_skip)
+
+        raw_damage = 1 if (hit and needle_idx is not None) else 0
+
+        event = FireEvent(
+            attacker_id=attacker_id,
+            target_id=target_id,
+            weapon=weapon,
+            range=base_range,
+            roll=roll,
+            to_hit=to_hit,
+            hit=hit,
+            raw_damage=raw_damage,
+            needle_penetration_roll=needle_roll,
+            needle_target_idx=needle_idx,
+        )
+
+        if needle_idx is not None:
+            new_systems = target.systems.destroy_system_at(needle_idx)
+            new_target = type(target)(
+                ship_id=target.ship_id,
+                owner_id=target.owner_id,
+                pos=target.pos,
+                facing=target.facing,
+                mp=target.mp,
+                turn_cost=target.turn_cost,
+                turn_charge=target.turn_charge,
+                systems=new_systems,
+                hull_type=target.hull_type,
+            )
+            return battle.with_ship(new_target), event
+
+        return battle, event
+
+    # -------------------------
     # Beam weapons (existing behavior, but canonical hit logic)
     # -------------------------
     roll = int(rng.randint(1, 10))
@@ -249,15 +295,7 @@ def resolve_fire_all(
     if attacker.systems is None:
         return battle, []
 
-    # Global blind-spot rule: cannot fire at a target in the attacker's rear arc.
-    dq = target.pos.q - attacker.pos.q
-    dr = target.pos.r - attacker.pos.r
-    rb = relative_bearing(int(attacker.facing), dq, dr)
-    if rb in REAR_BEARINGS:
-        raise ValueError(
-            f"{attacker_id} cannot fire at {target_id}: target is in blind spot "
-            f"(relative bearing {rb})"
-        )
+    rb = assert_can_fire(int(attacker.facing), attacker.pos, target.pos, attacker_id, target_id)
 
     events: list[FireEvent] = []
     missile_fired = False

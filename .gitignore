@@ -16,4 +16,5 @@ Thumbs.db
 /saves/test1.json
 saves/
 /games.db
+*.db
 /tests/.pytest_games.db

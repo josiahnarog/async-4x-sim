@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Optional
 
 from sim.hexgrid import Hex
 from tactical.battle_state import ShipID
@@ -48,8 +49,20 @@ class InterceptOrder:
 
     intercept_radius is computed at resolution time as:
         (squadron.effective_mp - hex_distance(start, patrol_hex)) + 1
+    If max_intercept_radius is set, the radius is capped to that value.
     """
     patrol_hex: Hex
+    max_intercept_radius: Optional[int] = None
+
+
+@dataclass(frozen=True, slots=True)
+class MoveOrder:
+    """Move to dest hex without intercepting.
+
+    The squadron moves as far as its effective_mp allows toward dest.
+    No intercept engagement occurs — use InterceptOrder for patrolling.
+    """
+    dest: Hex
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,4 +102,4 @@ class RecoverOrder:
 
 
 # Convenience type alias used in Encounter
-SquadronOrder = InterceptOrder | StrikeOrder | BreakOffOrder | RecoverOrder
+SquadronOrder = InterceptOrder | MoveOrder | StrikeOrder | BreakOffOrder | RecoverOrder

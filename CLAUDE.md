@@ -90,6 +90,7 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 | L | Laser | skips shields |
 | E | Electron Beam | skips armor+hull; half dmg vs shields |
 | F | Force Beam | no skip rules |
+| N | Needle Beam | penetrates S/A (skips first 30); bays always skipped; roll D10 → Nth eligible system (wrapping); always 1 dmg |
 | R | Standard Missile | `requires_ammo=True`; 10 internal charges; feeds from Mg first |
 | Mg | Magazine | 50 shared charges; feeds R launchers; left-most drained first |
 | D | Point Defense | 3 shots/D/volley, to-hit 3; also fires at incoming fighters |
@@ -173,7 +174,6 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 
 - **Turn-cost enforcement (high priority)**: Ships freely choose any facing at their destination. The turn system is tracked in `ShipMoveOrder` and drafts but not validated at commitment time.
 - **Partial fighter movement**: Squadrons that can't reach a strike target stay put instead of moving as far as MP allows.
-- **Break-off mechanic**: `BreakOffOrder` exists in `turn_orders.py` but is not fully wired into resolution.
 - **Carrier Bl limit not enforced for recovery**: Recovery currently only checks for empty Bh; it does not consume a Bl slot.
 - **Fog of war / sensors** *(next feature)*: Sensor suite systems, detection ranges, hidden unit positions. Agreed next focus after current carrier work.
 - **Mid-turn movement damage** (lower priority): `ShipState.mp` reflects previous turn's capacity mid-turn. `next_turn()` recomputes correctly so this only affects the gap between damage application and turn end.

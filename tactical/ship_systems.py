@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Iterator, Tuple
+from typing import Iterable, Iterator
 
 from tactical.weapons import WeaponSpec
 
@@ -38,6 +38,8 @@ class System:
       Xc  -> capital sensors
     """
 
+    # `base` is the single capital letter code (e.g. "B", "S", "R").
+    # `token` (property) is the full display code: base + mods (e.g. "Bh", "Mg").
     base: str
     mods: str = ""
     status: SystemStatus = SystemStatus.INTACT
@@ -361,6 +363,51 @@ class ShipSystems:
 
         return ShipSystems(tuple(systems))
 
+    def destroy_system_at(self, idx: int) -> "ShipSystems":
+        """Destroy the system at the given track index.  No-op if already destroyed."""
+        if not (0 <= idx < len(self.systems)):
+            return self
+        s = self.systems[idx]
+        if not s.is_active():
+            return self
+        systems = list(self.systems)
+        systems[idx] = s.destroy()
+        return ShipSystems(tuple(systems))
+
+    def needle_beam_target(self, roll: int, skip: int = 30) -> int | None:
+        """Compute the system index targeted by a needle beam penetration roll.
+
+        Algorithm:
+          1. Traverse the track counting S and A systems.  The first `skip` S/A
+             systems form the 'pre-skip' zone; systems beyond that threshold — plus
+             all non-S/A systems outside the pre-skip zone — form the eligible pool.
+          2. Build the eligible pool: intact systems not in the pre-skip zone and
+             not a bay (base == 'B').
+          3. Select pool[((roll - 1) % len(pool))], wrapping when roll > pool size.
+          4. Returns the system's index in self.systems, or None if pool is empty.
+
+        'roll' is expected to be 1..10 (a d10 result).
+        """
+        # Mark the first `skip` S/A systems as pre-skip
+        sa_count = 0
+        pre_skip: set[int] = set()
+        for i, s in enumerate(self.systems):
+            if s.base in ("S", "A"):
+                if sa_count < skip:
+                    pre_skip.add(i)
+                sa_count += 1
+
+        # Build eligible pool: intact, non-bay, not pre-skip
+        eligible: list[int] = [
+            i for i, s in enumerate(self.systems)
+            if i not in pre_skip and s.is_active() and s.base != "B"
+        ]
+
+        if not eligible:
+            return None
+
+        return eligible[(roll - 1) % len(eligible)]
+
     def is_destroyed(self) -> bool:
         """A ship is destroyed when all non-shield, non-armor systems are gone.
 
@@ -480,7 +527,7 @@ class ShipSystems:
 
         return ToHitMod(target_delta=target_delta)
 
-    def point_defense(self) -> Tuple[int, int]:
+    def point_defense(self) -> tuple[int, int]:
         """
         Returns (shots, to_hit) for point defense for the current incoming volley.
 

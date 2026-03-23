@@ -7,12 +7,12 @@ from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
 from tactical.events import BattleEndEvent, FuelWarningEvent, UnitDestroyedEvent
-from tactical.fighter_combat import AttackRunEvent, BreakOffEvent, DogfightEvent
+from tactical.fighter_events import AttackRunEvent, BreakOffEvent, DogfightEvent
 from tactical.render_ascii import render_tactical_grid_ascii
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
 from tactical.squadron_state import SquadronState
-from tactical.turn_orders import BreakOffOrder, InterceptOrder, LaunchOrder, RecoverOrder, StrikeOrder
+from tactical.turn_orders import BreakOffOrder, InterceptOrder, LaunchOrder, MoveOrder, RecoverOrder, StrikeOrder
 from tactical.weapons import WeaponType
 
 
@@ -239,7 +239,8 @@ def _help() -> None:
     print("  commit fire                        commit fire orders for ALL sides")
     print()
     print("  --- COMBAT_SMALL phase (fighters) ---")
-    print("  intercept <squad_id> <q> <r>          patrol hex, intercept enemies in range")
+    print("  intercept <squad_id> <q> <r> [max_r]  patrol hex, intercept enemies in range (optional radius cap)")
+    print("  fmove <squad_id> <q> <r>              move to hex, no intercept")
     print("  strike <squad_id> <target_id>         vector toward ship or enemy squadron")
     print("  recover <squad_id> <carrier_id>       request recovery aboard carrier (must be at same hex)")
     print("  commit squadrons [side_id]            commit and resolve fighter phase")
@@ -565,9 +566,9 @@ def main() -> None:
                 _print_state(enc, drafts)
 
             elif cmd == "intercept":
-                # intercept <squad_id> <q> <r>
-                if len(parts) != 4:
-                    print("usage: intercept <squad_id> <q> <r>")
+                # intercept <squad_id> <q> <r> [max_radius]
+                if len(parts) not in (4, 5):
+                    print("usage: intercept <squad_id> <q> <r> [max_radius]")
                     continue
                 sq_id = parts[1]
                 if sq_id not in enc.battle.squadrons:
@@ -577,9 +578,29 @@ def main() -> None:
                     print(f"Cannot order: phase is {enc.phase.value!r}")
                     continue
                 patrol = Hex(int(parts[2]), int(parts[3]))
+                max_radius = int(parts[4]) if len(parts) == 5 else None
                 side   = enc.battle.squadrons[sq_id].owner_id
-                enc    = enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol))
-                print(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r})")
+                enc    = enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol, max_intercept_radius=max_radius))
+                radius_str = f" max_radius={max_radius}" if max_radius is not None else ""
+                print(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r}){radius_str}")
+                _print_state(enc, drafts)
+
+            elif cmd == "fmove":
+                # fmove <squad_id> <q> <r>
+                if len(parts) != 4:
+                    print("usage: fmove <squad_id> <q> <r>")
+                    continue
+                sq_id = parts[1]
+                if sq_id not in enc.battle.squadrons:
+                    print(f"unknown squadron: {sq_id!r}")
+                    continue
+                if enc.phase != Phase.COMBAT_SMALL:
+                    print(f"Cannot order: phase is {enc.phase.value!r}")
+                    continue
+                dest = Hex(int(parts[2]), int(parts[3]))
+                side = enc.battle.squadrons[sq_id].owner_id
+                enc  = enc.stage_squadron_order(side, sq_id, MoveOrder(dest=dest))
+                print(f"Staged: {sq_id} MOVE → ({dest.q},{dest.r})")
                 _print_state(enc, drafts)
 
             elif cmd == "breakoff":

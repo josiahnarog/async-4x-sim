@@ -10,16 +10,15 @@ from tactical.battle_state import BattleState
 from tactical.encounter import Encounter, Phase
 from tactical.facing import Facing
 from tactical.fighter_combat import (
-    AttackRunEvent,
-    DogfightEvent,
     resolve_all_dogfights,
     resolve_attack_run,
     resolve_combat_small,
 )
+from tactical.fighter_events import AttackRunEvent, DogfightEvent
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
 from tactical.squadron_state import FighterLoadout, SquadronState
-from tactical.turn_orders import InterceptOrder, StrikeOrder
+from tactical.turn_orders import InterceptOrder, MoveOrder, StrikeOrder
 from tactical.weapons import WeaponType
 
 
@@ -397,3 +396,89 @@ class TestEncounterCombatSmall:
         enc, _ = enc.commit_squadron_orders("A", random.Random(1))
         with pytest.raises(PermissionError):
             enc.commit_squadron_orders("A", random.Random(1))
+
+
+# ---------------------------------------------------------------------------
+# MoveOrder — move without intercepting
+# ---------------------------------------------------------------------------
+
+class TestMoveOrder:
+    def test_move_order_reaches_dest(self):
+        """MoveOrder moves the squadron to dest (within MP)."""
+        sq = _interceptor("A1", "A", Hex(0, 0))  # effective_mp = 10
+        battle = BattleState(ships={}, squadrons={"A1": sq})
+        orders = {"A1": MoveOrder(dest=Hex(5, 0))}
+        battle2, _ = resolve_combat_small(battle, orders, rng=random.Random(1))
+        assert battle2.squadrons["A1"].pos == Hex(5, 0)
+
+    def test_move_order_does_not_engage_enemies(self):
+        """A MoveOrder that passes through an enemy hex does not trigger a dogfight."""
+        sq_a = _interceptor("A1", "A", Hex(0, 0))
+        sq_b = _interceptor("B1", "B", Hex(3, 0))  # on A1's path
+        battle = BattleState(ships={}, squadrons={"A1": sq_a, "B1": sq_b})
+        orders = {"A1": MoveOrder(dest=Hex(6, 0))}
+        _, events = resolve_combat_small(battle, orders, rng=random.Random(1))
+        assert not any(isinstance(ev, DogfightEvent) for ev in events)
+
+    def test_move_order_limited_by_mp(self):
+        """If dest is beyond MP, the squadron moves as far as MP allows."""
+        sq = _interceptor("A1", "A", Hex(0, 0))  # effective_mp = 10
+        battle = BattleState(ships={}, squadrons={"A1": sq})
+        orders = {"A1": MoveOrder(dest=Hex(20, 0))}
+        battle2, _ = resolve_combat_small(battle, orders, rng=random.Random(1))
+        # Should have advanced exactly 10 hexes
+        assert battle2.squadrons["A1"].pos == Hex(10, 0)
+
+
+# ---------------------------------------------------------------------------
+# max_intercept_radius — voluntary radius cap on InterceptOrder
+# ---------------------------------------------------------------------------
+
+class TestMaxInterceptRadius:
+    def test_radius_cap_prevents_distant_intercept(self):
+        """With max_intercept_radius=1, an enemy landing at distance 3 from patrol hex is not intercepted."""
+        # A1 patrols Hex(0,0) with radius cap 1.
+        # Bship is at Hex(3,0); B1 starts at Hex(8,0) and strikes toward Hex(3,0).
+        # B1 ends up at Hex(3,0) — distance 3 from A1's patrol hex, outside the cap.
+        sq_a = _interceptor("A1", "A", Hex(0, 0))
+        sq_b = _interceptor("B1", "B", Hex(8, 0))
+        ship_b = _ship_no_systems("Bship", "B", Hex(3, 0))
+        battle = BattleState(ships={"Bship": ship_b}, squadrons={"A1": sq_a, "B1": sq_b})
+        orders = {
+            "A1": InterceptOrder(patrol_hex=Hex(0, 0), max_intercept_radius=1),
+            "B1": StrikeOrder(target_id="Bship"),
+        }
+        _, events = resolve_combat_small(battle, orders, rng=random.Random(1))
+        # A1 should not have intercepted — B1 is beyond the radius cap
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        assert not any(ev.attacker_id == "A1" or ev.target_id == "A1" for ev in dogfights)
+
+    def test_radius_cap_allows_close_intercept(self):
+        """With max_intercept_radius=2, an enemy at distance 1 from patrol hex IS intercepted."""
+        # A1 is at patrol Hex(0,0), enemy B1 moves to Hex(1,0) — within cap of 2.
+        sq_a = _interceptor("A1", "A", Hex(0, 0))
+        sq_b = _interceptor("B1", "B", Hex(5, 0))
+        ship_b = _ship_no_systems("Bship", "B", Hex(1, 0))
+        battle = BattleState(ships={"Bship": ship_b}, squadrons={"A1": sq_a, "B1": sq_b})
+        orders = {
+            "A1": InterceptOrder(patrol_hex=Hex(0, 0), max_intercept_radius=2),
+            "B1": StrikeOrder(target_id="Bship"),
+        }
+        _, events = resolve_combat_small(battle, orders, rng=random.Random(1))
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        # A1 should have engaged B1
+        assert any("A1" in (ev.attacker_id, ev.target_id) for ev in dogfights)
+
+    def test_no_cap_uses_full_radius(self):
+        """Without max_intercept_radius, full radius is used (default behaviour)."""
+        sq_a = _interceptor("A1", "A", Hex(0, 0))  # effective_mp=10 → radius=11
+        sq_b = _interceptor("B1", "B", Hex(5, 0))
+        ship_b = _ship_no_systems("Bship", "B", Hex(1, 0))
+        battle = BattleState(ships={"Bship": ship_b}, squadrons={"A1": sq_a, "B1": sq_b})
+        orders = {
+            "A1": InterceptOrder(patrol_hex=Hex(0, 0)),  # no cap
+            "B1": StrikeOrder(target_id="Bship"),
+        }
+        _, events = resolve_combat_small(battle, orders, rng=random.Random(1))
+        dogfights = [ev for ev in events if isinstance(ev, DogfightEvent)]
+        assert any("A1" in (ev.attacker_id, ev.target_id) for ev in dogfights)

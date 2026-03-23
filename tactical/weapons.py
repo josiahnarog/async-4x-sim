@@ -57,6 +57,7 @@ class WeaponType(str, Enum):
     ELECTRON_BEAM    = "E"  # Electron Beam
     LASER            = "L"  # Laser
     FORCE_BEAM       = "F"  # Force Beam
+    NEEDLE_BEAM      = "N"  # Needle Beam — penetrates shields/armor; random deep system hit
     STANDARD_MISSILE = "R"  # Standard Missile
     GUN              = "G"  # Autocannon — fighter primary weapon, +2 vs fighters
 
@@ -94,6 +95,12 @@ class WeaponSpec:
     # can_target_fighters:   if False, weapon is skipped entirely in dogfights
     anti_fighter_modifier: int = 0
     can_target_fighters: bool = True
+
+    # Needle beam penetration:
+    # > 0 means this weapon uses needle beam damage mechanics.
+    # Value = how many S/A systems are bypassed before the random system roll.
+    # 0 (default) = normal damage application.
+    needle_skip: int = 0
 
     def damage_at(self, rng: int) -> int:
         v = self.damage.at(rng)
@@ -136,6 +143,20 @@ FORCE_BEAM = WeaponSpec(
     damage=RangeTable.from_list([3, 2, 2, 2, 1, 1, 1, 1, "-"]),
 )
 
+NEEDLE_BEAM = WeaponSpec(
+    type=WeaponType.NEEDLE_BEAM,
+    name="Needle Beam",
+    rate_of_fire=1,
+    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 6, 6, 5, 5]),
+    # Always destroys exactly 1 system; 'damage' field is unused for needle beams
+    # but must be non-None so damage_at() doesn't crash on range checks.
+    damage=RangeTable.from_list([1]),
+    # Needle beam cannot target fighters — too precise for fast movers.
+    can_target_fighters=False,
+    # Skip the first 30 S and A systems before rolling for penetration target.
+    needle_skip=30,
+)
+
 STANDARD_MISSILE = WeaponSpec(
     type=WeaponType.STANDARD_MISSILE,
     name="Standard Missile",
@@ -166,6 +187,7 @@ WEAPONS: dict[WeaponType, WeaponSpec] = {
     WeaponType.ELECTRON_BEAM:    ELECTRON_BEAM,
     WeaponType.LASER:            LASER,
     WeaponType.FORCE_BEAM:       FORCE_BEAM,
+    WeaponType.NEEDLE_BEAM:      NEEDLE_BEAM,
     WeaponType.STANDARD_MISSILE: STANDARD_MISSILE,
     WeaponType.GUN:              GUN,
 }

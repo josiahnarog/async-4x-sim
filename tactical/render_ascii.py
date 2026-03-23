@@ -5,14 +5,6 @@ from tactical.battle_state import BattleState
 from tactical.facing import Facing
 
 
-def axial_distance(a: Hex, b: Hex) -> int:
-    """Hex distance in axial coords."""
-    dq = abs(a.q - b.q)
-    dr = abs(a.r - b.r)
-    ds = abs((a.q + a.r) - (b.q + b.r))
-    return max(dq, dr, ds)
-
-
 def ship_cell_symbol(ship_id: str, owner_id: str, facing: Facing) -> str:
     """2-char symbol: owner initial + facing glyph (caret-style)."""
     owner = (owner_id.strip() or "?")[:1].upper()

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import random
+import uuid
+from dataclasses import dataclass, field
 from dataclasses import replace
 from typing import Optional
 
@@ -9,60 +11,89 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from tactical.persistence import (
+    init_db, list_games, save_game, load_game, delete_game as _db_delete,
+    append_turn_snapshot, append_turn_events,
+)
+
 router = APIRouter(prefix="/tactical")
 templates = Jinja2Templates(directory="templates")
 
 # ---------------------------------------------------------------------------
-# Single-session global state (replace with per-game persistence later)
+# Initialise database at import time
 # ---------------------------------------------------------------------------
 
-_enc = None
-_rng: Optional[random.Random] = None
-_log: list[str] = []
-_MAX_LOG = 100
+init_db()
 
-# Draft move state — built up by move/tl/tr/spend commands before commit.
-# Each entry: ship_id -> {
-#   "pos":           Hex,
-#   "facing":        int (0-5),
-#   "mp_remaining":  int,
-#   "turn_charge":   int,
-#   "turn_cost":     int,
-#   "path":          list[Hex],   # hex waypoints from ship start (inclusive)
-#   "mp_used":       int,
-# }
-_drafts: dict = {}
+# ---------------------------------------------------------------------------
+# In-memory game sessions
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GameSession:
+    game_id: str
+    name: str
+    enc: object          # Encounter — typed loosely to avoid circular import
+    rng: random.Random
+    log: list[str]
+    turn_number: int
+    # Transient draft state (never persisted):
+    drafts: dict = field(default_factory=dict)
+
+_sessions: dict[str, GameSession] = {}
+_MAX_LOG = 50
 
 
-def _build_default() -> tuple:
+def _get_session(game_id: str) -> GameSession:
+    """Return in-memory session, loading from DB if necessary."""
+    if game_id not in _sessions:
+        enc, rng, log, turn_number, name = load_game(game_id)
+        _sessions[game_id] = GameSession(
+            game_id=game_id, name=name, enc=enc, rng=rng,
+            log=log, turn_number=turn_number,
+        )
+    return _sessions[game_id]
+
+
+def _autosave(session: GameSession) -> None:
+    save_game(
+        game_id=session.game_id,
+        name=session.name,
+        enc=session.enc,
+        rng=session.rng,
+        log=session.log,
+        turn_number=session.turn_number,
+    )
+
+
+def _new_game(name: str) -> GameSession:
     from tactical.encounter import Encounter
     from tactical.scenarios import default_scenario
 
+    game_id = str(uuid.uuid4())
     battle, rng = default_scenario()
     enc = Encounter.start(battle, rng=rng)
-    return enc, rng
-
-
-def _reset() -> None:
-    global _enc, _rng, _log, _drafts
-    _enc, _rng = _build_default()
-    _log = []
-    _drafts = {}
-
-
-_reset()
+    session = GameSession(
+        game_id=game_id, name=name, enc=enc, rng=rng,
+        log=[], turn_number=1,
+    )
+    _sessions[game_id] = session
+    save_game(
+        game_id=game_id, name=name, enc=enc, rng=rng,
+        log=[], turn_number=1,
+    )
+    return session
 
 
 # ---------------------------------------------------------------------------
-# Draft-path helpers
+# Draft-path helpers  (operate on session.drafts / session.enc)
 # ---------------------------------------------------------------------------
 
-def _get_or_create_draft(ship_id: str) -> dict:
-    """Return the draft for ship_id, creating it from the current ship state."""
-    if ship_id not in _drafts:
-        ship = _enc.battle.ships[ship_id]
-        cap  = _enc._mp_capacity.get(ship_id, ship.mp)
-        _drafts[ship_id] = {
+def _get_or_create_draft(session: GameSession, ship_id: str) -> dict:
+    if ship_id not in session.drafts:
+        ship = session.enc.battle.ships[ship_id]
+        cap  = session.enc._mp_capacity.get(ship_id, ship.mp)
+        session.drafts[ship_id] = {
             "pos":          ship.pos,
             "facing":       int(ship.facing),
             "mp_remaining": cap,
@@ -71,17 +102,16 @@ def _get_or_create_draft(ship_id: str) -> dict:
             "path":         [ship.pos],
             "mp_used":      0,
         }
-    return _drafts[ship_id]
+    return session.drafts[ship_id]
 
 
-def _draft_move_forward(ship_id: str, steps: int) -> list[str]:
-    """Advance ship draft forward `steps` hexes in current draft facing."""
+def _draft_move_forward(session: GameSession, ship_id: str, steps: int) -> list[str]:
     from sim.hexgrid import Hex
     from tactical.facing import FACING_OFFSETS
 
-    d = _get_or_create_draft(ship_id)
+    d = _get_or_create_draft(session, ship_id)
     if steps <= 0:
-        return [f"steps must be > 0"]
+        return ["steps must be > 0"]
     if steps > d["mp_remaining"]:
         return [f"Ship {ship_id!r} has only {d['mp_remaining']} MP remaining in this draft"]
 
@@ -101,9 +131,8 @@ def _draft_move_forward(ship_id: str, steps: int) -> list[str]:
             f"facing={d['facing']} mp_left={d['mp_remaining']}"]
 
 
-def _draft_turn(ship_id: str, direction: int) -> list[str]:
-    """Turn draft ±1 facing step (direction: +1 = right, -1 = left)."""
-    d = _get_or_create_draft(ship_id)
+def _draft_turn(session: GameSession, ship_id: str, direction: int) -> list[str]:
+    d = _get_or_create_draft(session, ship_id)
     if d["turn_charge"] < d["turn_cost"]:
         return [f"Cannot turn: charge={d['turn_charge']}/{d['turn_cost']} "
                 f"(use 'spend {ship_id} <n>' to charge)"]
@@ -114,9 +143,8 @@ def _draft_turn(ship_id: str, direction: int) -> list[str]:
             f"charge reset to 0"]
 
 
-def _draft_spend(ship_id: str, amount: int) -> list[str]:
-    """Spend MP in draft (charges turning, does not move)."""
-    d = _get_or_create_draft(ship_id)
+def _draft_spend(session: GameSession, ship_id: str, amount: int) -> list[str]:
+    d = _get_or_create_draft(session, ship_id)
     if amount <= 0:
         return ["amount must be > 0"]
     if amount > d["mp_remaining"]:
@@ -132,81 +160,69 @@ def _draft_spend(ship_id: str, amount: int) -> list[str]:
 # Event formatting helpers
 # ---------------------------------------------------------------------------
 
-def _fmt_shots(shots, to_hit: int | None = None) -> str:
-    """Compact roll list: '3✓ 7✗ 2✓' grouped by weapon if mixed."""
-    parts = []
-    for s in shots:
-        th = s.to_hit if to_hit is None else to_hit
-        mark = "✓" if s.hit else "✗"
-        parts.append(f"{s.roll}{mark}")
-    return " ".join(parts)
+from tactical.web_formatters import (
+    fmt_shots as _fmt_shots,
+    fmt_dogfight as _fmt_dogfight,
+    fmt_attack_run as _fmt_attack_run,
+    fmt_fire as _fmt_fire,
+)
 
 
-def _fmt_dogfight(ev) -> list[str]:
-    from tactical.fighter_combat import DogfightEvent
-    lines = [f"  DOGFIGHT {ev.attacker_id}→{ev.target_id}  mvr={ev.mvr_delta:+}"
-             f"  casualties={ev.total_casualties}"]
-    # Group shots by weapon
-    from itertools import groupby
-    for weapon, group in groupby(ev.shots, key=lambda s: s.weapon):
-        shots = list(group)
-        th = shots[0].to_hit
-        rolls = _fmt_shots(shots)
-        hits = sum(1 for s in shots if s.hit)
-        lines.append(f"    [{weapon.value}] to_hit={th}  {rolls}  hits={hits}")
-    return lines
+# ---------------------------------------------------------------------------
+# ID resolution helpers
+# ---------------------------------------------------------------------------
+
+def _display_ship_id(sid: str, ship) -> str:
+    """Compute the display ID for a ship (e.g. internal 'A1' → display 'AFG1')."""
+    num = sid[len(ship.owner_id):]
+    hull_class = ship.hull_type.designation if ship.hull_type else "??"
+    return ship.owner_id + hull_class + num
 
 
-def _fmt_attack_run(ev, label: str = "ATTACK RUN") -> list[str]:
-    from tactical.fighter_combat import AttackRunEvent
-    pd_rolls = " ".join(
-        f"{r}{'✓' if r <= 3 else '✗'}" for r in ev.pd_rolls
-    ) or "—"
-    lines = [
-        f"  {label} {ev.attacker_id}→{ev.target_id}",
-        f"    PD: [{pd_rolls}]  killed={ev.fighters_killed_by_pd}"
-        f"  survivors={ev.surviving_strength}",
-    ]
-    from itertools import groupby
-    for weapon, group in groupby(ev.weapon_shots, key=lambda s: s.weapon):
-        shots = list(group)
-        th = shots[0].to_hit
-        rolls = _fmt_shots(shots)
-        hits = sum(1 for s in shots if s.hit)
-        dmg  = sum(s.damage for s in shots)
-        lines.append(f"    [{weapon.value}] to_hit={th}  {rolls}  hits={hits}  dmg={dmg}")
-    lines.append(f"    total ship damage: {ev.total_ship_damage}")
-    return lines
+def _resolve_ship_id(session: GameSession, id_str: str) -> str:
+    """Resolve a display or internal ship ID to the internal ship_id.
+
+    Accepts both 'A1' (internal) and 'AFG1' (display) forms.
+    Raises KeyError if not found.
+    """
+    ships = session.enc.battle.ships
+    if id_str in ships:
+        return id_str
+    for sid, ship in ships.items():
+        if _display_ship_id(sid, ship) == id_str:
+            return sid
+    raise KeyError(id_str)
 
 
-def _fmt_fire(ev) -> str:
-    if getattr(ev, "missile_rolls", None) is not None:
-        to_hit = ev.to_hit
-        rolls = ", ".join(
-            f"{r}{'✓' if to_hit is not None and r <= to_hit else '✗'}"
-            for r in ev.missile_rolls
-        )
-        pd_part = ""
-        if ev.pd_rolls:
-            pd_rolls = ", ".join(
-                f"{r}{'✓' if r <= 3 else '✗'}" for r in ev.pd_rolls
-            )
-            pd_part = f" pd=[{pd_rolls}] pd_int={ev.pd_intercepted}"
-        else:
-            pd_part = f" pd_int={ev.pd_intercepted}"
-        return (f"{ev.attacker_id}→{ev.target_id} {ev.weapon.value} r={ev.range} "
-                f"to_hit={ev.to_hit} rolls=[{rolls}] hits={ev.missile_hits}"
-                f"{pd_part} rem={ev.remaining_hits} dmg={ev.raw_damage}")
-    return (f"{ev.attacker_id}→{ev.target_id} {ev.weapon.value} r={ev.range} "
-            f"roll={ev.roll} to_hit={ev.to_hit} hit={ev.hit} dmg={ev.raw_damage}")
+def _resolve_unit_id(session: GameSession, id_str: str) -> str:
+    """Resolve a display or internal ID for any unit (ship or squadron).
+
+    Used for StrikeOrder targets which may be either.
+    """
+    try:
+        return _resolve_ship_id(session, id_str)
+    except KeyError:
+        pass
+    if id_str in session.enc.battle.squadrons:
+        return id_str
+    raise KeyError(id_str)
+
+
+# ---------------------------------------------------------------------------
+# Detection helpers
+# ---------------------------------------------------------------------------
+
+def _detection_level(unit_id: str, owner_id: str, view: str, enc) -> int:
+    if view == "master" or owner_id == view:
+        return 3
+    return enc._knowledge.get(view, {}).get(unit_id, 0)
 
 
 # ---------------------------------------------------------------------------
 # Command processing
 # ---------------------------------------------------------------------------
 
-def _process(cmd_line: str) -> list[str]:
-    global _enc, _rng, _drafts
+def _process(session: GameSession, cmd_line: str) -> list[str]:
     out: list[str] = []
     parts = cmd_line.strip().split()
     if not parts:
@@ -214,65 +230,61 @@ def _process(cmd_line: str) -> list[str]:
     cmd = parts[0].lower()
 
     try:
-        if cmd == "reset":
-            _reset()
-            out.append("Reset to default scenario.")
-
         # ---------------------------------------------------------------- #
         # Movement path building (MOVE_SUBMISSION)                          #
         # ---------------------------------------------------------------- #
 
-        elif cmd == "move":
-            # move <ship_id> <steps>            — forward N hexes in current draft facing
-            # move <ship_id> <q> <r> [facing]  — go directly to hex (bypasses draft)
+        if cmd == "move":
             if len(parts) < 3:
                 out.append("usage: move <ship_id> <steps>  OR  move <ship_id> <q> <r> [facing]")
                 return out
-            ship_id = parts[1]
-            if ship_id not in _enc.battle.ships:
-                out.append(f"unknown ship: {ship_id!r}"); return out
+            try:
+                ship_id = _resolve_ship_id(session, parts[1])
+            except KeyError:
+                out.append(f"unknown ship: {parts[1]!r}"); return out
 
             from tactical.encounter import Phase
-            if _enc.phase == Phase.MOVE_SUBMISSION:
+            if session.enc.phase == Phase.MOVE_SUBMISSION:
                 if len(parts) == 3:
-                    out += _draft_move_forward(ship_id, int(parts[2]))
+                    out += _draft_move_forward(session, ship_id, int(parts[2]))
                 else:
-                    # Direct hex destination — stage immediately, no draft
                     from sim.hexgrid import Hex
                     from tactical.facing import Facing
-                    ship = _enc.battle.ships[ship_id]
+                    ship = session.enc.battle.ships[ship_id]
                     dest = Hex(int(parts[2]), int(parts[3]))
                     dest_facing = (
                         Facing.from_int(int(parts[4])) if len(parts) >= 5 else ship.facing
                     )
                     side = ship.owner_id
-                    _enc = _enc.stage_move(side, ship_id, dest, dest_facing)
+                    session.enc = session.enc.stage_move(side, ship_id, dest, dest_facing)
                     out.append(f"Staged: {ship_id} → ({dest.q},{dest.r}) facing={int(dest_facing)}")
             else:
-                out.append(f"Cannot move: phase is {_enc.phase.value!r}")
+                out.append(f"Cannot move: phase is {session.enc.phase.value!r}")
 
         elif cmd in ("tl", "tr"):
             if len(parts) != 2:
                 out.append(f"usage: {cmd} <ship_id>"); return out
-            ship_id = parts[1]
-            if ship_id not in _enc.battle.ships:
-                out.append(f"unknown ship: {ship_id!r}"); return out
+            try:
+                ship_id = _resolve_ship_id(session, parts[1])
+            except KeyError:
+                out.append(f"unknown ship: {parts[1]!r}"); return out
             from tactical.encounter import Phase
-            if _enc.phase != Phase.MOVE_SUBMISSION:
-                out.append(f"Cannot turn: phase is {_enc.phase.value!r}"); return out
+            if session.enc.phase != Phase.MOVE_SUBMISSION:
+                out.append(f"Cannot turn: phase is {session.enc.phase.value!r}"); return out
             direction = +1 if cmd == "tr" else -1
-            out += _draft_turn(ship_id, direction)
+            out += _draft_turn(session, ship_id, direction)
 
         elif cmd == "spend":
             if len(parts) != 3:
                 out.append("usage: spend <ship_id> <amount>"); return out
-            ship_id = parts[1]
-            if ship_id not in _enc.battle.ships:
-                out.append(f"unknown ship: {ship_id!r}"); return out
+            try:
+                ship_id = _resolve_ship_id(session, parts[1])
+            except KeyError:
+                out.append(f"unknown ship: {parts[1]!r}"); return out
             from tactical.encounter import Phase
-            if _enc.phase != Phase.MOVE_SUBMISSION:
-                out.append(f"Cannot spend: phase is {_enc.phase.value!r}"); return out
-            out += _draft_spend(ship_id, int(parts[2]))
+            if session.enc.phase != Phase.MOVE_SUBMISSION:
+                out.append(f"Cannot spend: phase is {session.enc.phase.value!r}"); return out
+            out += _draft_spend(session, ship_id, int(parts[2]))
 
         elif cmd == "commit":
             if len(parts) < 2:
@@ -282,18 +294,17 @@ def _process(cmd_line: str) -> list[str]:
             sub = parts[1].lower()
 
             if sub == "move":
-                if _enc.phase != Phase.MOVE_SUBMISSION:
-                    out.append(f"Not in move_submission phase (current: {_enc.phase.value})")
+                if session.enc.phase != Phase.MOVE_SUBMISSION:
+                    out.append(f"Not in move_submission phase (current: {session.enc.phase.value})")
                     return out
-                # Stage move orders from all pending drafts first
                 from tactical.facing import Facing
-                for ship_id, d in list(_drafts.items()):
-                    if ship_id not in _enc.battle.ships:
+                for ship_id, d in list(session.drafts.items()):
+                    if ship_id not in session.enc.battle.ships:
                         continue
-                    ship = _enc.battle.ships[ship_id]
+                    ship = session.enc.battle.ships[ship_id]
                     side = ship.owner_id
                     try:
-                        _enc = _enc.stage_move(
+                        session.enc = session.enc.stage_move(
                             side, ship_id,
                             d["pos"], Facing.from_int(d["facing"]),
                             path_cost=d["mp_used"],
@@ -306,70 +317,88 @@ def _process(cmd_line: str) -> list[str]:
                         )
                     except Exception as e:
                         out.append(f"Draft {ship_id} invalid: {e}")
-                _drafts = {}
+                session.drafts = {}
 
                 sides_to_commit = (
                     [parts[2]] if len(parts) >= 3
-                    else sorted(_enc.sides() - _enc._move_committed)
+                    else sorted(session.enc.sides() - session.enc._move_committed)
                 )
                 from tactical.events import FuelWarningEvent, UnitDestroyedEvent
-                from tactical.fighter_combat import AttackRunEvent, DogfightEvent
+                from tactical.fighter_events import AttackRunEvent, DogfightEvent
+                all_mv_events = []
                 for s in sides_to_commit:
-                    _enc, mv_events = _enc.commit_movement(s, _rng)
+                    session.enc, mv_events = session.enc.commit_movement(s, session.rng)
+                    all_mv_events.extend(mv_events)
                     out.append(f"Side {s!r} committed movement.")
                     for ev in mv_events:
                         if isinstance(ev, AttackRunEvent):
                             out.extend(_fmt_attack_run(ev, label="TRANSIT"))
                         elif isinstance(ev, UnitDestroyedEvent):
                             out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
-                    if _enc.phase == Phase.COMBAT_SUBMISSION:
+                    if session.enc.phase == Phase.COMBAT_SUBMISSION:
                         out.append("→ Movement resolved. Now in COMBAT_SUBMISSION.")
                         break
+                append_turn_events(
+                    session.game_id, session.turn_number, "move_submission", all_mv_events
+                )
+                _autosave(session)
 
             elif sub == "fire":
-                if _enc.phase != Phase.COMBAT_SUBMISSION:
-                    out.append(f"Not in combat_submission phase (current: {_enc.phase.value})")
+                if session.enc.phase != Phase.COMBAT_SUBMISSION:
+                    out.append(f"Not in combat_submission phase (current: {session.enc.phase.value})")
                     return out
                 sides_to_commit = (
                     [parts[2]] if len(parts) >= 3
-                    else sorted(_enc.sides() - _enc._fire_committed)
+                    else sorted(session.enc.sides() - session.enc._fire_committed)
                 )
                 from tactical.events import BattleEndEvent, FuelWarningEvent, UnitDestroyedEvent
+                all_fire_events = []
                 for s in sides_to_commit:
-                    _enc, events = _enc.commit_fire(s, _rng)
+                    session.enc, events = session.enc.commit_fire(s, session.rng)
+                    all_fire_events.extend(events)
                     out.append(f"Side {s!r} committed fire orders.")
                     for ev in events:
                         if isinstance(ev, UnitDestroyedEvent):
                             out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
                         elif isinstance(ev, FuelWarningEvent):
-                            out.append(f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed")
+                            out.append(f"  WARNING: {ev.squadron_id} is out of fuel")
                         elif isinstance(ev, BattleEndEvent):
                             msg = "MUTUAL DESTRUCTION (draw)" if ev.is_draw else f"{ev.winner} WINS"
                             out.append(f"  *** BATTLE OVER — {msg} ***")
                         else:
                             out.append(_fmt_fire(ev))
-                    if _enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION, Phase.COMPLETE):
-                        if _enc.phase == Phase.COMPLETE:
+                    if session.enc.phase in (Phase.COMBAT_SMALL, Phase.MOVE_SUBMISSION, Phase.COMPLETE):
+                        if session.enc.phase == Phase.COMPLETE:
                             phase_label = "battle complete"
-                        elif _enc.phase == Phase.COMBAT_SMALL:
+                        elif session.enc.phase == Phase.COMBAT_SMALL:
                             phase_label = "COMBAT_SMALL"
                         else:
                             phase_label = "next turn"
+                            session.turn_number += 1
+                            append_turn_snapshot(
+                                session.game_id, session.turn_number, session.enc, session.rng
+                            )
                         out.append(f"→ Fire resolved. Entering {phase_label}.")
                         break
+                append_turn_events(
+                    session.game_id, session.turn_number, "combat_submission", all_fire_events
+                )
+                _autosave(session)
 
             elif sub == "squadrons":
-                if _enc.phase != Phase.COMBAT_SMALL:
-                    out.append(f"Not in combat_small phase (current: {_enc.phase.value})")
+                if session.enc.phase != Phase.COMBAT_SMALL:
+                    out.append(f"Not in combat_small phase (current: {session.enc.phase.value})")
                     return out
                 sides_to_commit = (
                     [parts[2]] if len(parts) >= 3
-                    else sorted(_enc.sides() - _enc._squadron_committed)
+                    else sorted(session.enc.sides() - session.enc._squadron_committed)
                 )
-                from tactical.events import FuelWarningEvent, UnitDestroyedEvent
-                from tactical.fighter_combat import AttackRunEvent, BreakOffEvent, DogfightEvent
+                from tactical.events import BattleEndEvent, FuelWarningEvent, UnitDestroyedEvent
+                from tactical.fighter_events import AttackRunEvent, BreakOffEvent, DogfightEvent
+                all_sq_events = []
                 for s in sides_to_commit:
-                    _enc, events = _enc.commit_squadron_orders(s, _rng)
+                    session.enc, events = session.enc.commit_squadron_orders(s, session.rng)
+                    all_sq_events.extend(events)
                     out.append(f"Side {s!r} committed squadron orders.")
                     for ev in events:
                         if isinstance(ev, DogfightEvent):
@@ -389,17 +418,41 @@ def _process(cmd_line: str) -> list[str]:
                         elif isinstance(ev, UnitDestroyedEvent):
                             out.append(f"  *** {ev.unit_id} DESTROYED ({ev.cause.value}) ***")
                         elif isinstance(ev, FuelWarningEvent):
-                            out.append(f"  WARNING: {ev.squadron_id} is out of fuel and must land this turn or will be destroyed")
+                            out.append(f"  WARNING: {ev.squadron_id} is out of fuel")
                         elif isinstance(ev, BattleEndEvent):
                             msg = "MUTUAL DESTRUCTION (draw)" if ev.is_draw else f"{ev.winner} WINS"
                             out.append(f"  *** BATTLE OVER — {msg} ***")
-                    if _enc.phase in (Phase.MOVE_SUBMISSION, Phase.COMPLETE):
-                        label = "battle complete" if _enc.phase == Phase.COMPLETE else "next turn"
+                    if session.enc.phase in (Phase.MOVE_SUBMISSION, Phase.COMPLETE):
+                        label = "battle complete" if session.enc.phase == Phase.COMPLETE else "next turn"
+                        if session.enc.phase == Phase.MOVE_SUBMISSION:
+                            session.turn_number += 1
+                            append_turn_snapshot(
+                                session.game_id, session.turn_number, session.enc, session.rng
+                            )
                         out.append(f"→ Fighter phase resolved. {label.capitalize()}.")
                         break
+                append_turn_events(
+                    session.game_id, session.turn_number, "combat_small", all_sq_events
+                )
+                _autosave(session)
 
             else:
                 out.append("usage: commit move [side_id]  |  commit fire [side_id]  |  commit squadrons [side_id]")
+
+        elif cmd == "launch":
+            if len(parts) != 3:
+                out.append("usage: launch <carrier_id> <squadron_id>"); return out
+            squadron_id = parts[2]
+            try:
+                carrier_id = _resolve_ship_id(session, parts[1])
+            except KeyError:
+                out.append(f"unknown ship: {parts[1]!r}"); return out
+            from tactical.encounter import Phase
+            if session.enc.phase != Phase.MOVE_SUBMISSION:
+                out.append(f"Cannot launch: phase is {session.enc.phase.value!r}"); return out
+            side = session.enc.battle.ships[carrier_id].owner_id
+            session.enc = session.enc.stage_launch(side, carrier_id, squadron_id)
+            out.append(f"Staged: {carrier_id} will launch {squadron_id}")
 
         # ---------------------------------------------------------------- #
         # Combat submission                                                  #
@@ -408,21 +461,24 @@ def _process(cmd_line: str) -> list[str]:
         elif cmd == "fireall":
             if len(parts) != 3:
                 out.append("usage: fireall <ship_id> <target_id>"); return out
-            ship_id, target_id = parts[1], parts[2]
-            if ship_id not in _enc.battle.ships:
-                out.append(f"unknown ship: {ship_id!r}"); return out
-            side = _enc.battle.ships[ship_id].owner_id
-            _enc = _enc.stage_fire(side, ship_id, target_id)
+            try:
+                ship_id   = _resolve_ship_id(session, parts[1])
+                target_id = _resolve_ship_id(session, parts[2])
+            except KeyError as e:
+                out.append(f"unknown ship: {e}"); return out
+            side = session.enc.battle.ships[ship_id].owner_id
+            session.enc = session.enc.stage_fire(side, ship_id, target_id)
             out.append(f"Staged: {ship_id} fires all weapons at {target_id}")
 
         elif cmd == "pass":
             if len(parts) != 2:
                 out.append("usage: pass <ship_id>"); return out
-            ship_id = parts[1]
-            if ship_id not in _enc.battle.ships:
-                out.append(f"unknown ship: {ship_id!r}"); return out
-            side = _enc.battle.ships[ship_id].owner_id
-            _enc = _enc.pass_fire(side, ship_id)
+            try:
+                ship_id = _resolve_ship_id(session, parts[1])
+            except KeyError:
+                out.append(f"unknown ship: {parts[1]!r}"); return out
+            side = session.enc.battle.ships[ship_id].owner_id
+            session.enc = session.enc.pass_fire(side, ship_id)
             out.append(f"Staged: {ship_id} passes fire")
 
         # ---------------------------------------------------------------- #
@@ -430,74 +486,116 @@ def _process(cmd_line: str) -> list[str]:
         # ---------------------------------------------------------------- #
 
         elif cmd == "intercept":
-            # intercept <squad_id> <q> <r>
-            if len(parts) != 4:
-                out.append("usage: intercept <squad_id> <q> <r>"); return out
+            if len(parts) not in (4, 5):
+                out.append("usage: intercept <squad_id> <q> <r> [max_radius]"); return out
             sq_id = parts[1]
-            if sq_id not in _enc.battle.squadrons:
+            if sq_id not in session.enc.battle.squadrons:
                 out.append(f"unknown squadron: {sq_id!r}"); return out
             from tactical.encounter import Phase
-            if _enc.phase != Phase.COMBAT_SMALL:
-                out.append(f"Cannot order: phase is {_enc.phase.value!r}"); return out
+            if session.enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {session.enc.phase.value!r}"); return out
             from sim.hexgrid import Hex
             from tactical.turn_orders import InterceptOrder
             patrol = Hex(int(parts[2]), int(parts[3]))
-            side   = _enc.battle.squadrons[sq_id].owner_id
-            _enc   = _enc.stage_squadron_order(side, sq_id, InterceptOrder(patrol_hex=patrol))
-            out.append(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r})")
+            max_radius = int(parts[4]) if len(parts) == 5 else None
+            side = session.enc.battle.squadrons[sq_id].owner_id
+            session.enc = session.enc.stage_squadron_order(
+                side, sq_id, InterceptOrder(patrol_hex=patrol, max_intercept_radius=max_radius)
+            )
+            radius_str = f" max_radius={max_radius}" if max_radius is not None else ""
+            out.append(f"Staged: {sq_id} INTERCEPT at ({patrol.q},{patrol.r}){radius_str}")
+
+        elif cmd == "fmove":
+            if len(parts) != 4:
+                out.append("usage: fmove <squad_id> <q> <r>"); return out
+            sq_id = parts[1]
+            if sq_id not in session.enc.battle.squadrons:
+                out.append(f"unknown squadron: {sq_id!r}"); return out
+            from tactical.encounter import Phase
+            if session.enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {session.enc.phase.value!r}"); return out
+            from sim.hexgrid import Hex
+            from tactical.turn_orders import MoveOrder
+            dest = Hex(int(parts[2]), int(parts[3]))
+            side = session.enc.battle.squadrons[sq_id].owner_id
+            session.enc = session.enc.stage_squadron_order(side, sq_id, MoveOrder(dest=dest))
+            out.append(f"Staged: {sq_id} MOVE → ({dest.q},{dest.r})")
+
+        elif cmd == "recover":
+            if len(parts) != 3:
+                out.append("usage: recover <squad_id> <carrier_id>"); return out
+            sq_id, carrier_id = parts[1], parts[2]
+            if sq_id not in session.enc.battle.squadrons:
+                out.append(f"unknown squadron: {sq_id!r}"); return out
+            from tactical.encounter import Phase
+            if session.enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {session.enc.phase.value!r}"); return out
+            from tactical.turn_orders import RecoverOrder
+            side = session.enc.battle.squadrons[sq_id].owner_id
+            session.enc = session.enc.stage_squadron_order(side, sq_id, RecoverOrder(carrier_id=carrier_id))
+            out.append(f"Staged: {sq_id} RECOVER → {carrier_id}")
 
         elif cmd == "breakoff":
-            # breakoff <squad_id> <q> <r>
             if len(parts) != 4:
                 out.append("usage: breakoff <squad_id> <q> <r>"); return out
             sq_id = parts[1]
-            if sq_id not in _enc.battle.squadrons:
+            if sq_id not in session.enc.battle.squadrons:
                 out.append(f"unknown squadron: {sq_id!r}"); return out
             from tactical.encounter import Phase
-            if _enc.phase != Phase.COMBAT_SMALL:
-                out.append(f"Cannot order: phase is {_enc.phase.value!r}"); return out
+            if session.enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {session.enc.phase.value!r}"); return out
             from sim.hexgrid import Hex
             from tactical.turn_orders import BreakOffOrder
             dest = Hex(int(parts[2]), int(parts[3]))
-            side = _enc.battle.squadrons[sq_id].owner_id
-            _enc = _enc.stage_squadron_order(side, sq_id, BreakOffOrder(dest=dest))
+            side = session.enc.battle.squadrons[sq_id].owner_id
+            session.enc = session.enc.stage_squadron_order(side, sq_id, BreakOffOrder(dest=dest))
             out.append(f"Staged: {sq_id} BREAK OFF → ({dest.q},{dest.r})")
 
         elif cmd == "strike":
-            # strike <squad_id> <target_id>
             if len(parts) != 3:
                 out.append("usage: strike <squad_id> <target_id>"); return out
-            sq_id, target_id = parts[1], parts[2]
-            if sq_id not in _enc.battle.squadrons:
+            sq_id = parts[1]
+            if sq_id not in session.enc.battle.squadrons:
                 out.append(f"unknown squadron: {sq_id!r}"); return out
             from tactical.encounter import Phase
-            if _enc.phase != Phase.COMBAT_SMALL:
-                out.append(f"Cannot order: phase is {_enc.phase.value!r}"); return out
+            if session.enc.phase != Phase.COMBAT_SMALL:
+                out.append(f"Cannot order: phase is {session.enc.phase.value!r}"); return out
+            try:
+                target_id = _resolve_unit_id(session, parts[2])
+            except KeyError:
+                out.append(f"unknown unit: {parts[2]!r}"); return out
             from tactical.turn_orders import StrikeOrder
-            side = _enc.battle.squadrons[sq_id].owner_id
-            _enc = _enc.stage_squadron_order(side, sq_id, StrikeOrder(target_id=target_id))
+            side = session.enc.battle.squadrons[sq_id].owner_id
+            session.enc = session.enc.stage_squadron_order(side, sq_id, StrikeOrder(target_id=target_id))
             out.append(f"Staged: {sq_id} STRIKE → {target_id}")
 
         # ---------------------------------------------------------------- #
-        # Debug / quick fire (bypass submission system)                      #
+        # Debug / quick fire                                                 #
         # ---------------------------------------------------------------- #
 
         elif cmd == "quickfire":
             if len(parts) != 3:
                 out.append("usage: quickfire <attacker_id> <target_id>"); return out
-            attacker_id, target_id = parts[1], parts[2]
-            if attacker_id not in _enc.battle.ships:
-                out.append(f"unknown ship: {attacker_id!r}"); return out
+            try:
+                attacker_id = _resolve_ship_id(session, parts[1])
+                target_id   = _resolve_ship_id(session, parts[2])
+            except KeyError as e:
+                out.append(f"unknown ship: {e}"); return out
             from tactical.combat import resolve_fire_all
             new_battle, events = resolve_fire_all(
-                _enc.battle, attacker_id=attacker_id, target_id=target_id, rng=_rng)
-            _enc = replace(_enc, battle=new_battle)
+                session.enc.battle, attacker_id=attacker_id, target_id=target_id, rng=session.rng)
+            session.enc = replace(session.enc, battle=new_battle)
             out += [_fmt_fire(ev) for ev in events] or [f"{attacker_id} has no active weapons."]
 
         elif cmd == "shoot":
             if len(parts) != 4:
                 out.append("usage: shoot <attacker_id> <target_id> <weapon_code>"); return out
-            attacker_id, target_id, wcode = parts[1], parts[2], parts[3].upper()
+            try:
+                attacker_id = _resolve_ship_id(session, parts[1])
+                target_id   = _resolve_ship_id(session, parts[2])
+            except KeyError as e:
+                out.append(f"unknown ship: {e}"); return out
+            wcode = parts[3].upper()
             from tactical.combat import resolve_large_fire
             from tactical.weapons import WeaponType
             try:
@@ -505,14 +603,14 @@ def _process(cmd_line: str) -> list[str]:
             except Exception:
                 out.append(f"unknown weapon_code: {wcode!r}"); return out
             new_battle, ev = resolve_large_fire(
-                _enc.battle, attacker_id=attacker_id, target_id=target_id,
-                weapon=weapon, rng=_rng)
-            _enc = replace(_enc, battle=new_battle)
+                session.enc.battle, attacker_id=attacker_id, target_id=target_id,
+                weapon=weapon, rng=session.rng)
+            session.enc = replace(session.enc, battle=new_battle)
             out.append(_fmt_fire(ev))
 
         else:
             out.append(f"unknown command: {cmd!r}")
-            out.append("move/tl/tr/spend  commit move  fireall/pass  commit fire  quickfire/shoot  reset")
+            out.append("move/tl/tr/spend  commit move  fireall/pass  commit fire  quickfire/shoot")
 
     except Exception as e:
         out.append(f"ERROR: {e}")
@@ -524,20 +622,16 @@ def _process(cmd_line: str) -> list[str]:
 # State rendering helpers
 # ---------------------------------------------------------------------------
 
-def _render_units(view: str = "master") -> str:
+def _render_units(session: GameSession, view: str = "master") -> str:
     from tactical.sensor_rules import major_status_flags
+    enc = session.enc
     lines = []
-    for sid in _enc.battle.ship_ids_sorted():
-        ship = _enc.battle.ships[sid]
+    for sid in enc.battle.ship_ids_sorted():
+        ship = enc.battle.ships[sid]
         if ship.systems is not None and ship.systems.is_destroyed():
-            continue  # omit destroyed ships from the summary
+            continue
 
-        # Determine detection level
-        if view == "master" or ship.owner_id == view:
-            det = 3
-        else:
-            det = _enc._knowledge.get(view, {}).get(sid, 0)
-
+        det = _detection_level(sid, ship.owner_id, view, enc)
         num = sid[len(ship.owner_id):]
         hull_class = ship.hull_type.designation if ship.hull_type else "??"
 
@@ -547,11 +641,9 @@ def _render_units(view: str = "master") -> str:
             flags = major_status_flags(ship)
             flag_str = f"  [{', '.join(flags)}]" if flags else ""
             display_id = ship.owner_id + "??" + num
-            lines.append(
-                f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}"
-            )
+            lines.append(f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}")
         elif det == 2:
-            revealed = _enc._revealed_systems.get(sid, frozenset())
+            revealed = enc._revealed_systems.get(sid, frozenset())
             track = "".join(
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(ship.systems)
@@ -568,23 +660,15 @@ def _render_units(view: str = "master") -> str:
                 f"  face={int(ship.facing)}  mp={ship.mp}"
                 f"\n      systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
             )
-    for sqid in _enc.battle.squadron_ids_sorted():
-        sq = _enc.battle.squadrons[sqid]
+    for sqid in enc.battle.squadron_ids_sorted():
+        sq = enc.battle.squadrons[sqid]
         if not sq.is_deployed:
             continue
-
-        # Determine detection level
-        if view == "master" or sq.owner_id == view:
-            det = 3
-        else:
-            det = _enc._knowledge.get(view, {}).get(sqid, 0)
-
+        det = _detection_level(sqid, sq.owner_id, view, enc)
         if det == 0:
             continue
         elif det == 1:
-            lines.append(
-                f"   ?  pos=({sq.pos.q:+},{sq.pos.r:+})"
-            )
+            lines.append(f"   ?  pos=({sq.pos.q:+},{sq.pos.r:+})")
         elif det == 2:
             lines.append(
                 f"   ?  pos=({sq.pos.q:+},{sq.pos.r:+})"
@@ -604,37 +688,30 @@ def _render_units(view: str = "master") -> str:
     return "\n".join(lines)
 
 
-def _render_phase() -> str:
+def _render_phase(session: GameSession) -> str:
     from tactical.encounter import Phase
-    enc = _enc
+    enc = session.enc
     phase = enc.phase.value.upper()
     if enc.phase == Phase.MOVE_SUBMISSION:
         committed = sorted(enc._move_committed)
-        return f"{phase}  committed={committed}"
+        return f"Turn {session.turn_number}  {phase}  committed={committed}"
     if enc.phase == Phase.COMBAT_SUBMISSION:
         committed = sorted(enc._fire_committed)
-        return f"{phase}  committed={committed}"
-    return phase
+        return f"Turn {session.turn_number}  {phase}  committed={committed}"
+    return f"Turn {session.turn_number}  {phase}"
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# JSON rendering helpers
 # ---------------------------------------------------------------------------
 
-def _ships_json(view: str = "master") -> str:
+def _ships_json(session: GameSession, view: str = "master") -> str:
     from tactical.sensor_rules import major_status_flags
+    enc = session.enc
     result = []
-    for sid, s in _enc.battle.ships.items():
+    for sid, s in enc.battle.ships.items():
         is_destroyed = bool(s.systems is not None and s.systems.is_destroyed())
-
-        # Determine detection level
-        if view == "master" or s.owner_id == view:
-            det = 3
-        else:
-            det = _enc._knowledge.get(view, {}).get(sid, 0)
-
-        # Build a display ID using owner + class + number.
-        # The internal ship_id is e.g. "A1"; num strips the owner prefix → "1".
+        det = _detection_level(sid, s.owner_id, view, enc)
         num = sid[len(s.owner_id):]
         hull_class = s.hull_type.designation if s.hull_type else "??"
 
@@ -651,7 +728,7 @@ def _ships_json(view: str = "master") -> str:
                 "major_status": major_status_flags(s),
             })
         elif det == 2:
-            revealed = _enc._revealed_systems.get(sid, frozenset())
+            revealed = enc._revealed_systems.get(sid, frozenset())
             sys_list = [
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(s.systems)
@@ -679,19 +756,14 @@ def _ships_json(view: str = "master") -> str:
     return json.dumps(result)
 
 
-def _squadrons_json(view: str = "master") -> str:
+def _squadrons_json(session: GameSession, view: str = "master") -> str:
+    enc = session.enc
     result = []
-    for sqid, sq in _enc.battle.squadrons.items():
+    for sqid, sq in enc.battle.squadrons.items():
         if not sq.is_deployed:
             continue
-
-        # Determine detection level
-        if view == "master" or sq.owner_id == view:
-            det = 3
-        else:
-            det = _enc._knowledge.get(view, {}).get(sqid, 0)
-
-        num = sqid[len(sq.owner_id):]  # e.g. "AF1" → "F1"
+        det = _detection_level(sqid, sq.owner_id, view, enc)
+        num = sqid[len(sq.owner_id):]
 
         if det == 0:
             continue
@@ -726,13 +798,13 @@ def _squadrons_json(view: str = "master") -> str:
     return json.dumps(result)
 
 
-def _paths_json() -> str:
-    """Serialize pending draft paths for canvas rendering."""
+def _paths_json(session: GameSession) -> str:
+    enc = session.enc
     paths = []
-    for ship_id, d in _drafts.items():
-        if ship_id not in _enc.battle.ships:
+    for ship_id, d in session.drafts.items():
+        if ship_id not in enc.battle.ships:
             continue
-        ship = _enc.battle.ships[ship_id]
+        ship = enc.battle.ships[ship_id]
         paths.append({
             "shipId":      ship_id,
             "owner":       ship.owner_id,
@@ -742,18 +814,23 @@ def _paths_json() -> str:
     return json.dumps(paths)
 
 
-def _intercept_paths_json() -> str:
-    """Serialize staged intercept orders as {owner, hexes} paths for canvas."""
+def _iter_intercept_orders(session: GameSession):
     from tactical.turn_orders import InterceptOrder
-    paths = []
-    for sq_id, order in _enc._squadron_orders.items():
+    enc = session.enc
+    for sq_id, order in enc._squadron_orders.items():
         if not isinstance(order, InterceptOrder):
             continue
-        sq = _enc.battle.squadrons.get(sq_id)
+        sq = enc.battle.squadrons.get(sq_id)
         if sq is None:
             continue
+        yield sq_id, sq, order
+
+
+def _intercept_paths_json(session: GameSession) -> str:
+    paths = []
+    for _sq_id, sq, order in _iter_intercept_orders(session):
         if sq.pos == order.patrol_hex:
-            continue  # already at patrol hex, nothing to draw
+            continue
         paths.append({
             "owner": sq.owner_id,
             "hexes": [
@@ -764,19 +841,14 @@ def _intercept_paths_json() -> str:
     return json.dumps(paths)
 
 
-def _intercept_zones_json() -> str:
-    """Serialize staged intercept orders as {owner, q, r, radius} zones."""
-    from tactical.fighter_combat import hex_distance
-    from tactical.turn_orders import InterceptOrder
+def _intercept_zones_json(session: GameSession) -> str:
+    from sim.hexgrid import hex_distance
     zones = []
-    for sq_id, order in _enc._squadron_orders.items():
-        if not isinstance(order, InterceptOrder):
-            continue
-        sq = _enc.battle.squadrons.get(sq_id)
-        if sq is None:
-            continue
+    for _sq_id, sq, order in _iter_intercept_orders(session):
         dist   = hex_distance(sq.pos, order.patrol_hex)
         radius = max(0, sq.effective_mp - dist + 1)
+        if order.max_intercept_radius is not None:
+            radius = min(radius, order.max_intercept_radius)
         zones.append({
             "owner":  sq.owner_id,
             "q":      order.patrol_hex.q,
@@ -786,23 +858,23 @@ def _intercept_zones_json() -> str:
     return json.dumps(zones)
 
 
-def _strike_orders_json() -> str:
-    """Serialize staged strike orders as attacker→target arrows."""
+def _strike_orders_json(session: GameSession) -> str:
     from tactical.encounter import Phase
     from tactical.turn_orders import StrikeOrder
-    if _enc.phase != Phase.COMBAT_SMALL:
+    enc = session.enc
+    if enc.phase != Phase.COMBAT_SMALL:
         return json.dumps([])
     orders = []
-    for sq_id, order in _enc._squadron_orders.items():
+    for sq_id, order in enc._squadron_orders.items():
         if not isinstance(order, StrikeOrder):
             continue
-        attacker = _enc.battle.squadrons.get(sq_id)
+        attacker = enc.battle.squadrons.get(sq_id)
         if attacker is None:
             continue
-        if order.target_id in _enc.battle.ships:
-            target_pos = _enc.battle.ships[order.target_id].pos
-        elif order.target_id in _enc.battle.squadrons:
-            target_pos = _enc.battle.squadrons[order.target_id].pos
+        if order.target_id in enc.battle.ships:
+            target_pos = enc.battle.ships[order.target_id].pos
+        elif order.target_id in enc.battle.squadrons:
+            target_pos = enc.battle.squadrons[order.target_id].pos
         else:
             continue
         orders.append({
@@ -813,17 +885,17 @@ def _strike_orders_json() -> str:
     return json.dumps(orders)
 
 
-def _fire_orders_json() -> str:
-    """Serialize staged fire orders for canvas rendering."""
+def _fire_orders_json(session: GameSession) -> str:
     from tactical.encounter import Phase
-    if _enc.phase != Phase.COMBAT_SUBMISSION:
+    enc = session.enc
+    if enc.phase != Phase.COMBAT_SUBMISSION:
         return json.dumps([])
     orders = []
-    for ship_id, order in _enc._fire_orders.items():
+    for ship_id, order in enc._fire_orders.items():
         if order is None:
             continue
-        attacker = _enc.battle.ships.get(ship_id)
-        target   = _enc.battle.ships.get(order.target_id)
+        attacker = enc.battle.ships.get(ship_id)
+        target   = enc.battle.ships.get(order.target_id)
         if attacker is None or target is None:
             continue
         orders.append({
@@ -836,31 +908,77 @@ def _fire_orders_json() -> str:
     return json.dumps(orders)
 
 
+def _game_template_context(request: Request, session: GameSession, view: str) -> dict:
+    return {
+        "request":              request,
+        "game_id":              session.game_id,
+        "game_name":            session.name,
+        "phase":                _render_phase(session),
+        "units_text":           _render_units(session, view),
+        "ships_json":           _ships_json(session, view),
+        "squadrons_json":       _squadrons_json(session, view),
+        "paths_json":           _paths_json(session),
+        "fire_orders_json":     _fire_orders_json(session),
+        "strike_orders_json":   _strike_orders_json(session),
+        "intercept_paths_json": _intercept_paths_json(session),
+        "intercept_zones_json": _intercept_zones_json(session),
+        "log":                  "\n".join(session.log[-40:]),
+        "view":                 view,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Routes — lobby
+# ---------------------------------------------------------------------------
+
 @router.get("/", response_class=HTMLResponse)
-async def tactical_ui(request: Request, view: str = "master"):
-    return templates.TemplateResponse("tactical.html", {
-        "request":          request,
-        "phase":            _render_phase(),
-        "units_text":           _render_units(view),
-        "ships_json":           _ships_json(view),
-        "squadrons_json":       _squadrons_json(view),
-        "paths_json":           _paths_json(),
-        "fire_orders_json":     _fire_orders_json(),
-        "strike_orders_json":   _strike_orders_json(),
-        "intercept_paths_json": _intercept_paths_json(),
-        "intercept_zones_json": _intercept_zones_json(),
-        "log":              "\n".join(_log[-40:]),
-        "view":             view,
+async def lobby(request: Request):
+    games = list_games()
+    return templates.TemplateResponse("lobby.html", {
+        "request": request,
+        "games":   games,
     })
 
 
-@router.post("/command")
-async def tactical_command(request: Request, cmd: str = Form(...)):
-    global _log
+@router.post("/new")
+async def new_game(name: str = Form(...)):
+    session = _new_game(name.strip() or "Unnamed game")
+    return RedirectResponse(url=f"/tactical/game/{session.game_id}/", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Routes — per-game
+# ---------------------------------------------------------------------------
+
+@router.get("/game/{game_id}/", response_class=HTMLResponse)
+async def game_view(request: Request, game_id: str, view: str = "master"):
+    try:
+        session = _get_session(game_id)
+    except KeyError:
+        return HTMLResponse(f"Game {game_id!r} not found.", status_code=404)
+    return templates.TemplateResponse(
+        "tactical.html",
+        _game_template_context(request, session, view),
+    )
+
+
+@router.post("/game/{game_id}/command")
+async def game_command(request: Request, game_id: str, cmd: str = Form(...)):
+    try:
+        session = _get_session(game_id)
+    except KeyError:
+        return HTMLResponse(f"Game {game_id!r} not found.", status_code=404)
     view = request.query_params.get("view", "master")
-    _log.append(f"> {cmd}")
-    output = _process(cmd)
-    _log.extend(output)
-    if len(_log) > _MAX_LOG:
-        _log = _log[-_MAX_LOG:]
-    return RedirectResponse(url=f"/tactical/?view={view}", status_code=303)
+    session.log.append(f"> {cmd}")
+    output = _process(session, cmd)
+    session.log.extend(output)
+    if len(session.log) > _MAX_LOG:
+        session.log = session.log[-_MAX_LOG:]
+    return RedirectResponse(url=f"/tactical/game/{game_id}/?view={view}", status_code=303)
+
+
+@router.post("/game/{game_id}/delete")
+async def game_delete(game_id: str):
+    _sessions.pop(game_id, None)
+    _db_delete(game_id)
+    return RedirectResponse(url="/tactical/", status_code=303)

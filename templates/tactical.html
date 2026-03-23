@@ -29,13 +29,14 @@
   </style>
 </head>
 <body>
-  <h1>Tactical Encounter</h1>
+  <h1>Tactical Encounter — {{ game_name }}</h1>
   <div class="phase">{{ phase }}</div>
 
   <div class="tab-bar">
-    <a href="/tactical/?view=A"      class="tab {% if view == 'A' %}active{% endif %}">Side A</a>
-    <a href="/tactical/?view=B"      class="tab {% if view == 'B' %}active{% endif %}">Side B</a>
-    <a href="/tactical/?view=master" class="tab {% if view == 'master' %}active{% endif %}">Master</a>
+    <a href="/tactical/"                                           class="tab">⬅ Lobby</a>
+    <a href="/tactical/game/{{ game_id }}/?view=A"      class="tab {% if view == 'A' %}active{% endif %}">Side A</a>
+    <a href="/tactical/game/{{ game_id }}/?view=B"      class="tab {% if view == 'B' %}active{% endif %}">Side B</a>
+    <a href="/tactical/game/{{ game_id }}/?view=master" class="tab {% if view == 'master' %}active{% endif %}">Master</a>
   </div>
 
   <div class="row">
@@ -55,7 +56,7 @@
 
     <div class="col-right">
       <h2>Command</h2>
-      <form method="post" action="/tactical/command?view={{ view }}">
+      <form method="post" action="/tactical/game/{{ game_id }}/command?view={{ view }}">
         <div class="cmd-row">
           <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. move A1 3  |  fireall A1 B1"/>
           <button type="submit">Send</button>

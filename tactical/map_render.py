@@ -1,15 +1,7 @@
 from __future__ import annotations
 
-from sim.hexgrid import Hex
+from sim.hexgrid import Hex, hex_distance
 from tactical.battle_state import BattleState
-
-
-def axial_distance(a: Hex, b: Hex) -> int:
-    """Hex distance in axial coords."""
-    dq = abs(a.q - b.q)
-    dr = abs(a.r - b.r)
-    ds = abs((a.q + a.r) - (b.q + b.r))
-    return max(dq, dr, ds)
 
 
 def render_ascii_map(
@@ -37,7 +29,7 @@ def render_ascii_map(
 
         for q in range(center.q - radius, center.q + radius + 1):
             h = Hex(q, r)
-            if axial_distance(h, center) > radius:
+            if hex_distance(h, center) > radius:
                 continue
 
             if h in ship_at:

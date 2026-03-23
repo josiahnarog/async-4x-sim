@@ -56,3 +56,26 @@ def arc_of(observer_facing: int, dq: int, dr: int) -> Arc:
     """Which arc is the point (dq, dr) in, from the observer's perspective?"""
     rb = relative_bearing(observer_facing, dq, dr)
     return Arc.REAR if rb in REAR_BEARINGS else Arc.FRONT
+
+
+def assert_can_fire(
+    attacker_facing: int,
+    attacker_pos: object,
+    target_pos: object,
+    attacker_id: str,
+    target_id: str,
+) -> int:
+    """Validate that attacker can fire toward target (target not in blind spot).
+
+    Returns the relative bearing on success.
+    Raises ValueError if the target is in the attacker's rear arc.
+    """
+    dq = target_pos.q - attacker_pos.q  # type: ignore[attr-defined]
+    dr = target_pos.r - attacker_pos.r  # type: ignore[attr-defined]
+    rb = relative_bearing(attacker_facing, dq, dr)
+    if rb in REAR_BEARINGS:
+        raise ValueError(
+            f"{attacker_id} cannot fire at {target_id}: "
+            f"target is in blind spot (relative bearing {rb})"
+        )
+    return rb

@@ -5,15 +5,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from sim.hexgrid import Hex
+from sim.hexgrid import Hex, hex_distance
 from tactical.battle_state import BattleState, ShipID
-from tactical.combat import FireEvent, resolve_fire_all, hex_distance
+from tactical.combat import FireEvent
 from tactical.facing import Facing
-from tactical.fighter_combat import FighterCombatEvent, resolve_combat_small
+from tactical.fighter_combat import resolve_combat_small
+from tactical.fighter_events import FighterCombatEvent
 from tactical.initiative import Initiative, RNG
 from tactical.squadron_state import SquadronID
 from tactical.turn_orders import ShipFireOrder, ShipMoveOrder, SquadronOrder
-from tactical.weapons import WEAPONS
 
 
 class Phase(str, Enum):
@@ -263,130 +263,15 @@ class Encounter:
         return enc, []
 
     def _resolve_movement(self, rng: RNG) -> tuple["Encounter", list[FighterCombatEvent]]:
-        """All sides have committed.  Resolve movement simultaneously.
-
-        After placing ships, check each ship's movement path for enemy squadrons.
-        Any squadron whose hex is transited by an enemy ship fires a free attack
-        run immediately (the ship keeps moving regardless).
-        """
-        from tactical.events import DestructionCause, LaunchEvent, UnitDestroyedEvent
-        from tactical.fighter_combat import resolve_attack_run
-        from tactical.turn_orders import LaunchOrder
-
-        # Process carrier launches before ship movement.
-        launch_events: list = []
-        new_battle = self.battle
-        for carrier_id, launches in self._launch_orders.items():
-            if carrier_id not in new_battle.ships:
-                continue
-            carrier = new_battle.ships[carrier_id]
-            for lo in launches:
-                sq_id = lo.squadron_id
-                if sq_id not in new_battle.squadrons:
-                    continue
-                sq = new_battle.squadrons[sq_id]
-                # Undock from hangar bay system
-                if carrier.systems is not None:
-                    new_sys = carrier.systems.undock_squadron(sq_id)
-                    carrier = dataclasses.replace(carrier, systems=new_sys)
-                    new_battle = new_battle.with_ship(carrier)
-                # Deploy squadron at carrier's current position
-                new_sq = sq.undock(carrier.pos)
-                new_battle = new_battle.with_squadron(new_sq)
-                launch_events.append(LaunchEvent(carrier_id=carrier_id, squadron_id=sq_id, pos=carrier.pos))
-
-        ships = new_battle.ships
-
-        # Desired destination for each ship (default: stay in place)
-        desired: dict[ShipID, Hex] = {sid: s.pos for sid, s in ships.items()}
-        for ship_id, order in self._move_orders.items():
-            desired[ship_id] = order.dest
-
-        # Find destination conflicts
-        dest_to_ships: dict[Hex, list[ShipID]] = {}
-        for sid, dest in desired.items():
-            dest_to_ships.setdefault(dest, []).append(sid)
-
-        # Resolve conflicts: higher initiative wins, losers are cancelled
-        cancelled: set[ShipID] = set()
-        for dest, claimants in dest_to_ships.items():
-            if len(claimants) <= 1:
-                continue
-            ranked = sorted(
-                claimants,
-                key=lambda sid: self.initiative.rolls.get(ships[sid].owner_id, 0),
-                reverse=True,
-            )
-            for loser in ranked[1:]:
-                cancelled.add(loser)
-
-        # Apply movement for non-cancelled ships that submitted orders
-        new_ships = dict(ships)
-        for ship_id, order in self._move_orders.items():
-            if ship_id in cancelled:
-                continue
-            ship = new_ships[ship_id]
-            cost = order.total_mp_cost or hex_distance(ship.pos, order.dest)
-            new_ships[ship_id] = dataclasses.replace(
-                ship,
-                pos         = order.dest,
-                facing      = order.dest_facing,
-                mp          = max(0, ship.mp - cost),
-                turn_charge = order.final_turn_charge,
-            )
-
-        new_battle = dataclasses.replace(new_battle, ships=new_ships)
-
-        # Transit attack run detection.
-        # Squadron positions are fixed during MOVE_SUBMISSION; use pre-movement
-        # positions from self.battle.squadrons.
-        transit_events: list[FighterCombatEvent] = []
-        if self.battle.squadrons:
-            for ship_id, order in self._move_orders.items():
-                if ship_id in cancelled:
-                    continue
-                orig_ship = self.battle.ships[ship_id]
-                # Transit hexes = everything after the starting hex.
-                # If no path was recorded, fall back to checking destination only.
-                transit_hexes: tuple[Hex, ...] = (
-                    order.path[1:] if len(order.path) > 1 else (order.dest,)
-                )
-                seen_hexes: set[Hex] = set()
-                for hex_pos in transit_hexes:
-                    if hex_pos in seen_hexes:
-                        continue
-                    seen_hexes.add(hex_pos)
-                    for sq_id, sq in self.battle.squadrons.items():
-                        if sq.owner_id == orig_ship.owner_id:
-                            continue  # friendly squadron
-                        if sq.pos != hex_pos:
-                            continue
-                        if ship_id not in new_battle.ships:
-                            continue  # ship somehow gone
-                        if sq_id not in new_battle.squadrons:
-                            continue  # squadron already destroyed
-                        new_battle, ev = resolve_attack_run(
-                            new_battle,
-                            attacker_id=sq_id,
-                            target_ship_id=ship_id,
-                            rng=rng,
-                            simultaneous=True,
-                        )
-                        transit_events.append(ev)
-
-                        # Attacker destroyed by PD during transit
-                        if sq_id not in new_battle.squadrons:
-                            transit_events.append(
-                                UnitDestroyedEvent(sq_id, DestructionCause.POINT_DEFENSE)
-                            )
-                        # Ship destroyed by transit attack run
-                        if ship_id in new_battle.ships:
-                            s = new_battle.ships[ship_id]
-                            if s.systems is not None and s.systems.is_destroyed():
-                                transit_events.append(
-                                    UnitDestroyedEvent(ship_id, DestructionCause.ENEMY_FIRE)
-                                )
-
+        """All sides have committed.  Resolve movement simultaneously."""
+        from tactical.movement_resolution import resolve_movement
+        new_battle, events = resolve_movement(
+            self.battle,
+            self._move_orders,
+            self._launch_orders,
+            self.initiative,
+            rng,
+        )
         enc = dataclasses.replace(
             self,
             battle          = new_battle,
@@ -395,7 +280,7 @@ class Encounter:
             _move_committed = frozenset(),
             _launch_orders  = {},
         )
-        return enc, launch_events + transit_events
+        return enc, events
 
     # ------------------------------------------------------------------ #
     # COMBAT_SUBMISSION                                                     #
@@ -422,17 +307,10 @@ class Encounter:
             raise ValueError(f"Ship {ship_id!r} cannot target itself")
 
         # Global blind-spot check: no weapon can fire dead astern.
+        from tactical.arcs import assert_can_fire
         attacker = self.battle.ships[ship_id]
         target   = self.battle.ships[target_id]
-        dq = target.pos.q - attacker.pos.q
-        dr = target.pos.r - attacker.pos.r
-        from tactical.arcs import relative_bearing, REAR_BEARINGS
-        rb = relative_bearing(int(attacker.facing), dq, dr)
-        if rb in REAR_BEARINGS:
-            raise ValueError(
-                f"{ship_id} cannot fire at {target_id}: "
-                f"target is in blind spot (relative bearing {rb})"
-            )
+        assert_can_fire(int(attacker.facing), attacker.pos, target.pos, ship_id, target_id)
 
         new_orders = {**self._fire_orders, ship_id: ShipFireOrder(target_id=target_id)}
         return dataclasses.replace(self, _fire_orders=new_orders)
@@ -465,89 +343,14 @@ class Encounter:
         return enc, []
 
     def _resolve_fire(self, rng: RNG) -> tuple["Encounter", list[FireEvent]]:
-        """All sides committed.  Resolve all fire simultaneously.
-
-        Simultaneity rule: every attacker fires against the pre-combat BattleState
-        snapshot (so a ship destroyed by fire this phase still fires back).
-        Damage from all events is accumulated per target and applied in one pass
-        after all shots are resolved.
-        """
-        snapshot   = self.battle
-        all_events: list[FireEvent] = []
-
-        # Accumulate (raw_damage, WeaponSpec) per target; ammo consumed per attacker
-        damage_queue: dict[ShipID, list] = {}
-        ammo_queue: dict[ShipID, int] = {}
-
-        for ship_id, order in self._fire_orders.items():
-            if order is None:
-                continue
-            target_id = order.target_id
-            if ship_id not in snapshot.ships or target_id not in snapshot.ships:
-                continue
-            try:
-                _, events = resolve_fire_all(
-                    snapshot,
-                    attacker_id=ship_id,
-                    target_id=target_id,
-                    rng=rng,
-                )
-            except (ValueError, KeyError):
-                # Arc violation or other invalid order — silently skip
-                continue
-
-            all_events.extend(events)
-            for ev in events:
-                if ev.hit and ev.raw_damage > 0:
-                    damage_queue.setdefault(ev.target_id, []).append(
-                        (ev.raw_damage, WEAPONS[ev.weapon])
-                    )
-                if ev.ammo_consumed > 0:
-                    ammo_queue[ship_id] = ammo_queue.get(ship_id, 0) + ev.ammo_consumed
-
-        # Apply all accumulated damage to each target, starting from snapshot state
-        new_battle = snapshot
-        for target_id, damages in damage_queue.items():
-            ship = new_battle.ships[target_id]
-            if ship.systems is None:
-                continue
-            new_systems = ship.systems
-            for dmg, spec in damages:
-                new_systems = new_systems.apply_weapon_damage(dmg, weapon=spec)
-            new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
-
-        # Apply ammo consumption to attackers.
-        for attacker_id, consumed in ammo_queue.items():
-            if attacker_id not in new_battle.ships:
-                continue
-            ship = new_battle.ships[attacker_id]
-            if ship.systems is not None:
-                new_systems = ship.systems.consume_ammo_for("R", consumed)
-                new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
-
-        # Reveal weapon systems that fired (indices on the snapshot track).
-        new_revealed: dict[str, frozenset[int]] = dict(self._revealed_systems)
-        for ev in all_events:
-            if not isinstance(ev, FireEvent):
-                continue
-            attacker = snapshot.ships.get(ev.attacker_id)
-            if attacker is None or attacker.systems is None:
-                continue
-            weapon_base = ev.weapon.value
-            indices = set(new_revealed.get(ev.attacker_id, frozenset()))
-            for i, sys in enumerate(attacker.systems):
-                if sys.is_active() and sys.base == weapon_base:
-                    indices.add(i)
-            new_revealed[ev.attacker_id] = frozenset(indices)
-
-        # Detect ships destroyed by fire this phase.
-        from tactical.events import DestructionCause, UnitDestroyedEvent
-        for target_id in damage_queue:
-            if target_id not in new_battle.ships:
-                continue
-            ship = new_battle.ships[target_id]
-            if ship.systems is not None and ship.systems.is_destroyed():
-                all_events.append(UnitDestroyedEvent(target_id, DestructionCause.ENEMY_FIRE))
+        """All sides committed.  Resolve all fire simultaneously."""
+        from tactical.fire_resolution import resolve_fire
+        new_battle, all_events, new_revealed = resolve_fire(
+            self.battle,
+            self._fire_orders,
+            self._revealed_systems,
+            rng,
+        )
 
         # Check for battle end before advancing phase.
         end_ev = self._battle_end_event(new_battle)
