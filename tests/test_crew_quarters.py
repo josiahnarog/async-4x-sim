@@ -10,7 +10,8 @@ from tactical.encounter import Encounter
 from tactical.facing import Facing
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
-from tactical.hull_types import FG
+from tactical.hull_types import HULL_TYPES
+FG = HULL_TYPES["FG"]
 
 
 # ---------------------------------------------------------------------------

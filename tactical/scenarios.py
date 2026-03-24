@@ -11,7 +11,10 @@ import random
 from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.facing import Facing
-from tactical.hull_types import CV, FG
+from tactical.hull_types import HULL_TYPES
+
+FG = HULL_TYPES["FG"]
+CV = HULL_TYPES["CA"]  # carrier uses CA hull; CV designation retired
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
 from tactical.fighter_class import F1

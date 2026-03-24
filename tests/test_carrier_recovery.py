@@ -12,7 +12,8 @@ from tactical.encounter import Encounter, Phase
 from tactical.events import RecoveryEvent
 from tactical.facing import Facing
 from tactical.fighter_class import F1
-from tactical.hull_types import CV
+from tactical.hull_types import HULL_TYPES
+CV = HULL_TYPES["CA"]
 from tactical.ship_state import ShipState
 from tactical.ship_systems import ShipSystems
 from tactical.squadron_state import FighterLoadout, SquadronState
