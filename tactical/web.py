@@ -537,12 +537,16 @@ def _process(session: GameSession, cmd_line: str) -> list[str]:
         elif cmd == "recover":
             if len(parts) != 3:
                 out.append("usage: recover <squad_id> <carrier_id>"); return out
-            sq_id, carrier_id = parts[1], parts[2]
+            sq_id = parts[1]
             if sq_id not in session.enc.battle.squadrons:
                 out.append(f"unknown squadron: {sq_id!r}"); return out
             from tactical.encounter import Phase
             if session.enc.phase != Phase.COMBAT_SMALL:
                 out.append(f"Cannot order: phase is {session.enc.phase.value!r}"); return out
+            try:
+                carrier_id = _resolve_ship_id(session, parts[2])
+            except KeyError:
+                out.append(f"unknown ship: {parts[2]!r}"); return out
             from tactical.turn_orders import RecoverOrder
             side = session.enc.battle.squadrons[sq_id].owner_id
             session.enc = session.enc.stage_squadron_order(side, sq_id, RecoverOrder(carrier_id=carrier_id))
@@ -873,6 +877,30 @@ def _intercept_zones_json(session: GameSession) -> str:
     return json.dumps(zones)
 
 
+def _recover_paths_json(session: GameSession) -> str:
+    from tactical.encounter import Phase
+    from tactical.turn_orders import RecoverOrder
+    enc = session.enc
+    if enc.phase != Phase.COMBAT_SMALL:
+        return json.dumps([])
+    paths = []
+    for sq_id, order in enc._squadron_orders.items():
+        if not isinstance(order, RecoverOrder):
+            continue
+        sq = enc.battle.squadrons.get(sq_id)
+        carrier = enc.battle.ships.get(order.carrier_id)
+        if sq is None or carrier is None:
+            continue
+        paths.append({
+            "owner": sq.owner_id,
+            "hexes": [
+                {"q": sq.pos.q, "r": sq.pos.r},
+                {"q": carrier.pos.q, "r": carrier.pos.r},
+            ],
+        })
+    return json.dumps(paths)
+
+
 def _strike_orders_json(session: GameSession) -> str:
     from tactical.encounter import Phase
     from tactical.turn_orders import StrikeOrder
@@ -937,6 +965,7 @@ def _game_template_context(request: Request, session: GameSession, view: str) ->
         "strike_orders_json":   _strike_orders_json(session),
         "intercept_paths_json": _intercept_paths_json(session),
         "intercept_zones_json": _intercept_zones_json(session),
+        "recover_paths_json":   _recover_paths_json(session),
         "log":                  "\n".join(session.log[-40:]),
         "view":                 view,
     }
@@ -1065,12 +1094,15 @@ async def game_view(request: Request, game_id: str, view: str = "master"):
 
 
 @router.post("/game/{game_id}/command")
-async def game_command(request: Request, game_id: str, cmd: str = Form(...)):
+async def game_command(request: Request, game_id: str, cmd: str = Form(default="")):
     try:
         session = _get_session(game_id)
     except KeyError:
         return HTMLResponse(f"Game {game_id!r} not found.", status_code=404)
     view = request.query_params.get("view", "master")
+    cmd = cmd.strip()
+    if not cmd:
+        return RedirectResponse(url=f"/tactical/game/{game_id}/?view={view}", status_code=303)
     session.log.append(f"> {cmd}")
     output = _process(session, cmd)
     session.log.extend(output)

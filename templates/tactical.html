@@ -67,6 +67,7 @@
         <code>move &lt;id&gt; &lt;n&gt;</code> — forward n hexes &nbsp;|&nbsp;
         <code>tl/tr &lt;id&gt;</code> — turn left/right &nbsp;|&nbsp;
         <code>spend &lt;id&gt; &lt;n&gt;</code> — charge turn<br/>
+        <code>launch &lt;carrier_id&gt; &lt;squad_id&gt;</code> — stage squadron launch (executes at movement resolution)<br/>
         <code>commit move</code> — resolve movement for all sides<br/>
         <br/>
         <b>Combat (COMBAT_SUBMISSION):</b><br/>
@@ -78,6 +79,7 @@
         <code>intercept &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> — patrol hex &nbsp;|&nbsp;
         <code>strike &lt;id&gt; &lt;tgt&gt;</code> — attack ship or squadron &nbsp;|&nbsp;
         <code>breakoff &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> — disengage + move<br/>
+        <code>recover &lt;squad_id&gt; &lt;carrier_id&gt;</code> — dock squadron (must be on carrier's hex)<br/>
         <code>commit squadrons</code> — resolve fighter phase<br/>
         <br/>
         <b>Debug:</b>
@@ -107,6 +109,7 @@
     const STRIKE_ORDERS   = {{ strike_orders_json | safe }};
     const INTERCEPT_PATHS = {{ intercept_paths_json | safe }};
     const INTERCEPT_ZONES = {{ intercept_zones_json | safe }};
+    const RECOVER_PATHS   = {{ recover_paths_json | safe }};
     const RADIUS = 8;         // intercept zone boundary guard
     const SIZE   = 28;        // hex circumradius in px at zoom 1
     const SQ3    = Math.sqrt(3);
@@ -476,6 +479,42 @@
       ctx.restore();
     }
 
+    function drawRecoverPath(ctx, pathData, cx, cy) {
+      // Dashed line from squadron to carrier with a ghost ship-circle at the carrier hex.
+      // When the squadron is already at the carrier hex, only the ghost circle is drawn.
+      const { owner, hexes } = pathData;
+      if (hexes.length < 1) return;
+      const color = OWNER_COLORS[owner] || "#ffffff";
+      const dest  = hexes[hexes.length - 1];
+      const isSameHex = hexes.length >= 2 && hexes[0].q === dest.q && hexes[0].r === dest.r;
+      ctx.save();
+      // Dashed line only when moving to a different hex
+      if (!isSameHex && hexes.length >= 2) {
+        ctx.setLineDash([3, 6]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.65;
+        ctx.beginPath();
+        const first = hexToPixel(hexes[0].q, hexes[0].r, cx, cy);
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < hexes.length; i++) {
+          const p = hexToPixel(hexes[i].q, hexes[i].r, cx, cy);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      // Ghost carrier circle at destination (always drawn)
+      const last = hexToPixel(dest.q, dest.r, cx, cy);
+      ctx.setLineDash([2, 4]);
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.arc(last.x, last.y, SIZE * 0.52, 0, 2 * Math.PI);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Edge i (vertex i → vertex i+1) faces the neighbour at these offsets.
     // Derived from flat-top axial geometry (see coord comment at top).
     const EDGE_NEIGHBOR = [
@@ -583,11 +622,37 @@
       drawGrid(ctx, 0, 0, cq, cr, drawR);
       for (const z of INTERCEPT_ZONES) drawInterceptZone(ctx, z, 0, 0);
       for (const p of INTERCEPT_PATHS) drawSquadronPath(ctx, p, 0, 0);
+      for (const p of RECOVER_PATHS)   drawRecoverPath(ctx, p, 0, 0);
       for (const p of PATHS)           drawDraftPath(ctx, p, 0, 0);
       for (const fo of FIRE_ORDERS)    drawFireOrder(ctx, fo, 0, 0);
       for (const so of STRIKE_ORDERS)  drawFireOrder(ctx, so, 0, 0);
-      for (const ship of SHIPS)        drawShip(ctx, ship, 0, 0);
-      for (const sq of SQUADRONS)      drawSquadron(ctx, sq, 0, 0);
+      // Compute per-hex jitter so co-located units spread into a small cluster.
+      const JITTER_R = SIZE * 0.27;
+      const hexGroups = {};
+      for (const ship of SHIPS) {
+        const key = `${ship.q},${ship.r}`;
+        (hexGroups[key] = hexGroups[key] || []).push(ship.id);
+      }
+      for (const sq of SQUADRONS) {
+        const key = `${sq.q},${sq.r}`;
+        (hexGroups[key] = hexGroups[key] || []).push(sq.id);
+      }
+      const jitterOf = {};
+      for (const key of Object.keys(hexGroups)) {
+        const ids = hexGroups[key];
+        const n = ids.length;
+        for (let i = 0; i < n; i++) {
+          if (n === 1) {
+            jitterOf[ids[i]] = { x: 0, y: 0 };
+          } else {
+            const angle = (2 * Math.PI * i / n) - Math.PI / 2;
+            jitterOf[ids[i]] = { x: Math.cos(angle) * JITTER_R, y: Math.sin(angle) * JITTER_R };
+          }
+        }
+      }
+
+      for (const ship of SHIPS) { const j = jitterOf[ship.id] || {x:0,y:0}; drawShip(ctx, ship, j.x, j.y); }
+      for (const sq of SQUADRONS) { const j = jitterOf[sq.id] || {x:0,y:0}; drawSquadron(ctx, sq, j.x, j.y); }
 
       ctx.restore();
     }

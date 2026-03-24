@@ -403,6 +403,10 @@ class Encounter:
             raise PermissionError(
                 f"Squadron {squadron_id!r} not controlled by side {side_id!r}"
             )
+        if not sq.is_deployed:
+            raise ValueError(
+                f"Squadron {squadron_id!r} is docked and cannot receive orders"
+            )
 
         new_orders = {**self._squadron_orders, squadron_id: order}
         return dataclasses.replace(self, _squadron_orders=new_orders)
@@ -451,9 +455,17 @@ class Encounter:
             if sq_id not in new_battle.squadrons or carrier_id not in new_battle.ships:
                 continue
             sq = new_battle.squadrons[sq_id]
+            if not sq.is_deployed:
+                continue  # already docked — skip silently
             carrier = new_battle.ships[carrier_id]
+            # Move the squadron toward the carrier up to its effective MP.
+            from tactical.fighter_combat import _step_toward
+            arrived = _step_toward(sq.pos, carrier.pos, sq.effective_mp)
+            if arrived != sq.pos:
+                sq = sq.move_to(arrived)
+                new_battle = new_battle.with_squadron(sq)
             if sq.pos != carrier.pos:
-                continue  # not at carrier hex — silently ignore
+                continue  # couldn't reach — silently ignore
             if carrier.systems is None:
                 continue
             bl_count = carrier.systems.launch_bay_count()
