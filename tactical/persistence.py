@@ -267,15 +267,21 @@ def load_design(design_id: str) -> dict:
 
 
 def list_designs() -> list[dict]:
-    """Return all saved designs as list of dicts (without full track data)."""
+    """Return all saved designs as list of dicts."""
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT design_id, name, hull_type, hull_spaces, hull_mods, updated_at "
+            "SELECT design_id, name, hull_type, hull_spaces, hull_mods, track, updated_at "
             "FROM designs ORDER BY updated_at DESC"
         ).fetchall()
-        return [{**dict(r), "hull_mods": json.loads(r["hull_mods"]) if r["hull_mods"] else []}
-                for r in rows]
+        return [
+            {
+                **dict(r),
+                "hull_mods": json.loads(r["hull_mods"]) if r["hull_mods"] else [],
+                "track":     json.loads(r["track"])     if r["track"]     else [],
+            }
+            for r in rows
+        ]
     finally:
         conn.close()
 

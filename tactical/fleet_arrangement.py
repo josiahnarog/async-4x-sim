@@ -134,6 +134,7 @@ def _place_fleet(
         is_carrier = "carrier" in design.get("hull_mods", [])
         if is_carrier:
             # Build an ordered list of squadron configs from the design track.
+            # Build ordered lists of internal configs and external ordnance per Bh slot.
             bh_configs: list[dict] = [
                 slot.get("squadron") or {}
                 for slot in design.get("track", [])
@@ -141,18 +142,36 @@ def _place_fleet(
                 and slot.get("type") == "system"
                 and slot.get("code") == "Bh"
             ]
-            config_iter = iter(bh_configs)
+            bh_ordnance: list = design.get("bh_ordnance") or []
+            config_iter  = iter(bh_configs)
+            ord_iter     = iter(bh_ordnance)
 
             import dataclasses
             updated_systems = ship.systems
             for sys in ship.systems.systems:
                 if sys.token == "Bh" and sys.is_active() and sys.occupant is None:
                     config = next(config_iter, {})
+                    ord_code = next(ord_iter, None)
+
+                    # Internal weapon from design track
                     internal_code = config.get("internal") or None
                     try:
                         internal_wt = WeaponType(internal_code) if internal_code else WeaponType.GUN
                     except ValueError:
                         internal_wt = WeaponType.GUN
+
+                    # External ordnance from scenario selection (F1 has 2 external mounts)
+                    if ord_code:
+                        try:
+                            ext_wt   = WeaponType(ord_code)
+                            external = (ext_wt, ext_wt)
+                            ext_shots = 2
+                        except ValueError:
+                            external  = ()
+                            ext_shots = 0
+                    else:
+                        external  = ()
+                        ext_shots = 0
 
                     sq_id = f"{side_id}F{sq_counter}"
                     sq_counter += 1
@@ -164,6 +183,8 @@ def _place_fleet(
                         loadout=FighterLoadout(
                             fighter_class=F1,
                             internal=(internal_wt,),
+                            external=external,
+                            external_shots_remaining=ext_shots,
                         ),
                         endurance=20, max_endurance=20,
                         docked_at=ship_id,

@@ -968,6 +968,18 @@ async def new_game(name: str = Form(...)):
 @router.get("/scenario/new", response_class=HTMLResponse)
 async def scenario_builder(request: Request):
     designs = list_designs()
+    for d in designs:
+        bh_slots = [
+            slot for slot in d.get("track", [])
+            if isinstance(slot, dict)
+            and slot.get("type") == "system"
+            and slot.get("code") == "Bh"
+        ]
+        d["bh_count"]  = len(bh_slots)
+        d["bh_squads"] = [
+            (slot.get("squadron") or {}).get("internal") or ""
+            for slot in bh_slots
+        ]
     return templates.TemplateResponse("scenario_builder.html", {
         "request":   request,
         "designs":   designs,
@@ -978,11 +990,13 @@ async def scenario_builder(request: Request):
 @router.post("/scenario/launch")
 async def scenario_launch(
     request: Request,
-    game_name:    str = Form(default=""),
-    seed:         str = Form(default=""),
-    distance:     int = Form(default=30),
-    side_a_ids:   str = Form(default=""),
-    side_b_ids:   str = Form(default=""),
+    game_name:       str = Form(default=""),
+    seed:            str = Form(default=""),
+    distance:        int = Form(default=30),
+    side_a_ids:      str = Form(default=""),
+    side_b_ids:      str = Form(default=""),
+    side_a_ordnance: str = Form(default="[]"),
+    side_b_ordnance: str = Form(default="[]"),
 ):
     from tactical.encounter import Encounter
     from tactical.fleet_arrangement import arrange_fleets
@@ -998,8 +1012,25 @@ async def scenario_launch(
     if not a_ids or not b_ids:
         return RedirectResponse(url="/tactical/scenario/new", status_code=303)
 
+    try:
+        a_ord: list = json.loads(side_a_ordnance)
+    except Exception:
+        a_ord = []
+    try:
+        b_ord: list = json.loads(side_b_ordnance)
+    except Exception:
+        b_ord = []
+
     a_designs = [load_design(did) for did in a_ids]
     b_designs = [load_design(did) for did in b_ids]
+
+    # Attach per-bay ordnance selections (ordered, matching the IDs list)
+    for i, d in enumerate(a_designs):
+        if d is not None:
+            d["bh_ordnance"] = a_ord[i] if i < len(a_ord) else []
+    for i, d in enumerate(b_designs):
+        if d is not None:
+            d["bh_ordnance"] = b_ord[i] if i < len(b_ord) else []
 
     seed_int = int(seed.strip()) if seed.strip().isdigit() else None
     distance  = max(5, min(100, distance))
