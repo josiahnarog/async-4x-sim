@@ -22,6 +22,7 @@ class SystemEntry:
     name: str         # e.g. "Laser"
     cost: int         # build cost in credits
     hull_spaces: int  # hull spaces consumed
+    ls_capacity: int = 0  # life-support HS covered per unit (0 = not a LS system)
 
 
 # Systems available in the ship designer.
@@ -30,7 +31,7 @@ class SystemEntry:
 SYSTEMS: list[SystemEntry] = [
     SystemEntry("S",  "Shield",              cost=4,   hull_spaces=1),
     SystemEntry("A",  "Armor",               cost=2,   hull_spaces=1),
-    SystemEntry("Q",  "Crew Quarters",       cost=10,  hull_spaces=1),
+    SystemEntry("Q",  "Crew Quarters",       cost=10,  hull_spaces=1, ls_capacity=15),
     SystemEntry("I",  "Military Engine",     cost=20,  hull_spaces=1),
     SystemEntry("Y",  "Military Sensors",    cost=20,  hull_spaces=1),
     SystemEntry("X",  "Survey Sensors",      cost=30,  hull_spaces=1),
@@ -63,6 +64,8 @@ class HullEntry:
     cost_per_hs: float  # base hull cost per hull space
     epr_i: str          # I-engine power ratio (EPR) as fraction string, e.g. "2/3"
     ia: str             # initiative/agility rating string, e.g. "5(2)"
+    # Design requirements
+    req_min_speed: int = 1    # minimum designed MP; set to 0 for stations / immobile hulls
     # Tactical engine attributes — populated for hulls with a full implementation.
     max_speed: Optional[int] = None
     turn_cost: Optional[int] = None
@@ -86,9 +89,9 @@ HULL_CATALOG: list[HullEntry] = [
     HullEntry("LN", "Line Ship",         tier=14, req_el=18, hs_min=351,  hs_max=500,  cost_per_hs=8.40, epr_i="10",   ia="1(6)",   max_speed=1, turn_cost=6),
     HullEntry("JG", "Juggernaut",        tier=15, req_el=22, hs_min=501,  hs_max=750,  cost_per_hs=8.50, epr_i="14",   ia="1(6)",   max_speed=1, turn_cost=6),
     HullEntry("MM", "Mammoth",           tier=16, req_el=27, hs_min=751,  hs_max=1000, cost_per_hs=8.50, epr_i="20",   ia="1(7-)",  max_speed=1, turn_cost=7),
-    HullEntry("CO", "Colossus",          tier=17, req_el=33, hs_min=1001, hs_max=1300, cost_per_hs=8.50, epr_i="30",   ia="0(7)",   max_speed=0, turn_cost=7),
-    HullEntry("GN", "Giant",             tier=18, req_el=40, hs_min=1301, hs_max=1600, cost_per_hs=8.50, epr_i="35",   ia="0(7)",   max_speed=0, turn_cost=7),
-    HullEntry("TN", "Titan",             tier=19, req_el=48, hs_min=1601, hs_max=2000, cost_per_hs=8.50, epr_i="40",   ia="0(8-)",  max_speed=0, turn_cost=8),
+    HullEntry("CO", "Colossus",          tier=17, req_el=33, hs_min=1001, hs_max=1300, cost_per_hs=8.50, epr_i="30",   ia="0(7)",   req_min_speed=0, max_speed=0, turn_cost=7),
+    HullEntry("GN", "Giant",             tier=18, req_el=40, hs_min=1301, hs_max=1600, cost_per_hs=8.50, epr_i="35",   ia="0(7)",   req_min_speed=0, max_speed=0, turn_cost=7),
+    HullEntry("TN", "Titan",             tier=19, req_el=48, hs_min=1601, hs_max=2000, cost_per_hs=8.50, epr_i="40",   ia="0(8-)",  req_min_speed=0, max_speed=0, turn_cost=8),
 ]
 
 HULL_BY_DESIGNATION: dict[str, HullEntry] = {h.designation: h for h in HULL_CATALOG}
@@ -156,6 +159,14 @@ def track_to_system_string(track: list[dict]) -> str:
         if slot["type"] == "engine_room":
             n = max(1, int(slot.get("count", 1)))
             parts.append(f"({'I' * n})")
+        elif slot["type"] == "shield_room":
+            n = int(slot.get("count", 0))
+            if n > 0:
+                parts.append("S" * n)
+        elif slot["type"] == "armor_room":
+            n = int(slot.get("count", 0))
+            if n > 0:
+                parts.append("A" * n)
         else:
             code = slot["code"]
             tactical_code = _BUILDER_TO_TACTICAL.get(code, code)

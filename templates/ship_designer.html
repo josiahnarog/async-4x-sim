@@ -29,11 +29,6 @@
       padding: 6px 10px; border: 1px solid #444; border-radius: 4px;
       background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.88em;
     }
-    #hull-size {
-      width: 72px; padding: 6px 10px;
-      border: 1px solid #444; border-radius: 4px;
-      background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.88em;
-    }
     .label { color: #888; font-size: 0.82em; white-space: nowrap; }
     .btn {
       padding: 6px 14px; border-radius: 6px; border: 1px solid #555;
@@ -55,6 +50,15 @@
     #stats-bar span { color: #e0e0e0; }
     .stat-warn { color: #f08080 !important; font-weight: bold; }
     .stat-ok   { color: #8fd8b0 !important; }
+
+    /* ── Validation bar ── */
+    #validation-bar {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      padding: 5px 16px; background: #0d0d1a; border-bottom: 1px solid #2a2a3a;
+      font-size: 0.78em; flex-shrink: 0; min-height: 28px;
+    }
+    .vpill-ok    { padding: 2px 9px; border-radius: 10px; background: #1a3a1a; color: #8fd8b0; border: 1px solid #2a6a2a; }
+    .vpill-error { padding: 2px 9px; border-radius: 10px; background: #3a1a1a; color: #f08080; border: 1px solid #6a2a2a; }
 
     /* ── Main layout ── */
     #main { display: flex; flex: 1; overflow: hidden; }
@@ -129,6 +133,11 @@
     }
     .track-tile:hover .tile-remove { display: flex; }
 
+    /* Pinned room tiles (shields, armor) — always at left of track */
+    .tile-pinned { cursor: default; border-style: solid !important; }
+    .tile-pinned:hover { transform: none; box-shadow: none; }
+    .tile-pinned .tile-remove { display: none !important; }
+
     /* Engine room tile */
     .tile-engine-room {
       border-style: dashed !important; border-width: 1px;
@@ -197,9 +206,7 @@
     </option>
     {% endfor %}
   </select>
-  <span class="label">Size (HS):</span>
-  <input id="hull-size" type="number" min="1" max="9999" value="20"/>
-  <div id="hull-info">17–22 HS &nbsp;|&nbsp; Eng: 2/3 &nbsp;|&nbsp; Ia: 5(2) &nbsp;|&nbsp; EL: 1</div>
+  <div id="hull-info">EPR: 2/3 &nbsp;|&nbsp; Ia: 5(2) &nbsp;|&nbsp; EL: 1 &nbsp;|&nbsp; Spd: 5 &nbsp;|&nbsp; TC: 2</div>
   <button class="btn btn-accent" onclick="saveDesign()">Save Design</button>
   <button class="btn" onclick="newDesign()">New</button>
   <form id="delete-form" method="post" style="display:inline">
@@ -209,14 +216,15 @@
 
 <!-- Stats bar -->
 <div id="stats-bar">
-  <span>Hull spaces: <span id="stat-used">0</span> / <span id="stat-total">20</span></span>
-  <span>Remaining: <span id="stat-remaining">20</span></span>
+  <span>Installed HS: <span id="stat-used">0</span>&nbsp;<span id="stat-hs-range" style="color:#555;">(–)</span></span>
   <span>Max speed: <span id="stat-max-mp">–</span></span>
   <span>Turn cost: <span id="stat-turn-cost">–</span></span>
   <span>Hull cost: <span id="stat-hull-cost">–</span> cr</span>
   <span>Systems cost: <span id="stat-sys-cost">0</span> cr</span>
   <span>Total: <span id="stat-total-cost">–</span> cr</span>
 </div>
+<!-- Validation bar -->
+<div id="validation-bar"></div>
 
 <!-- Main area -->
 <div id="main">
@@ -224,7 +232,7 @@
   <!-- System palette -->
   <div id="palette">
     <h3>Systems</h3>
-    {% for s in systems %}
+    {% for s in systems if s.code not in ('S', 'A') %}
     <div class="palette-item" onclick="addSystem('{{ s.code }}')">
       <div class="palette-chip sys-color-{{ s.code | replace('Bf','Bf') | replace('Bl','Bl') }}"
            style="{{ 'background:' + systemColor(s.code) if false else '' }}"
@@ -332,31 +340,26 @@ function sysStyle(code) {
 // Track state
 // ---------------------------------------------------------------------------
 // Each slot: {type:"system", code:"S"} | {type:"engine_room", count:1}
+//            {type:"shield_room", count:N} | {type:"armor_room", count:N}
 let track = [];
-let currentDesignId = null;
+let currentDesignId   = null;
+let currentInstalledHS = 0;   // updated by updateStats(); used by saveDesign()
 
 // ---------------------------------------------------------------------------
 // Hull info update
 // ---------------------------------------------------------------------------
-const hullSelect  = document.getElementById("hull-select");
-const hullSizeEl  = document.getElementById("hull-size");
-const hullInfoEl  = document.getElementById("hull-info");
+const hullSelect = document.getElementById("hull-select");
+const hullInfoEl = document.getElementById("hull-info");
 
 function updateHullInfo() {
   const h = HULL_MAP[hullSelect.value];
   if (!h) return;
   const speedStr = (h.max_speed != null) ? `  |  Spd: ${h.max_speed}  |  TC: ${h.turn_cost}` : "";
   hullInfoEl.textContent =
-    `${h.hs_min}–${h.hs_max} HS  |  EPR: ${h.epr_i}  |  Ia: ${h.ia}  |  EL: ${h.req_el}${speedStr}`;
-  const cur = parseInt(hullSizeEl.value) || h.hs_min;
-  hullSizeEl.min   = h.hs_min;
-  hullSizeEl.max   = h.hs_max;
-  if (cur < h.hs_min) hullSizeEl.value = h.hs_min;
-  if (cur > h.hs_max) hullSizeEl.value = h.hs_max;
+    `EPR: ${h.epr_i}  |  Ia: ${h.ia}  |  EL: ${h.req_el}${speedStr}`;
   updateStats();
 }
 hullSelect.addEventListener("change", updateHullInfo);
-hullSizeEl.addEventListener("input",  updateStats);
 
 // ---------------------------------------------------------------------------
 // Stats
@@ -374,37 +377,105 @@ function updateStats() {
       usedHS       += slot.count;
       sysCost      += slot.count * 20;
       totalEngines += slot.count;
+    } else if (slot.type === "shield_room") {
+      usedHS  += slot.count;
+      sysCost += slot.count * 4;
+    } else if (slot.type === "armor_room") {
+      usedHS  += slot.count;
+      sysCost += slot.count * 2;
     } else {
       const s = SYS_MAP[slot.code];
       if (s) { usedHS += s.hull_spaces; sysCost += s.cost; }
     }
   });
-  const totalHS   = parseInt(hullSizeEl.value) || 0;
-  const remaining = totalHS - usedHS;
-  const h         = HULL_MAP[hullSelect.value];
-  const hullCost  = h ? Math.round(h.cost_per_hs * totalHS * 100) / 100 : 0;
+  currentInstalledHS = usedHS;
+
+  const h        = HULL_MAP[hullSelect.value];
+  const hullCost = h ? Math.round(h.cost_per_hs * usedHS * 100) / 100 : 0;
   const totalCost = Math.round((hullCost + sysCost) * 100) / 100;
 
-  // MP calculation: floor(engines / EPR), capped at max_speed
-  let mpStr = "–", tcStr = "–";
-  if (h && h.max_speed != null) {
-    const epr = parseEpr(h.epr_i);
-    const rawMp = Math.floor(totalEngines / epr);
-    const mp = Math.min(rawMp, h.max_speed);
-    mpStr = `${mp} / ${h.max_speed}`;
-    tcStr = String(h.turn_cost);
+  // HS range display with colour coding
+  const usedEl  = document.getElementById("stat-used");
+  const rangeEl = document.getElementById("stat-hs-range");
+  usedEl.textContent = usedHS;
+  if (h) {
+    rangeEl.textContent = `(${h.hs_min}–${h.hs_max})`;
+    const outOfRange = usedHS > 0 && (usedHS < h.hs_min || usedHS > h.hs_max);
+    const exact      = usedHS >= h.hs_min && usedHS <= h.hs_max;
+    usedEl.className  = outOfRange ? "stat-warn" : exact ? "stat-ok" : "";
+    rangeEl.className = outOfRange ? "stat-warn" : exact ? "stat-ok" : "";
+  } else {
+    rangeEl.textContent = "(–)";
+    usedEl.className = rangeEl.className = "";
   }
 
-  document.getElementById("stat-used").textContent      = usedHS;
-  document.getElementById("stat-total").textContent     = totalHS;
-  const remEl = document.getElementById("stat-remaining");
-  remEl.textContent  = remaining;
-  remEl.className    = remaining < 0 ? "stat-warn" : remaining === 0 ? "stat-ok" : "";
-  document.getElementById("stat-max-mp").textContent    = mpStr;
-  document.getElementById("stat-turn-cost").textContent = tcStr;
+  // MP calculation: floor(engines / EPR), capped at hull max_speed
+  let mpStr = "–", tcStr = "–";
+  if (h) {
+    const epr   = parseEpr(h.epr_i);
+    const rawMp = Math.floor(totalEngines / epr);
+    if (h.max_speed !== null && h.max_speed !== undefined) {
+      mpStr = `${Math.min(rawMp, h.max_speed)} / ${h.max_speed}`;
+      tcStr = (h.turn_cost !== null && h.turn_cost !== undefined) ? String(h.turn_cost) : "–";
+    } else {
+      // EPR known but no hull speed cap yet defined — show raw value
+      mpStr = String(rawMp);
+    }
+  }
+
+  document.getElementById("stat-max-mp").textContent     = mpStr;
+  document.getElementById("stat-turn-cost").textContent  = tcStr;
   document.getElementById("stat-hull-cost").textContent  = hullCost.toFixed(2);
   document.getElementById("stat-sys-cost").textContent   = sysCost;
   document.getElementById("stat-total-cost").textContent = totalCost.toFixed(2);
+
+  updateValidation(usedHS, totalEngines);
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+function updateValidation(installedHS, totalEngines) {
+  const el = document.getElementById("validation-bar");
+  if (!el) return;
+  if (installedHS === 0) { el.innerHTML = ""; return; }
+
+  const h      = HULL_MAP[hullSelect.value];
+  const errors = [];
+
+  if (h) {
+    // 1. Hull size range
+    if (installedHS < h.hs_min)
+      errors.push(`Hull too small — need ≥ ${h.hs_min} HS (have ${installedHS})`);
+    else if (installedHS > h.hs_max)
+      errors.push(`Hull too large — ${h.designation} max is ${h.hs_max} HS (have ${installedHS})`);
+
+    // 2. Minimum designed speed
+    if (h.req_min_speed > 0) {
+      const epr       = parseEpr(h.epr_i);
+      const designedMp = h.max_speed != null
+        ? Math.min(Math.floor(totalEngines / epr), h.max_speed)
+        : Math.floor(totalEngines / epr);
+      if (designedMp < h.req_min_speed)
+        errors.push(`Min speed not met — needs ≥ ${h.req_min_speed} MP (designed ${designedMp})`);
+    }
+
+    // 3. Life support (Q)
+    const qSys  = SYS_MAP["Q"];
+    const lsCap = (qSys && qSys.ls_capacity) ? qSys.ls_capacity : 15;
+    const qCount = track.reduce((n, s) => n + (s.type === "system" && s.code === "Q" ? 1 : 0), 0);
+    const covered = qCount * lsCap;
+    if (covered < installedHS) {
+      const needed = Math.ceil(installedHS / lsCap);
+      errors.push(`Life support insufficient — ${needed} Q needed for ${installedHS} HS (have ${qCount})`);
+    }
+  }
+
+  if (errors.length === 0) {
+    el.innerHTML = '<span class="vpill-ok">✓ Valid design</span>';
+  } else {
+    el.innerHTML = errors.map(e => `<span class="vpill-error">✗ ${e}</span>`).join("");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +497,31 @@ function renderTrack() {
     tile.draggable = true;
     tile.dataset.idx = idx;
 
-    if (slot.type === "engine_room") {
+    if (slot.type === "shield_room" || slot.type === "armor_room") {
+      const isShield = slot.type === "shield_room";
+      const code     = isShield ? "S" : "A";
+      const dotClr   = isShield ? "#5a98c8" : "#a09050";
+      const cr       = slot.count * (isShield ? 4 : 2);
+      tile.classList.add("tile-pinned");
+      tile.draggable = false;
+      tile.style.cssText = isShield
+        ? "background:#1a3a5a; color:#7ab8e8; border-color:#4a88c8;"
+        : "background:#2a2a1a; color:#c8b870; border-color:#888840;";
+      tile.innerHTML = `
+        <div class="tile-code" style="font-size:0.72em;">${code}×${slot.count}</div>
+        <div class="tile-engines">${Array(slot.count).fill(
+          `<div class="engine-dot" style="background:${dotClr};"></div>`).join("")}</div>
+        <div class="engine-count-ctrl">
+          <button onclick="changePinnedRoomCount(${idx},-1)" title="Remove one">−</button>
+          <span class="engine-count-label">${slot.count} ${code}</span>
+          <button onclick="changePinnedRoomCount(${idx},+1)" title="Add one">+</button>
+        </div>
+        <div class="tile-hs" style="color:${dotClr};">${slot.count} HS · ${cr} cr</div>
+      `;
+      el.appendChild(tile);
+      return; // skip drag event listeners for pinned tiles
+
+    } else if (slot.type === "engine_room") {
       tile.classList.add("tile-engine-room");
       tile.style.cssText = `background:#3a3010; color:#c09840; border-color:#c09840aa;`;
       tile.innerHTML = `
@@ -485,6 +580,13 @@ function changeEngineCount(idx, delta) {
   renderTrack();
 }
 
+function changePinnedRoomCount(idx, delta) {
+  const slot = track[idx];
+  if (!slot || (slot.type !== "shield_room" && slot.type !== "armor_room")) return;
+  slot.count = Math.max(0, slot.count + delta);
+  renderTrack();
+}
+
 // ---------------------------------------------------------------------------
 // Drag and drop reorder
 // ---------------------------------------------------------------------------
@@ -507,13 +609,41 @@ function onDragOver(e) {
   e.dataTransfer.dropEffect = "move";
   document.getElementById("track").classList.add("drag-over");
 
-  // Find closest tile to drop before
   const tiles = [...document.querySelectorAll(".track-tile")];
   tiles.forEach(t => t.classList.remove("drag-target"));
-  const target = tiles.find(t => {
-    const r = t.getBoundingClientRect();
-    return e.clientX < r.left + r.width / 2;
-  });
+  if (tiles.length === 0) return;
+
+  // With flex-wrap + align-items:stretch, all tiles in the same row share
+  // the same getBoundingClientRect().top. Collect distinct row tops, find
+  // the row closest to the cursor's Y, then determine insert position by X.
+  const rects = new Map(tiles.map(t => [t, t.getBoundingClientRect()]));
+  const rowTops = [...new Set([...rects.values()].map(r => Math.round(r.top)))]
+    .sort((a, b) => a - b);
+
+  // Find the row whose vertical midpoint is nearest to the cursor
+  let bestRowTop = rowTops[0];
+  let bestDist   = Infinity;
+  for (const rowTop of rowTops) {
+    const r = [...rects.entries()].find(([, rc]) => Math.round(rc.top) === rowTop)[1];
+    const dist = Math.abs(e.clientY - (r.top + r.bottom) / 2);
+    if (dist < bestDist) { bestDist = dist; bestRowTop = rowTop; }
+  }
+
+  // Tiles on the best row, in DOM order (left → right); exclude pinned rooms (idx 0, 1)
+  const rowTiles = tiles.filter(t =>
+    Math.round(rects.get(t).top) === bestRowTop && parseInt(t.dataset.idx) >= 2);
+
+  // First tile in this row where the cursor is left of its midpoint = insert before it
+  let target = rowTiles.find(t => e.clientX < rects.get(t).left + rects.get(t).width / 2);
+
+  // Cursor is past all tiles in this row → target the first non-pinned tile of the next row (or end)
+  if (!target) {
+    const nextRowTop = rowTops.find(top => top > bestRowTop);
+    if (nextRowTop != null)
+      target = tiles.find(t =>
+        Math.round(rects.get(t).top) === nextRowTop && parseInt(t.dataset.idx) >= 2);
+  }
+
   if (target) target.classList.add("drag-target");
 }
 
@@ -527,10 +657,12 @@ function onDrop(e) {
   e.preventDefault();
   document.getElementById("track").classList.remove("drag-over");
   if (dragIdx === null) return;
+  if (dragIdx < 2) return; // pinned rooms can't be moved
 
   const tiles  = [...document.querySelectorAll(".track-tile")];
   const target = tiles.find(t => t.classList.contains("drag-target"));
   let dropIdx  = target ? parseInt(target.dataset.idx) : track.length;
+  if (dropIdx < 2) dropIdx = 2; // can't drop before pinned rooms
 
   if (dragIdx === dropIdx || dragIdx === dropIdx - 1) return;
 
@@ -546,7 +678,7 @@ function onDrop(e) {
 function saveDesign() {
   const name  = document.getElementById("ship-name").value.trim() || "Unnamed";
   const hull  = hullSelect.value;
-  const size  = parseInt(hullSizeEl.value) || 0;
+  const size  = currentInstalledHS;
   const did   = currentDesignId || "";
 
   const form  = document.createElement("form");
@@ -564,13 +696,17 @@ function saveDesign() {
   form.submit();
 }
 
+function defaultTrack() {
+  return [{type:"shield_room", count:2}, {type:"armor_room", count:2}];
+}
+
 function newDesign() {
   if (track.length > 0 && !confirm("Clear current design and start fresh?")) return;
   currentDesignId = null;
   document.getElementById("ship-name").value = "";
   hullSelect.value = HULLS[0]?.designation || "";
   updateHullInfo();
-  track = [];
+  track = defaultTrack();
   renderTrack();
   document.getElementById("delete-btn").style.display = "none";
 }
@@ -603,12 +739,20 @@ document.querySelectorAll(".palette-chip[data-code]").forEach(chip => {
   chip.style.cssText = sysStyle(chip.dataset.code);
 });
 
+// Ensure a loaded track always starts with shield_room then armor_room
+function ensureRooms(t) {
+  if (!t[0] || t[0].type !== "shield_room")
+    t.unshift({type:"shield_room", count:2});
+  if (!t[1] || t[1].type !== "armor_room")
+    t.splice(1, 0, {type:"armor_room", count:2});
+  return t;
+}
+
 // Load edit state if provided
 if (window._EDIT_DESIGN) {
   const d = window._EDIT_DESIGN;
   currentDesignId = d.design_id;
   document.getElementById("ship-name").value = d.name;
-  // Set hull
   for (let i = 0; i < hullSelect.options.length; i++) {
     if (hullSelect.options[i].value === d.hull_type) {
       hullSelect.selectedIndex = i;
@@ -616,12 +760,12 @@ if (window._EDIT_DESIGN) {
     }
   }
   updateHullInfo();
-  hullSizeEl.value = d.hull_spaces;
-  track = d.track;
+  track = ensureRooms(d.track);
   renderTrack();
   document.getElementById("delete-btn").style.display = "";
 } else {
   updateHullInfo();
+  track = defaultTrack();
   renderTrack();
 }
 </script>

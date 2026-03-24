@@ -1006,11 +1006,13 @@ async def designer_index(request: Request):
                      "hs_min": h.hs_min, "hs_max": h.hs_max,
                      "cost_per_hs": h.cost_per_hs, "epr_i": h.epr_i,
                      "ia": h.ia, "req_el": h.req_el,
+                     "req_min_speed": h.req_min_speed,
                      "max_speed": h.max_speed, "turn_cost": h.turn_cost,
                      "engines_per_room": hull_engines_per_room(h)}
                     for h in hulls],
         "systems": [{"code": s.code, "name": s.name,
-                     "cost": s.cost, "hull_spaces": s.hull_spaces}
+                     "cost": s.cost, "hull_spaces": s.hull_spaces,
+                     "ls_capacity": s.ls_capacity}
                     for s in systems],
     })
 
@@ -1034,7 +1036,8 @@ async def designer_edit(request: Request, design_id: str):
                            "ia": h.ia, "req_el": h.req_el}
                           for h in hulls],
         "systems":       [{"code": s.code, "name": s.name,
-                           "cost": s.cost, "hull_spaces": s.hull_spaces}
+                           "cost": s.cost, "hull_spaces": s.hull_spaces,
+                     "ls_capacity": s.ls_capacity}
                           for s in systems],
         "edit_design":   design,
     })
