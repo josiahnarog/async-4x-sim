@@ -35,6 +35,7 @@ SYSTEMS: list[SystemEntry] = [
     SystemEntry("I",  "Military Engine",     cost=20,  hull_spaces=1),
     SystemEntry("Y",  "Military Sensors",    cost=20,  hull_spaces=1),
     SystemEntry("X",  "Survey Sensors",      cost=30,  hull_spaces=1),
+    SystemEntry("G",  "Gun",                 cost=20,  hull_spaces=2),
     SystemEntry("D",  "Point Defence",       cost=15,  hull_spaces=2),
     SystemEntry("L",  "Laser",               cost=27,  hull_spaces=4),
     SystemEntry("N",  "Needle Beam",         cost=35,  hull_spaces=4),

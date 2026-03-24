@@ -90,6 +90,12 @@ class WeaponSpec:
     # Ammunition: if True, weapon consumes charges from its system (or a magazine).
     requires_ammo: bool = False
 
+    # Damage multipliers vs specific system types (applied before point-by-point destruction).
+    # shield_multiplier: multiplier applied to remaining damage points when the next eligible
+    #   system is a Shield (S). 0.5 = half damage vs shields (rounded down).
+    # armor_multiplier:  same mechanic applied when the next eligible system is Armor (A).
+    armor_multiplier: float = 1.0
+
     # Fighter combat rules:
     # anti_fighter_modifier: added to the to-hit target number when attacking a squadron
     # can_target_fighters:   if False, weapon is skipped entirely in dogfights
@@ -172,12 +178,14 @@ STANDARD_MISSILE = WeaponSpec(
 
 GUN = WeaponSpec(
     type=WeaponType.GUN,
-    name="Autocannon",
+    name="Gun",
     rate_of_fire=1,
-    # Effective at short range; trailing '-' means unusable beyond range 7
-    to_hit=RangeTable.from_list([7, 7, 7, 6, 6, 5, 5, "-"]),
-    # 1 damage vs ships at all usable ranges
-    damage=RangeTable.from_list([1, 1, 1, 1, 1, 1, 1, "-"]),
+    # Short-ranged; '-' means unusable beyond range 4
+    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, "-"]),
+    damage=RangeTable.from_list([2, 2, 1, 1, 1, "-"]),
+    # Half damage vs shields and armor — effective against exposed systems
+    shield_multiplier=0.5,
+    armor_multiplier=0.5,
     # +2 to-hit bonus vs fighters in dogfights
     anti_fighter_modifier=2,
 )

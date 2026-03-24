@@ -129,12 +129,31 @@ def _place_fleet(
         if ship is None:
             continue
 
-        # Dock one default squadron per active Bh bay (carriers only)
+        # Dock one squadron per active Bh bay (carriers only).
+        # Internal weapon is read from the design track's Bh slot; defaults to GUN.
         is_carrier = "carrier" in design.get("hull_mods", [])
         if is_carrier:
+            # Build an ordered list of squadron configs from the design track.
+            bh_configs: list[dict] = [
+                slot.get("squadron") or {}
+                for slot in design.get("track", [])
+                if isinstance(slot, dict)
+                and slot.get("type") == "system"
+                and slot.get("code") == "Bh"
+            ]
+            config_iter = iter(bh_configs)
+
+            import dataclasses
             updated_systems = ship.systems
             for sys in ship.systems.systems:
                 if sys.token == "Bh" and sys.is_active() and sys.occupant is None:
+                    config = next(config_iter, {})
+                    internal_code = config.get("internal") or None
+                    try:
+                        internal_wt = WeaponType(internal_code) if internal_code else WeaponType.GUN
+                    except ValueError:
+                        internal_wt = WeaponType.GUN
+
                     sq_id = f"{side_id}F{sq_counter}"
                     sq_counter += 1
                     sq = SquadronState(
@@ -144,7 +163,7 @@ def _place_fleet(
                         strength=5, max_strength=5,
                         loadout=FighterLoadout(
                             fighter_class=F1,
-                            internal=(WeaponType.GUN,),
+                            internal=(internal_wt,),
                         ),
                         endurance=20, max_endurance=20,
                         docked_at=ship_id,
@@ -152,7 +171,6 @@ def _place_fleet(
                     updated_systems = updated_systems.dock_squadron(sq_id)
                     squadrons[sq_id] = sq
 
-            import dataclasses
             ship = dataclasses.replace(ship, systems=updated_systems)
 
         ships[ship_id] = ship

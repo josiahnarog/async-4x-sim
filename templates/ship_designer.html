@@ -153,6 +153,15 @@
     .tile-engines {
       display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; max-width: 80px;
     }
+
+    /* Hangar bay tile with squadron sub-panel */
+    .tile-hangar { min-width: 110px; align-items: flex-start; gap: 2px; }
+    .tile-sq-label { font-size: 0.62em; color: rgba(255,255,255,0.5); }
+    .tile-sq-select {
+      font-size: 0.68em; background: rgba(0,0,0,0.35); color: #d888d0;
+      border: 1px solid #a848a0; border-radius: 3px; padding: 1px 3px;
+      font-family: inherit; cursor: pointer; width: 100%; margin-top: 1px;
+    }
     .engine-dot {
       width: 12px; height: 12px; border-radius: 2px;
       background: #c09840; border: 1px solid rgba(255,255,255,0.25);
@@ -346,6 +355,16 @@ HULLS.forEach(h => HULL_MAP[h.designation] = h);
 const HULL_MODS_MAP = {};
 HULL_MODS.forEach(m => HULL_MODS_MAP[m.key] = m);
 
+// Fighter squadron constants
+const SQ_BASE_COST = 200;  // base cost of one F1 squadron (full strength 5)
+const FIGHTER_INTERNAL_WEAPONS = [
+  {code: "",  label: "None"},
+  {code: "G", label: "G — Gun"},
+  {code: "L", label: "L — Laser"},
+  {code: "F", label: "F — Force Beam"},
+  {code: "E", label: "E — Energy Beam"},
+];
+
 // ---------------------------------------------------------------------------
 // System color palette
 // ---------------------------------------------------------------------------
@@ -356,6 +375,7 @@ const SYS_COLORS = {
   I:  {bg:"#3a3010", fg:"#c09840", bd:"#c09840"},
   Y:  {bg:"#1a3a3a", fg:"#70d0d0", bd:"#409898"},
   X:  {bg:"#1a2a3a", fg:"#80b0d0", bd:"#407898"},
+  G:  {bg:"#2a2a1a", fg:"#c8c050", bd:"#888020"},
   D:  {bg:"#2a1a3a", fg:"#c080e0", bd:"#8040a8"},
   L:  {bg:"#3a1a1a", fg:"#e87070", bd:"#c83030"},
   N:  {bg:"#2a1a2a", fg:"#e070d0", bd:"#a030a0"},
@@ -450,7 +470,15 @@ function updateStats() {
       sysCost += slot.count * 2;
     } else {
       const s = SYS_MAP[slot.code];
-      if (s) { usedHS += s.hull_spaces; sysCost += s.cost; }
+      if (s) {
+        usedHS  += s.hull_spaces;
+        sysCost += s.cost;
+        if (slot.code === "Bh") {
+          const internal = slot.squadron?.internal || "";
+          const wCost    = internal ? (SYS_MAP[internal]?.cost || 0) * 5 : 0;
+          sysCost += SQ_BASE_COST + wCost;
+        }
+      }
     }
   });
   currentInstalledHS = usedHS;
@@ -634,6 +662,25 @@ function renderTrack() {
         <div class="tile-hs" style="color:#8a6820;">${slot.count} HS · ${slot.count*20} cr</div>
         <div class="tile-remove" onclick="removeSlot(${idx})">✕</div>
       `;
+    } else if (slot.code === "Bh") {
+      const internal = slot.squadron?.internal || "";
+      const wCost    = internal ? (SYS_MAP[internal]?.cost || 0) * 5 : 0;
+      const sqCost   = SQ_BASE_COST + wCost;
+      const opts     = FIGHTER_INTERNAL_WEAPONS.map(w =>
+        `<option value="${w.code}"${w.code === internal ? " selected" : ""}>${w.label}</option>`
+      ).join("");
+      tile.style.cssText = sysStyle("Bh");
+      tile.classList.add("tile-hangar");
+      tile.innerHTML = `
+        <div class="tile-code">Bh</div>
+        <div class="tile-sq-label">Squadron · F1 · ${sqCost} cr</div>
+        <select class="tile-sq-select" draggable="false"
+                onchange="setBhWeapon(${idx}, this.value)"
+                onclick="event.stopPropagation()"
+                onmousedown="event.stopPropagation()">${opts}</select>
+        <div class="tile-hs">6 HS · ${60 + sqCost} cr total</div>
+        <div class="tile-remove" onclick="removeSlot(${idx})">✕</div>
+      `;
     } else {
       const s = SYS_MAP[slot.code] || {code:slot.code, hull_spaces:"?", cost:"?"};
       tile.style.cssText = sysStyle(slot.code);
@@ -657,7 +704,17 @@ function renderTrack() {
 // Add / remove / modify slots
 // ---------------------------------------------------------------------------
 function addSystem(code) {
-  track.push({type:"system", code});
+  if (code === "Bh") {
+    track.push({type:"system", code:"Bh", squadron:{internal:null}});
+  } else {
+    track.push({type:"system", code});
+  }
+  renderTrack();
+}
+
+function setBhWeapon(idx, weaponCode) {
+  if (!track[idx] || track[idx].code !== "Bh") return;
+  track[idx] = {...track[idx], squadron:{internal: weaponCode || null}};
   renderTrack();
 }
 
@@ -874,7 +931,11 @@ if (window._EDIT_DESIGN) {
   }
   setActiveMods(d.hull_mods || []);
   updateHullInfo();
-  track = ensureRooms(d.track);
+  track = ensureRooms(d.track.map(slot =>
+    (slot.type === "system" && slot.code === "Bh" && !slot.squadron)
+      ? {...slot, squadron:{internal:null}}
+      : slot
+  ));
   renderTrack();
   document.getElementById("delete-btn").style.display = "";
 } else {

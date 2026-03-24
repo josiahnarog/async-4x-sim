@@ -27,8 +27,11 @@ class TestGunWeapon:
         assert GUN.can_target_fighters is True
 
     def test_gun_damage_vs_ship(self):
-        assert GUN.damage_at(0) == 1
+        # Gun does 2 damage at close range, 1 at medium; half vs shields/armor
+        assert GUN.damage_at(0) == 2
         assert GUN.damage_at(3) == 1
+        assert GUN.shield_multiplier == 0.5
+        assert GUN.armor_multiplier == 0.5
 
     def test_missile_cannot_target_fighters(self):
         assert STANDARD_MISSILE.can_target_fighters is False

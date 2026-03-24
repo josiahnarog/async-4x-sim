@@ -358,6 +358,11 @@ class ShipSystems:
                 if points <= 0:
                     break
 
+            if systems[idx].base == "A" and weapon.armor_multiplier != 1.0:
+                points = int(points * weapon.armor_multiplier)  # floor
+                if points <= 0:
+                    break
+
             systems[idx] = systems[idx].destroy()
             points -= 1
 
