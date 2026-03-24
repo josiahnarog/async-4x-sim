@@ -82,6 +82,12 @@ def init_db(db_path: Path | None = None) -> None:
                 updated_at  TEXT NOT NULL
             );
         """)
+    # Migration: add hull_mods column if it doesn't exist yet
+    try:
+        conn.execute("ALTER TABLE designs ADD COLUMN hull_mods TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
+    except Exception:
+        pass  # column already exists
     conn.close()
 
 
@@ -214,28 +220,31 @@ def append_turn_snapshot(game_id: str, turn_number: int, enc, rng) -> None:
 # Ship designs
 # ---------------------------------------------------------------------------
 
-def save_design(design_id: str, name: str, hull_type: str, hull_spaces: int, track: list) -> None:
+def save_design(design_id: str, name: str, hull_type: str, hull_spaces: int,
+                track: list, hull_mods: list | None = None) -> None:
     """Insert or replace a ship design."""
     now = _now()
     conn = _connect()
     with conn:
         conn.execute(
-            """INSERT INTO designs (design_id, name, hull_type, hull_spaces, track, created_at, updated_at)
-               VALUES (?,?,?,?,?,
+            """INSERT INTO designs (design_id, name, hull_type, hull_spaces, track, hull_mods, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,
                        COALESCE((SELECT created_at FROM designs WHERE design_id=?), ?),
                        ?)
                ON CONFLICT(design_id) DO UPDATE SET
                    name=excluded.name, hull_type=excluded.hull_type,
                    hull_spaces=excluded.hull_spaces, track=excluded.track,
+                   hull_mods=excluded.hull_mods,
                    updated_at=excluded.updated_at""",
             (design_id, name, hull_type, hull_spaces, json.dumps(track),
+             json.dumps(hull_mods or []),
              design_id, now, now),
         )
     conn.close()
 
 
 def load_design(design_id: str) -> dict:
-    """Return design as a dict with keys: design_id, name, hull_type, hull_spaces, track."""
+    """Return design as a dict with keys: design_id, name, hull_type, hull_spaces, track, hull_mods."""
     conn = _connect()
     try:
         row = conn.execute(
@@ -249,6 +258,7 @@ def load_design(design_id: str) -> dict:
             "hull_type":   row["hull_type"],
             "hull_spaces": row["hull_spaces"],
             "track":       json.loads(row["track"]),
+            "hull_mods":   json.loads(row["hull_mods"]) if row["hull_mods"] else [],
             "created_at":  row["created_at"],
             "updated_at":  row["updated_at"],
         }
@@ -261,10 +271,11 @@ def list_designs() -> list[dict]:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT design_id, name, hull_type, hull_spaces, updated_at "
+            "SELECT design_id, name, hull_type, hull_spaces, hull_mods, updated_at "
             "FROM designs ORDER BY updated_at DESC"
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "hull_mods": json.loads(r["hull_mods"]) if r["hull_mods"] else []}
+                for r in rows]
     finally:
         conn.close()
 

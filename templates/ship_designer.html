@@ -110,6 +110,13 @@
       border: 1px dashed #333; border-radius: 6px;
     }
     #track.drag-over { border-color: #a8d8ea; background: #1a2a3a; }
+    #sys-string-panel {
+      margin-top: 14px; padding: 10px 14px;
+      background: #0d0d1a; border: 1px solid #2a2a3a; border-radius: 6px;
+      font-size: 0.85em; color: #888; display: flex; align-items: baseline; gap: 10px;
+    }
+    #sys-string-label { flex-shrink: 0; }
+    #sys-string { color: #c8d8f8; font-size: 1.05em; letter-spacing: 0.04em; word-break: break-all; }
 
     /* System tiles on track */
     .track-tile {
@@ -143,7 +150,7 @@
       border-style: dashed !important; border-width: 1px;
       flex-direction: column; gap: 2px;
     }
-    .tile-engine-room .tile-engines {
+    .tile-engines {
       display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; max-width: 80px;
     }
     .engine-dot {
@@ -180,12 +187,19 @@
     .design-del  { font-size: 0.72em; color: #f08080; cursor: pointer; margin-left: 8px; }
     .design-del:hover { text-decoration: underline; }
 
-    /* ── Hull info panel ── */
-    #hull-info {
-      font-size: 0.78em; color: #666; padding: 4px 8px;
-      background: #0d0d1a; border: 1px solid #2a2a3a; border-radius: 4px;
-      white-space: nowrap;
+    /* ── Hull info panel (removed — attrs now in dropdown) ── */
+    #hull-info { display: none; }
+
+    /* ── Hull modifier checkboxes ── */
+    #hull-mods-bar { display: flex; align-items: center; gap: 10px; }
+    .mod-checkbox {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 0.82em; color: #aac; cursor: pointer;
+      background: #0d0d1a; border: 1px solid #2a2a4a;
+      padding: 3px 8px; border-radius: 4px; white-space: nowrap;
     }
+    .mod-checkbox input { cursor: pointer; accent-color: #a8d8ea; }
+    .mod-checkbox.active { border-color: #a8d8ea; color: #c8e8ff; }
   </style>
 </head>
 <body>
@@ -202,11 +216,23 @@
             data-hs-min="{{ h.hs_min }}" data-hs-max="{{ h.hs_max }}"
             data-cost="{{ h.cost_per_hs }}" data-epr="{{ h.epr_i }}"
             data-ia="{{ h.ia }}" data-el="{{ h.req_el }}">
-      {{ h.designation }} — {{ h.name }}
+      {{ h.designation }} — {{ h.name }}  |  TechLvl: {{ h.req_el }}  |  HS: {{ h.hs_min }}-{{ h.hs_max }}  |  Cost/HS: {{ h.cost_per_hs }}  |  Spd(TrnCost): {{ h.ia }}
     </option>
     {% endfor %}
   </select>
-  <div id="hull-info">EPR: 2/3 &nbsp;|&nbsp; Ia: 5(2) &nbsp;|&nbsp; EL: 1 &nbsp;|&nbsp; Spd: 5 &nbsp;|&nbsp; TC: 2</div>
+  <span class="label">Mods:</span>
+  <span id="hull-mods-bar">
+    {% for mod in hull_mods %}
+    <label class="mod-checkbox">
+      <input type="checkbox" name="hull_mod" value="{{ mod.key }}"
+             data-cost-multiplier="{{ mod.cost_multiplier }}"
+             data-suffix="{{ mod.designation_suffix }}"
+             data-requires='{{ mod.requires_systems | tojson }}'
+             onchange="onModChange()">
+      {{ mod.label }}
+    </label>
+    {% endfor %}
+  </span>
   <button class="btn btn-accent" onclick="saveDesign()">Save Design</button>
   <button class="btn" onclick="newDesign()">New</button>
   <form id="delete-form" method="post" style="display:inline">
@@ -216,6 +242,7 @@
 
 <!-- Stats bar -->
 <div id="stats-bar">
+  <span>Hull: <span id="stat-designation" style="color:#c8e8ff; font-weight:bold;">–</span></span>
   <span>Installed HS: <span id="stat-used">0</span>&nbsp;<span id="stat-hs-range" style="color:#555;">(–)</span></span>
   <span>Max speed: <span id="stat-max-mp">–</span></span>
   <span>Turn cost: <span id="stat-turn-cost">–</span></span>
@@ -234,7 +261,7 @@
     <h3>Systems</h3>
     {% for s in systems if s.code not in ('S', 'A') %}
     <div class="palette-item" onclick="addSystem('{{ s.code }}')">
-      <div class="palette-chip sys-color-{{ s.code | replace('Bf','Bf') | replace('Bl','Bl') }}"
+      <div class="palette-chip"
            style="{{ 'background:' + systemColor(s.code) if false else '' }}"
            data-code="{{ s.code }}">{{ s.code }}</div>
       <div class="palette-info">
@@ -263,6 +290,10 @@
           No systems added yet — click from the palette to begin
         </span>
       </div>
+      <div id="sys-string-panel">
+        <span id="sys-string-label">System string:</span>
+        <code id="sys-string"></code>
+      </div>
     </div>
   </div>
 
@@ -276,7 +307,7 @@
           <span class="design-name" onclick="loadDesignFromServer('{{ d.design_id }}')">{{ d.name }}</span>
           <span class="design-del" onclick="deleteDesignById('{{ d.design_id }}', '{{ d.name }}')">✕</span>
         </div>
-        <div class="design-meta">{{ d.hull_type }} · {{ d.hull_spaces }} HS</div>
+        <div class="design-meta">{{ d.hull_type }}{% for mod in hull_mods %}{% if mod.key in d.get('hull_mods', []) %}{{ mod.designation_suffix }}{% endif %}{% endfor %} · {{ d.hull_spaces }} HS</div>
       </div>
       {% endfor %}
     {% else %}
@@ -302,14 +333,18 @@
 // ---------------------------------------------------------------------------
 // Catalog data injected from server
 // ---------------------------------------------------------------------------
-const HULLS   = {{ hulls   | tojson }};
-const SYSTEMS = {{ systems | tojson }};
+const HULLS     = {{ hulls     | tojson }};
+const SYSTEMS   = {{ systems   | tojson }};
+const HULL_MODS = {{ hull_mods | tojson }};
 
-const SYS_MAP = {};
+const SYS_MAP  = {};
 SYSTEMS.forEach(s => SYS_MAP[s.code] = s);
 
 const HULL_MAP = {};
 HULLS.forEach(h => HULL_MAP[h.designation] = h);
+
+const HULL_MODS_MAP = {};
+HULL_MODS.forEach(m => HULL_MODS_MAP[m.key] = m);
 
 // ---------------------------------------------------------------------------
 // System color palette
@@ -329,7 +364,8 @@ const SYS_COLORS = {
   E:  {bg:"#1a2a3a", fg:"#70a8e8", bd:"#3068c8"},
   K:  {bg:"#3a1a0a", fg:"#e07840", bd:"#c04820"},
   Bl: {bg:"#2a1a2a", fg:"#d070b8", bd:"#901880"},
-  Bf: {bg:"#3a1a3a", fg:"#d888d0", bd:"#a848a0"},
+  Bh: {bg:"#3a1a3a", fg:"#d888d0", bd:"#a848a0"},
+  Mg: {bg:"#1a2a1a", fg:"#80c870", bd:"#406830"},
 };
 function sysStyle(code) {
   const c = SYS_COLORS[code] || {bg:"#2a2a2a", fg:"#aaa", bd:"#555"};
@@ -342,8 +378,42 @@ function sysStyle(code) {
 // Each slot: {type:"system", code:"S"} | {type:"engine_room", count:1}
 //            {type:"shield_room", count:N} | {type:"armor_room", count:N}
 let track = [];
-let currentDesignId   = null;
-let currentInstalledHS = 0;   // updated by updateStats(); used by saveDesign()
+let currentDesignId    = null;
+let currentInstalledHS = 0;    // updated by updateStats(); used by saveDesign()
+let activeMods         = new Set();  // set of mod keys currently checked
+
+function getActiveModMultiplier() {
+  let m = 1.0;
+  activeMods.forEach(key => { if (HULL_MODS_MAP[key]) m *= HULL_MODS_MAP[key].cost_multiplier; });
+  return m;
+}
+
+function getDesignationSuffix() {
+  return [...activeMods].filter(k => HULL_MODS_MAP[k]).map(k => HULL_MODS_MAP[k].designation_suffix).join("");
+}
+
+// Returns the set of system codes that require at least one active mod to be present
+function getModRequiredSystems() {
+  const required = new Set();
+  HULL_MODS.forEach(mod => {
+    if (!activeMods.has(mod.key)) {
+      (mod.requires_systems || []).forEach(code => required.add(code));
+    }
+  });
+  return required;
+}
+
+function onModChange() {
+  activeMods.clear();
+  document.querySelectorAll('#hull-mods-bar input[type=checkbox]:checked').forEach(cb => {
+    activeMods.add(cb.value);
+  });
+  document.querySelectorAll('#hull-mods-bar .mod-checkbox').forEach(label => {
+    const cb = label.querySelector('input');
+    label.classList.toggle('active', cb.checked);
+  });
+  updateStats();
+}
 
 // ---------------------------------------------------------------------------
 // Hull info update
@@ -352,11 +422,6 @@ const hullSelect = document.getElementById("hull-select");
 const hullInfoEl = document.getElementById("hull-info");
 
 function updateHullInfo() {
-  const h = HULL_MAP[hullSelect.value];
-  if (!h) return;
-  const speedStr = (h.max_speed != null) ? `  |  Spd: ${h.max_speed}  |  TC: ${h.turn_cost}` : "";
-  hullInfoEl.textContent =
-    `EPR: ${h.epr_i}  |  Ia: ${h.ia}  |  EL: ${h.req_el}${speedStr}`;
   updateStats();
 }
 hullSelect.addEventListener("change", updateHullInfo);
@@ -390,9 +455,10 @@ function updateStats() {
   });
   currentInstalledHS = usedHS;
 
-  const h        = HULL_MAP[hullSelect.value];
-  const hullCost = h ? Math.round(h.cost_per_hs * usedHS * 100) / 100 : 0;
-  const totalCost = Math.round((hullCost + sysCost) * 100) / 100;
+  const h           = HULL_MAP[hullSelect.value];
+  const modMult     = getActiveModMultiplier();
+  const hullCost    = h ? Math.round(h.cost_per_hs * modMult * usedHS * 100) / 100 : 0;
+  const totalCost   = Math.round((hullCost + sysCost) * 100) / 100;
 
   // HS range display with colour coding
   const usedEl  = document.getElementById("stat-used");
@@ -423,9 +489,11 @@ function updateStats() {
     }
   }
 
-  document.getElementById("stat-max-mp").textContent     = mpStr;
-  document.getElementById("stat-turn-cost").textContent  = tcStr;
-  document.getElementById("stat-hull-cost").textContent  = hullCost.toFixed(2);
+  const designation = h ? (h.designation + getDesignationSuffix()) : "–";
+  document.getElementById("stat-designation").textContent = designation;
+  document.getElementById("stat-max-mp").textContent      = mpStr;
+  document.getElementById("stat-turn-cost").textContent   = tcStr;
+  document.getElementById("stat-hull-cost").textContent   = hullCost.toFixed(2);
   document.getElementById("stat-sys-cost").textContent   = sysCost;
   document.getElementById("stat-total-cost").textContent = totalCost.toFixed(2);
 
@@ -469,6 +537,17 @@ function updateValidation(installedHS, totalEngines) {
       const needed = Math.ceil(installedHS / lsCap);
       errors.push(`Life support insufficient — ${needed} Q needed for ${installedHS} HS (have ${qCount})`);
     }
+
+    // 4. Hull modifier checks — flag systems that require a mod not currently active
+    HULL_MODS.forEach(mod => {
+      if (!activeMods.has(mod.key)) {
+        (mod.requires_systems || []).forEach(code => {
+          const count = track.filter(s => s.type === "system" && s.code === code).length;
+          if (count > 0)
+            errors.push(`${code} requires the ${mod.label} hull mod (select "${mod.label}" above)`);
+        });
+      }
+    });
   }
 
   if (errors.length === 0) {
@@ -481,12 +560,32 @@ function updateValidation(installedHS, totalEngines) {
 // ---------------------------------------------------------------------------
 // Track rendering
 // ---------------------------------------------------------------------------
+function trackToSystemString() {
+  const parts = [];
+  for (const slot of track) {
+    if (slot.type === "shield_room") {
+      const n = slot.count || 0;
+      if (n > 0) parts.push("S".repeat(n));
+    } else if (slot.type === "armor_room") {
+      const n = slot.count || 0;
+      if (n > 0) parts.push("A".repeat(n));
+    } else if (slot.type === "engine_room") {
+      const n = Math.max(1, slot.count || 1);
+      parts.push("(" + "I".repeat(n) + ")");
+    } else if (slot.type === "system") {
+      parts.push(slot.code);
+    }
+  }
+  return parts.join("");
+}
+
 function renderTrack() {
   const el = document.getElementById("track");
   el.innerHTML = "";
 
   if (track.length === 0) {
     el.innerHTML = '<span id="track-empty" style="color:#444;font-size:0.85em;align-self:center;padding:8px;">No systems added yet — click from the palette to begin</span>';
+    document.getElementById("sys-string").textContent = "";
     updateStats();
     return;
   }
@@ -550,6 +649,7 @@ function renderTrack() {
     el.appendChild(tile);
   });
 
+  document.getElementById("sys-string").textContent = trackToSystemString();
   updateStats();
 }
 
@@ -686,7 +786,9 @@ function saveDesign() {
   form.action = "/tactical/designs/save";
   form.style.display = "none";
 
-  const fields = {design_id: did, name, hull_type: hull, hull_spaces: size, track_json: JSON.stringify(track)};
+  const fields = {design_id: did, name, hull_type: hull, hull_spaces: size,
+                  track_json: JSON.stringify(track),
+                  hull_mods_json: JSON.stringify([...activeMods])};
   for (const [k, v] of Object.entries(fields)) {
     const inp = document.createElement("input");
     inp.type = "hidden"; inp.name = k; inp.value = v;
@@ -700,11 +802,22 @@ function defaultTrack() {
   return [{type:"shield_room", count:2}, {type:"armor_room", count:2}];
 }
 
+function setActiveMods(modKeys) {
+  activeMods.clear();
+  document.querySelectorAll('#hull-mods-bar input[type=checkbox]').forEach(cb => {
+    const on = modKeys.includes(cb.value);
+    cb.checked = on;
+    if (on) activeMods.add(cb.value);
+    cb.closest('.mod-checkbox').classList.toggle('active', on);
+  });
+}
+
 function newDesign() {
   if (track.length > 0 && !confirm("Clear current design and start fresh?")) return;
   currentDesignId = null;
   document.getElementById("ship-name").value = "";
   hullSelect.value = HULLS[0]?.designation || "";
+  setActiveMods([]);
   updateHullInfo();
   track = defaultTrack();
   renderTrack();
@@ -759,11 +872,13 @@ if (window._EDIT_DESIGN) {
       break;
     }
   }
+  setActiveMods(d.hull_mods || []);
   updateHullInfo();
   track = ensureRooms(d.track);
   renderTrack();
   document.getElementById("delete-btn").style.display = "";
 } else {
+  setActiveMods([]);
   updateHullInfo();
   track = defaultTrack();
   renderTrack();

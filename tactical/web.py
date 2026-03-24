@@ -994,26 +994,39 @@ async def game_delete(game_id: str):
 # Ship designer
 # ---------------------------------------------------------------------------
 
+# Hull modifier definitions — add future mods here.
+HULL_MODS = [
+    {
+        "key":             "carrier",
+        "label":           "Carrier",
+        "designation_suffix": "-V",
+        "cost_multiplier": 1.25,
+        "requires_systems": ["Bh", "Bl"],   # systems that require this mod
+        "description":     "Allows Hangar Bays (Bh) and Launch Bays (Bl). +25% hull cost.",
+    },
+]
+
 @router.get("/designs/", response_class=HTMLResponse)
 async def designer_index(request: Request):
     designs = list_designs()
     hulls   = HULL_CATALOG
     systems = SYSTEMS
     return templates.TemplateResponse("ship_designer.html", {
-        "request": request,
-        "designs": designs,
-        "hulls":   [{"designation": h.designation, "name": h.name,
-                     "hs_min": h.hs_min, "hs_max": h.hs_max,
-                     "cost_per_hs": h.cost_per_hs, "epr_i": h.epr_i,
-                     "ia": h.ia, "req_el": h.req_el,
-                     "req_min_speed": h.req_min_speed,
-                     "max_speed": h.max_speed, "turn_cost": h.turn_cost,
-                     "engines_per_room": hull_engines_per_room(h)}
-                    for h in hulls],
-        "systems": [{"code": s.code, "name": s.name,
-                     "cost": s.cost, "hull_spaces": s.hull_spaces,
-                     "ls_capacity": s.ls_capacity}
-                    for s in systems],
+        "request":   request,
+        "designs":   designs,
+        "hull_mods": HULL_MODS,
+        "hulls":     [{"designation": h.designation, "name": h.name,
+                       "hs_min": h.hs_min, "hs_max": h.hs_max,
+                       "cost_per_hs": h.cost_per_hs, "epr_i": h.epr_i,
+                       "ia": h.ia, "req_el": h.req_el,
+                       "req_min_speed": h.req_min_speed,
+                       "max_speed": h.max_speed, "turn_cost": h.turn_cost,
+                       "engines_per_room": hull_engines_per_room(h)}
+                      for h in hulls],
+        "systems":   [{"code": s.code, "name": s.name,
+                       "cost": s.cost, "hull_spaces": s.hull_spaces,
+                       "ls_capacity": s.ls_capacity}
+                      for s in systems],
     })
 
 
@@ -1038,9 +1051,10 @@ async def designer_edit(request: Request, design_id: str):
                            "max_speed": h.max_speed, "turn_cost": h.turn_cost,
                            "engines_per_room": hull_engines_per_room(h)}
                           for h in hulls],
+        "hull_mods":     HULL_MODS,
         "systems":       [{"code": s.code, "name": s.name,
                            "cost": s.cost, "hull_spaces": s.hull_spaces,
-                     "ls_capacity": s.ls_capacity}
+                           "ls_capacity": s.ls_capacity}
                           for s in systems],
         "edit_design":   design,
     })
@@ -1048,18 +1062,23 @@ async def designer_edit(request: Request, design_id: str):
 
 @router.post("/designs/save")
 async def designer_save(
-    design_id:   str  = Form(default=""),
-    name:        str  = Form(...),
-    hull_type:   str  = Form(...),
-    hull_spaces: int  = Form(...),
-    track_json:  str  = Form(...),
+    design_id:    str  = Form(default=""),
+    name:         str  = Form(...),
+    hull_type:    str  = Form(...),
+    hull_spaces:  int  = Form(...),
+    track_json:   str  = Form(...),
+    hull_mods_json: str = Form(default="[]"),
 ):
     did = design_id.strip() or str(uuid.uuid4())
     try:
         track = json.loads(track_json)
     except Exception:
         track = []
-    save_design(did, name.strip() or "Unnamed", hull_type, hull_spaces, track)
+    try:
+        hull_mods = json.loads(hull_mods_json)
+    except Exception:
+        hull_mods = []
+    save_design(did, name.strip() or "Unnamed", hull_type, hull_spaces, track, hull_mods)
     return RedirectResponse(url=f"/tactical/designs/{did}/edit", status_code=303)
 
 

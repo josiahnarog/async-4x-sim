@@ -43,7 +43,8 @@ SYSTEMS: list[SystemEntry] = [
     SystemEntry("E",  "Energy Beam",         cost=35,  hull_spaces=6),
     SystemEntry("K",  "Rail Gun (Kinetic)",  cost=45,  hull_spaces=7),
     SystemEntry("Bl", "Launch Bay",          cost=60,  hull_spaces=3),
-    SystemEntry("Bf", "Fighter Bay",         cost=60,  hull_spaces=6),
+    SystemEntry("Bh", "Hangar Bay",          cost=60,  hull_spaces=6),
+    SystemEntry("Mg", "Magazine",            cost=10,  hull_spaces=1),
 ]
 
 SYSTEMS_BY_CODE: dict[str, SystemEntry] = {s.code: s for s in SYSTEMS}
@@ -140,11 +141,8 @@ def systems_hull_spaces(system_codes: list[str]) -> int:
 # ---------------------------------------------------------------------------
 # System string codec
 # ---------------------------------------------------------------------------
-# The tactical engine uses "Bh" for Fighter Bay; the builder uses "Bf".
-# This mapping is applied when converting a design to a system string
-# for tactical engine consumption.
-_BUILDER_TO_TACTICAL: dict[str, str] = {"Bf": "Bh"}
-_TACTICAL_TO_BUILDER: dict[str, str] = {v: k for k, v in _BUILDER_TO_TACTICAL.items()}
+_BUILDER_TO_TACTICAL: dict[str, str] = {}
+_TACTICAL_TO_BUILDER: dict[str, str] = {}
 
 
 def track_to_system_string(track: list[dict]) -> str:

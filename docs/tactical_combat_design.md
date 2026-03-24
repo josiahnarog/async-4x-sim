@@ -220,3 +220,12 @@ once more hull types are defined. The intercept radius formula does not need to 
 **Large unit targeting of fighters:** large unit weapons cannot target fighters (too small
 and maneuverable). PD is the designated anti-fighter weapon for large units, subject to the
 rules in Phase 2 above.
+
+**Engine generations and hull performance:** Each hull type has a base `Spd(TrnCost)` value
+using Gen-1 engines (Ia). Future engine generations (e.g. Ib/Ic) improve a hull's max speed
+and turn cost by +1/+1 per generation, with the following exception: hulls whose base turn
+cost ends in a `-` suffix (e.g. `5(2-)`, `4(4-)`) only gain the turn-cost increment every
+*other* generation. For example, a DD (base `5(3)`) with Gen-2 engines becomes `6(3)`;
+Gen-3 becomes `6(4)`. A BC (base `4(4-)`) with Gen-2 becomes `5(4)`; Gen-3 becomes `5(5)`.
+This means the `-` suffix acts as a half-step delay on the turn-cost improvement track.
+Implementation deferred until engine-generation tech tree is built.
