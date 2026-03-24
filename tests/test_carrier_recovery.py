@@ -83,11 +83,29 @@ class TestCarrierRecovery:
         assert any(isinstance(e, RecoveryEvent) and e.squadron_id == "AF1"
                    for e in events + events2)
 
-    def test_recovery_requires_squadron_at_carrier_hex(self):
-        """Squadron not co-located with carrier — recovery silently ignored."""
+    def test_recovery_moves_squadron_to_carrier(self):
+        """Squadron within MP range moves to carrier and docks."""
         carrier_a = _carrier("A1", "A", Hex(0, 0))
         carrier_b = _carrier("B1", "B", Hex(20, 0))
-        sq = _squadron("AF1", "A", Hex(5, 0))   # different hex
+        sq = _squadron("AF1", "A", Hex(5, 0))   # 5 hexes away, well within MP=10
+        battle = BattleState(
+            ships={"A1": carrier_a, "B1": carrier_b},
+            squadrons={"AF1": sq},
+        )
+
+        enc = _advance_to_combat_small(battle)
+        enc = enc.stage_squadron_order("A", "AF1", RecoverOrder(carrier_id="A1"))
+        enc, ev1 = enc.commit_squadron_orders("A", random.Random(1))
+        enc, ev2 = enc.commit_squadron_orders("B", random.Random(1))
+
+        assert enc.battle.squadrons["AF1"].docked_at == "A1"
+        assert any(isinstance(e, RecoveryEvent) for e in ev1 + ev2)
+
+    def test_recovery_fails_when_out_of_range(self):
+        """Squadron too far to reach carrier — recovery silently ignored."""
+        carrier_a = _carrier("A1", "A", Hex(0, 0))
+        carrier_b = _carrier("B1", "B", Hex(20, 0))
+        sq = _squadron("AF1", "A", Hex(15, 0))   # 15 hexes away, beyond MP=10
         battle = BattleState(
             ships={"A1": carrier_a, "B1": carrier_b},
             squadrons={"AF1": sq},

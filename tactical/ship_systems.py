@@ -319,30 +319,44 @@ class ShipSystems:
         return ShipSystems(tuple(new_systems))
 
     def apply_weapon_damage(self, damage: int, *, weapon: WeaponSpec) -> "ShipSystems":
-        """Apply weapon damage to this ship's systems.
+        """Apply weapon damage to this ship's systems point-by-point.
 
-        Rules (current MVP):
-          - damage is applied point-by-point
-          - ALWAYS skip systems that are already DESTROYED
-          - weapon may skip specific base codes (e.g. Laser skips 'S', Electron skips 'A' and 'H')
-          - Electron Beam: half damage vs shields (rounded down) applied as:
-              when the next eligible system is a shield, reduce remaining points to floor(points * multiplier)
-              before applying to shields.
-            (If you instead want per-point halving, say so; this is the more “tabletop typical” interpretation.)
+        Skip rules (weapon.skip):
+          The first skip.shields active S systems, skip.armor active A systems,
+          and skip.holds active B systems are bypassed entirely — damage passes
+          through them as if they don't exist.  Use SKIP_ALL to bypass all of
+          a given type (e.g. Laser skips all shields).
+
+        Damage multipliers:
+          When the next eligible system is type S and shield_multiplier != 1.0,
+          the remaining damage pool is multiplied (floor) before hitting that system
+          and all subsequent ones.  Same for armor_multiplier vs type A.
         """
         if damage <= 0:
             return self
 
         systems = list(self.systems)
-        skip = set(weapon.skip_codes)
+        skip = weapon.skip
 
-        def eligible(i: int) -> bool:
-            s = systems[i]
-            return s.is_active() and (s.base not in skip)
+        # Precompute which indices are pre-skipped for this weapon.
+        # The first skip.shields active S systems are bypassed, etc.
+        pre_skip: set[int] = set()
+        seen: dict[str, int] = {}   # base → count of active instances processed so far
+        _limits = {"S": skip.shields, "A": skip.armor, "B": skip.holds}
+        for i, s in enumerate(systems):
+            if not s.is_active():
+                continue
+            limit = _limits.get(s.base, 0)
+            if limit == 0:
+                continue
+            n = seen.get(s.base, 0)
+            if n < limit:
+                pre_skip.add(i)
+                seen[s.base] = n + 1
 
         def next_idx() -> int | None:
             for i in range(len(systems)):
-                if eligible(i):
+                if systems[i].is_active() and i not in pre_skip:
                     return i
             return None
 
@@ -354,12 +368,12 @@ class ShipSystems:
                 break
 
             if systems[idx].base == "S" and weapon.shield_multiplier != 1.0:
-                points = int(points * weapon.shield_multiplier)  # floor
+                points = int(points * weapon.shield_multiplier)
                 if points <= 0:
                     break
 
             if systems[idx].base == "A" and weapon.armor_multiplier != 1.0:
-                points = int(points * weapon.armor_multiplier)  # floor
+                points = int(points * weapon.armor_multiplier)
                 if points <= 0:
                     break
 

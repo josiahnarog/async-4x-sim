@@ -72,6 +72,27 @@ class WeaponArc(Enum):
     FORWARD = "forward"
 
 
+# Sentinel meaning "bypass all systems of this type".
+SKIP_ALL = 0x7FFF_FFFF
+
+
+@dataclass(frozen=True, slots=True)
+class SkipRule:
+    """Defines how many active systems of each type a weapon bypasses before dealing damage.
+
+    The first `shields` active S systems on the track are skipped entirely.
+    The first `armor`   active A systems on the track are skipped entirely.
+    The first `holds`   active B systems (Bh, Bl) on the track are skipped entirely.
+
+    Use SKIP_ALL to bypass all systems of that type (e.g. Laser skips all shields).
+    Multipliers (shield_multiplier / armor_multiplier on WeaponSpec) are still applied
+    to the *first eligible* system of that type after any skips.
+    """
+    shields: int = 0
+    armor: int = 0
+    holds: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class WeaponSpec:
     type: WeaponType
@@ -80,9 +101,13 @@ class WeaponSpec:
     to_hit: RangeTable
     damage: RangeTable
 
-    # Damage application rules:
-    skip_codes: frozenset[str] = frozenset()   # codes skipped entirely by this weapon
-    shield_multiplier: float = 1.0             # e.g. Electron Beam = 0.5 against shields
+    # Skip rules: how many of each system type are bypassed before damage is applied.
+    skip: SkipRule = SkipRule()
+
+    # Damage multipliers applied when the next eligible system is of that type.
+    # 0.5 = half the remaining damage points (floor), 1.0 = no change.
+    shield_multiplier: float = 1.0
+    armor_multiplier: float = 1.0
 
     # Firing arc restriction (in addition to the universal blind-spot rule):
     firing_arc: WeaponArc = WeaponArc.ALL
@@ -90,22 +115,12 @@ class WeaponSpec:
     # Ammunition: if True, weapon consumes charges from its system (or a magazine).
     requires_ammo: bool = False
 
-    # Damage multipliers vs specific system types (applied before point-by-point destruction).
-    # shield_multiplier: multiplier applied to remaining damage points when the next eligible
-    #   system is a Shield (S). 0.5 = half damage vs shields (rounded down).
-    # armor_multiplier:  same mechanic applied when the next eligible system is Armor (A).
-    armor_multiplier: float = 1.0
-
     # Fighter combat rules:
-    # anti_fighter_modifier: added to the to-hit target number when attacking a squadron
-    # can_target_fighters:   if False, weapon is skipped entirely in dogfights
-    anti_fighter_modifier: int = 0
-    can_target_fighters: bool = True
+    anti_fighter_modifier: int = 0   # added to to-hit when attacking a squadron
+    can_target_fighters: bool = True  # False = weapon cannot engage squadrons
 
-    # Needle beam penetration:
-    # > 0 means this weapon uses needle beam damage mechanics.
-    # Value = how many S/A systems are bypassed before the random system roll.
-    # 0 (default) = normal damage application.
+    # Needle beam penetration (separate mechanic — target selection, not damage).
+    # Value = how many combined S/A systems are bypassed before the random system roll.
     needle_skip: int = 0
 
     def damage_at(self, rng: int) -> int:
@@ -121,12 +136,10 @@ ELECTRON_BEAM = WeaponSpec(
     type=WeaponType.ELECTRON_BEAM,
     name="Electron Beam",
     rate_of_fire=1,
-    # Provided 7 values; extend to 0..50 by repeating last
     to_hit=RangeTable.from_list([7, 7, 7, 6, 6, 6, 6]),
     damage=RangeTable.from_list([3, 3, 2, 2, 2, 1, 1]),
-    # Electron Beam skips Armor and Hull
-    skip_codes=frozenset({"A", "H"}),
-    # Half damage vs shields (rounded down per point application)
+    # Bypasses all armor; half damage vs shields
+    skip=SkipRule(armor=SKIP_ALL),
     shield_multiplier=0.5,
 )
 
@@ -136,17 +149,17 @@ LASER = WeaponSpec(
     rate_of_fire=1,
     to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 7]),
     damage=RangeTable.from_list([2, 2, 2, 1, 1, 1, 1]),
-    # Laser skips shields
-    skip_codes=frozenset({"S"}),
+    # Bypasses all shields — hits armor directly
+    skip=SkipRule(shields=SKIP_ALL),
 )
 
 FORCE_BEAM = WeaponSpec(
     type=WeaponType.FORCE_BEAM,
     name="Force Beam",
     rate_of_fire=1,
-    # Placeholder baseline; you can replace later
     to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 7, 6, 6]),
     damage=RangeTable.from_list([3, 2, 2, 2, 1, 1, 1, 1, "-"]),
+    # No skip rules — hits shields first like normal fire
 )
 
 NEEDLE_BEAM = WeaponSpec(
@@ -154,12 +167,12 @@ NEEDLE_BEAM = WeaponSpec(
     name="Needle Beam",
     rate_of_fire=1,
     to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 6, 6, 5, 5]),
-    # Always destroys exactly 1 system; 'damage' field is unused for needle beams
-    # but must be non-None so damage_at() doesn't crash on range checks.
+    # Always destroys exactly 1 system; damage field unused for needle beams
+    # but must be non-None so damage_at() doesn't crash.
     damage=RangeTable.from_list([1]),
-    # Needle beam cannot target fighters — too precise for fast movers.
     can_target_fighters=False,
-    # Skip the first 30 S and A systems before rolling for penetration target.
+    # Needle beam uses a separate penetration mechanic (needle_skip), not SkipRule.
+    # skip.shields/armor/holds are left at 0 — apply_weapon_damage is not called for needle hits.
     needle_skip=30,
 )
 
@@ -167,12 +180,9 @@ STANDARD_MISSILE = WeaponSpec(
     type=WeaponType.STANDARD_MISSILE,
     name="Standard Missile",
     rate_of_fire=1,
-    # '-' means "cannot hit beyond this range"; extended to 0..50 by repeating '-'.
     to_hit=RangeTable.from_list([6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 4, 4, 3, 3, "-"]),
-    # 1 damage at all ranges
     damage=RangeTable.from_list([1]),
     requires_ammo=True,
-    # Missiles cannot be used in fighter dogfights (only attack runs vs ships)
     can_target_fighters=False,
 )
 
@@ -180,13 +190,11 @@ GUN = WeaponSpec(
     type=WeaponType.GUN,
     name="Gun",
     rate_of_fire=1,
-    # Short-ranged; '-' means unusable beyond range 4
     to_hit=RangeTable.from_list([8, 8, 8, 7, 7, "-"]),
     damage=RangeTable.from_list([2, 2, 1, 1, 1, "-"]),
     # Half damage vs shields and armor — effective against exposed systems
     shield_multiplier=0.5,
     armor_multiplier=0.5,
-    # +2 to-hit bonus vs fighters in dogfights
     anti_fighter_modifier=2,
 )
 
