@@ -28,11 +28,12 @@
 <body>
   <h1>Tactical Combat</h1>
 
-  <p style="margin:0 0 20px;">
+  <p style="margin:0 0 20px; display:flex; gap:10px;">
     <a href="/tactical/designs/" class="btn">Ship Designer</a>
+    <a href="/tactical/scenario/new" class="btn" style="border-color:#a8d8ea; color:#a8d8ea;">Scenario Builder</a>
   </p>
 
-  <h2>New game</h2>
+  <h2>New game (default scenario)</h2>
   <form method="post" action="/tactical/new" class="new-form">
     <input type="text" name="name" placeholder="Game name…" autofocus maxlength="60"/>
     <button type="submit" class="btn">Start</button>

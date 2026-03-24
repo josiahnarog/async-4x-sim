@@ -178,11 +178,18 @@ from tactical.web_formatters import (
 # ID resolution helpers
 # ---------------------------------------------------------------------------
 
+def _ship_mod_suffix(ship) -> str:
+    """Return the hull-modifier suffix for display (e.g. '-V' for carriers with Bh bays)."""
+    if ship.systems and any(s.token == "Bh" for s in ship.systems.systems):
+        return "-V"
+    return ""
+
+
 def _display_ship_id(sid: str, ship) -> str:
     """Compute the display ID for a ship (e.g. internal 'A1' → display 'AFG1')."""
     num = sid[len(ship.owner_id):]
     hull_class = ship.hull_type.designation if ship.hull_type else "??"
-    return ship.owner_id + hull_class + num
+    return ship.owner_id + hull_class + _ship_mod_suffix(ship) + num
 
 
 def _resolve_ship_id(session: GameSession, id_str: str) -> str:
@@ -640,6 +647,7 @@ def _render_units(session: GameSession, view: str = "master") -> str:
         det = _detection_level(sid, ship.owner_id, view, enc)
         num = sid[len(ship.owner_id):]
         hull_class = ship.hull_type.designation if ship.hull_type else "??"
+        mod_suffix = _ship_mod_suffix(ship)
 
         if det == 0:
             continue
@@ -654,13 +662,13 @@ def _render_units(session: GameSession, view: str = "master") -> str:
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(ship.systems)
             ) if ship.systems else ""
-            display_id = ship.owner_id + hull_class + num
+            display_id = ship.owner_id + hull_class + mod_suffix + num
             lines.append(
                 f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
                 f"  class={hull_class}  systems=[{track}]"
             )
         else:
-            display_id = ship.owner_id + hull_class + num
+            display_id = ship.owner_id + hull_class + mod_suffix + num
             lines.append(
                 f"{display_id:>6}  pos=({ship.pos.q:+},{ship.pos.r:+})"
                 f"  face={int(ship.facing)}  mp={ship.mp}"
@@ -720,6 +728,7 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
         det = _detection_level(sid, s.owner_id, view, enc)
         num = sid[len(s.owner_id):]
         hull_class = s.hull_type.designation if s.hull_type else "??"
+        mod_suffix = _ship_mod_suffix(s)
 
         if det == 0:
             continue
@@ -740,7 +749,7 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
                 for i, sys in enumerate(s.systems)
             ] if s.systems else []
             result.append({
-                "id": s.owner_id + hull_class + num,
+                "id": s.owner_id + hull_class + mod_suffix + num,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
@@ -751,7 +760,7 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
             })
         else:
             result.append({
-                "id": s.owner_id + hull_class + num,
+                "id": s.owner_id + hull_class + mod_suffix + num,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
@@ -950,6 +959,62 @@ async def lobby(request: Request):
 async def new_game(name: str = Form(...)):
     session = _new_game(name.strip() or "Unnamed game")
     return RedirectResponse(url=f"/tactical/game/{session.game_id}/", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Routes — scenario builder
+# ---------------------------------------------------------------------------
+
+@router.get("/scenario/new", response_class=HTMLResponse)
+async def scenario_builder(request: Request):
+    designs = list_designs()
+    return templates.TemplateResponse("scenario_builder.html", {
+        "request":   request,
+        "designs":   designs,
+        "hull_mods": HULL_MODS,
+    })
+
+
+@router.post("/scenario/launch")
+async def scenario_launch(
+    request: Request,
+    game_name:    str = Form(default=""),
+    seed:         str = Form(default=""),
+    distance:     int = Form(default=30),
+    side_a_ids:   str = Form(default=""),
+    side_b_ids:   str = Form(default=""),
+):
+    from tactical.encounter import Encounter
+    from tactical.fleet_arrangement import arrange_fleets
+    from tactical.persistence import load_design
+
+    # Parse comma-separated design ID lists (may have duplicates)
+    def _parse_ids(raw: str) -> list[str]:
+        return [x.strip() for x in raw.split(",") if x.strip()]
+
+    a_ids = _parse_ids(side_a_ids)
+    b_ids = _parse_ids(side_b_ids)
+
+    if not a_ids or not b_ids:
+        return RedirectResponse(url="/tactical/scenario/new", status_code=303)
+
+    a_designs = [load_design(did) for did in a_ids]
+    b_designs = [load_design(did) for did in b_ids]
+
+    seed_int = int(seed.strip()) if seed.strip().isdigit() else None
+    distance  = max(5, min(100, distance))
+
+    battle, rng, seed_used = arrange_fleets(a_designs, b_designs, distance, seed_int)
+
+    game_id   = str(uuid.uuid4())
+    name      = (game_name.strip() or "Unnamed game") + f"  [seed:{seed_used}]"
+    enc       = Encounter.start(battle, rng=rng)
+    session   = GameSession(game_id=game_id, name=name, enc=enc, rng=rng,
+                            log=[], turn_number=1)
+    _sessions[game_id] = session
+    save_game(game_id=game_id, name=name, enc=enc, rng=rng,
+              log=[], turn_number=1)
+    return RedirectResponse(url=f"/tactical/game/{game_id}/", status_code=303)
 
 
 # ---------------------------------------------------------------------------

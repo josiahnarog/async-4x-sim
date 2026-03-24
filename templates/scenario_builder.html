@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Scenario Builder</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+      margin: 0; background: #1a1a2e; color: #e0e0e0; min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    #header {
+      display: flex; align-items: center; gap: 14px; padding: 10px 18px;
+      background: #12122a; border-bottom: 1px solid #2a2a4a; flex-wrap: wrap;
+    }
+    #header a { color: #a8d8ea; text-decoration: none; font-size: 0.88em; }
+    #header a:hover { text-decoration: underline; }
+    #header h1 { margin: 0; font-size: 1em; color: #a8d8ea; letter-spacing: 0.05em; }
+
+    /* ── Layout ── */
+    #main { display: flex; gap: 0; height: calc(100vh - 49px); overflow: hidden; }
+
+    /* ── Palette (left) ── */
+    #palette {
+      width: 260px; flex-shrink: 0; border-right: 1px solid #1a1a3a;
+      overflow-y: auto; padding: 14px 12px;
+    }
+    #palette h2 { margin: 0 0 10px; font-size: 0.78em; color: #888;
+                  text-transform: uppercase; letter-spacing: 0.08em; }
+    .design-card {
+      background: #0d0d1a; border: 1px solid #2a2a3a; border-radius: 6px;
+      padding: 8px 10px; margin-bottom: 6px; cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .design-card:hover { border-color: #a8d8ea; }
+    .design-card .dc-name { font-size: 0.88em; color: #c8e8ff; }
+    .design-card .dc-meta { font-size: 0.72em; color: #666; margin-top: 2px; }
+    .add-btns { display: flex; gap: 6px; margin-top: 6px; }
+    .btn-add-a { padding: 3px 10px; border-radius: 4px; border: 1px solid #4a8a6a;
+                 background: #1a3a2a; color: #80d8a0; cursor: pointer;
+                 font-family: inherit; font-size: 0.75em; }
+    .btn-add-a:hover { background: #2a5a3a; }
+    .btn-add-b { padding: 3px 10px; border-radius: 4px; border: 1px solid #8a4a6a;
+                 background: #3a1a2a; color: #d880a0; cursor: pointer;
+                 font-family: inherit; font-size: 0.75em; }
+    .btn-add-b:hover { background: #5a2a3a; }
+
+    /* ── Builder (centre) ── */
+    #builder {
+      flex: 1; overflow-y: auto; padding: 18px 20px; display: flex;
+      flex-direction: column; gap: 18px;
+    }
+
+    .config-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .config-row label { font-size: 0.82em; color: #888; }
+    input[type=text], input[type=number] {
+      padding: 6px 10px; border-radius: 5px; border: 1px solid #3a3a5a;
+      background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.88em;
+    }
+    input[type=text]:focus, input[type=number]:focus {
+      outline: none; border-color: #a8d8ea;
+    }
+    input[type=range] { accent-color: #a8d8ea; width: 180px; }
+    #dist-label { color: #a8d8ea; font-size: 0.88em; min-width: 40px; }
+
+    /* ── Fleet panels ── */
+    .fleet-panel {
+      border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px 16px;
+    }
+    .fleet-panel.side-a { border-color: #2a5a3a; }
+    .fleet-panel.side-b { border-color: #5a2a3a; }
+    .fleet-title {
+      font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.08em;
+      margin: 0 0 10px; display: flex; align-items: center; gap: 10px;
+    }
+    .fleet-title.a { color: #80d8a0; }
+    .fleet-title.b { color: #d880a0; }
+    .fleet-total { font-size: 0.75em; color: #888; margin-left: auto; }
+
+    .fleet-list { display: flex; flex-direction: column; gap: 5px; min-height: 40px; }
+    .fleet-item {
+      display: flex; align-items: center; gap: 8px;
+      background: #0d0d1a; border: 1px solid #2a2a3a; border-radius: 5px;
+      padding: 5px 8px; font-size: 0.82em;
+    }
+    .fleet-item .fi-name { flex: 1; color: #c8e8ff; }
+    .fleet-item .fi-meta { color: #666; font-size: 0.9em; }
+    .fleet-item .fi-remove {
+      cursor: pointer; color: #f08080; font-size: 0.85em; padding: 0 4px;
+      border: none; background: none; font-family: inherit;
+    }
+    .fleet-item .fi-remove:hover { color: #ff4040; }
+    .fleet-empty { color: #444; font-size: 0.78em; font-style: italic; padding: 6px 0; }
+
+    /* ── Launch bar ── */
+    #launch-bar {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 12px 16px; background: #0d0d1a; border: 1px solid #2a2a4a;
+      border-radius: 8px;
+    }
+    .btn-launch {
+      padding: 8px 22px; border-radius: 6px; border: 1px solid #a8d8ea;
+      background: #1a3a5a; color: #a8d8ea; cursor: pointer;
+      font-family: inherit; font-size: 0.92em; font-weight: bold;
+    }
+    .btn-launch:hover { background: #2a5a7a; }
+    .btn-launch:disabled { opacity: 0.4; cursor: default; }
+    #launch-warning { font-size: 0.78em; color: #f08080; }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <a href="/tactical/">← Lobby</a>
+  <h1>Scenario Builder</h1>
+</div>
+
+<div id="main">
+
+  <!-- Left: design palette -->
+  <div id="palette">
+    <h2>Saved Designs</h2>
+    {% if designs %}
+      {% for d in designs %}
+      <div class="design-card"
+           data-id="{{ d.design_id }}"
+           data-name="{{ d.name }}"
+           data-hull="{{ d.hull_type }}{% for mod in hull_mods %}{% if mod.key in d.get('hull_mods', []) %}{{ mod.designation_suffix }}{% endif %}{% endfor %}"
+           data-hs="{{ d.hull_spaces }}"
+           data-cost="{{ '%.0f' | format(d.hull_spaces * 1) }}">
+        <div class="dc-name">{{ d.name }}</div>
+        <div class="dc-meta">
+          {{ d.hull_type }}{% for mod in hull_mods %}{% if mod.key in d.get('hull_mods', []) %}{{ mod.designation_suffix }}{% endif %}{% endfor %}
+          &nbsp;·&nbsp; {{ d.hull_spaces }} HS
+        </div>
+        <div class="add-btns">
+          <button class="btn-add-a" onclick="addShip('A', this.closest('.design-card'))">+ Side A</button>
+          <button class="btn-add-b" onclick="addShip('B', this.closest('.design-card'))">+ Side B</button>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p style="color:#555; font-size:0.82em; font-style:italic;">
+        No saved designs yet.<br>
+        <a href="/tactical/designs/" style="color:#a8d8ea;">Open Ship Designer →</a>
+      </p>
+    {% endif %}
+  </div>
+
+  <!-- Centre: builder form -->
+  <div id="builder">
+
+    <!-- Config row -->
+    <div class="config-row">
+      <label>Game name:</label>
+      <input type="text" id="game-name" placeholder="Unnamed game" style="width:220px;"/>
+      <label>Seed:</label>
+      <input type="number" id="seed-input" style="width:130px;" min="0" max="4294967295"/>
+      <button onclick="randomiseSeed()" style="padding:5px 10px; border-radius:4px; border:1px solid #555; background:#2a2a4a; color:#ccc; cursor:pointer; font-family:inherit; font-size:0.8em;">⟳ Random</button>
+      <label>Distance:</label>
+      <input type="range" id="dist-slider" min="5" max="100" value="30" oninput="document.getElementById('dist-label').textContent=this.value"/>
+      <span id="dist-label">30</span>
+      <span style="color:#555; font-size:0.72em;">hexes</span>
+    </div>
+
+    <!-- Fleet panels -->
+    <div style="display:flex; gap:16px;">
+
+      <div class="fleet-panel side-a" style="flex:1;">
+        <div class="fleet-title a">
+          Side A
+          <span class="fleet-total" id="total-a">0 HS · 0 cr</span>
+        </div>
+        <div class="fleet-list" id="list-a">
+          <div class="fleet-empty" id="empty-a">No ships added yet.</div>
+        </div>
+      </div>
+
+      <div class="fleet-panel side-b" style="flex:1;">
+        <div class="fleet-title b">
+          Side B
+          <span class="fleet-total" id="total-b">0 HS · 0 cr</span>
+        </div>
+        <div class="fleet-list" id="list-b">
+          <div class="fleet-empty" id="empty-b">No ships added yet.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Launch bar -->
+    <div id="launch-bar">
+      <button class="btn-launch" id="launch-btn" onclick="launchScenario()">Launch Scenario</button>
+      <span id="launch-warning"></span>
+    </div>
+
+  </div>
+</div>
+
+<!-- Hidden form for submission -->
+<form id="launch-form" method="post" action="/tactical/scenario/launch" style="display:none;">
+  <input type="hidden" name="game_name"  id="f-game-name"/>
+  <input type="hidden" name="seed"       id="f-seed"/>
+  <input type="hidden" name="distance"   id="f-distance"/>
+  <input type="hidden" name="side_a_ids" id="f-side-a"/>
+  <input type="hidden" name="side_b_ids" id="f-side-b"/>
+</form>
+
+<!-- Hull mods data for Jinja rendering (passed to JS) -->
+<script>
+const HULL_MODS = {{ hull_mods | tojson }};
+
+// fleet state: side -> list of {id, name, hull, hs}
+const fleets = { A: [], B: [] };
+let uidCounter = 0;
+
+function randomiseSeed() {
+  document.getElementById("seed-input").value = Math.floor(Math.random() * 4294967296);
+}
+
+function addShip(side, card) {
+  const id   = card.dataset.id;
+  const name = card.dataset.name;
+  const hull = card.dataset.hull;
+  const hs   = parseInt(card.dataset.hs) || 0;
+  const uid  = uidCounter++;
+  fleets[side].push({ uid, id, name, hull, hs });
+  renderFleet(side);
+}
+
+function removeShip(side, uid) {
+  fleets[side] = fleets[side].filter(s => s.uid !== uid);
+  renderFleet(side);
+}
+
+function renderFleet(side) {
+  const list    = document.getElementById(`list-${side.toLowerCase()}`);
+  const emptyEl = document.getElementById(`empty-${side.toLowerCase()}`);
+  const fleet   = fleets[side];
+
+  // Remove existing items (keep empty placeholder)
+  [...list.querySelectorAll('.fleet-item')].forEach(el => el.remove());
+
+  let totalHS = 0;
+  fleet.forEach(ship => {
+    totalHS += ship.hs;
+    const item = document.createElement("div");
+    item.className = "fleet-item";
+    item.innerHTML = `
+      <span class="fi-name">${ship.name}</span>
+      <span class="fi-meta">${ship.hull} · ${ship.hs} HS</span>
+      <button class="fi-remove" onclick="removeShip('${side}', ${ship.uid})">✕</button>
+    `;
+    list.appendChild(item);
+  });
+
+  emptyEl.style.display = fleet.length === 0 ? "" : "none";
+  document.getElementById(`total-${side.toLowerCase()}`).textContent =
+    `${totalHS} HS`;
+  validateForm();
+}
+
+function validateForm() {
+  const warn = document.getElementById("launch-warning");
+  const btn  = document.getElementById("launch-btn");
+  if (fleets.A.length === 0 || fleets.B.length === 0) {
+    warn.textContent = "Each side needs at least one ship.";
+    btn.disabled = true;
+  } else {
+    warn.textContent = "";
+    btn.disabled = false;
+  }
+}
+
+function launchScenario() {
+  const seed = document.getElementById("seed-input").value.trim();
+  document.getElementById("f-game-name").value  = document.getElementById("game-name").value.trim();
+  document.getElementById("f-seed").value       = seed;
+  document.getElementById("f-distance").value   = document.getElementById("dist-slider").value;
+  document.getElementById("f-side-a").value     = fleets.A.map(s => s.id).join(",");
+  document.getElementById("f-side-b").value     = fleets.B.map(s => s.id).join(",");
+  document.getElementById("launch-form").submit();
+}
+
+// Initialise seed and form state
+randomiseSeed();
+validateForm();
+</script>
+</body>
+</html>
