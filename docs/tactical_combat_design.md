@@ -162,14 +162,20 @@ a furballed squadron:
 
 ## Ammunition
 
-Standard Missile launchers (`R`) carry ammunition. The ammo system is tracked per-system via `System.charges`.
+All shipboard ammunition is **fungible** — a single `Mg` (Magazine) pool feeds every consumer aboard the ship regardless of type. This covers:
+
+- `R` (Standard Missile) launcher shots fired in combat.
+- Fighter squadron rearming: each external ordnance mount reloaded while docked costs 1 Mg charge per shot (e.g. reloading a squadron with 2 external `R` mounts costs 2 charges from the carrier's Mg pool).
+
+Standard Missile launchers (`R`) carry their own internal charges as a secondary buffer. The ammo system is tracked per-system via `System.charges`.
 
 - Each `R` launcher starts with **10 internal charges**.
-- A `Mg` (Magazine) system starts with **50 shared charges** and feeds all `R` launchers on the same ship.
+- A `Mg` (Magazine) system starts with **50 shared charges** and feeds all `R` launchers (and future consumers) on the same ship.
 - **Draw order**: Mg charges are consumed before internal launcher charges. Within Mg, the leftmost active Mg is drained first. When drawing from internal launcher charges, exactly 1 shot is taken from each active launcher in order (not greedy drain from leftmost).
 - The number of missiles fired in a volley is `min(active_launchers, total_ammo_available)`.
 - Ammo consumption is applied to the attacker simultaneously with damage application (not mid-resolution).
 - If a launcher is destroyed, its internal charges are lost (system becomes inactive; `ammo_count_for` only counts active systems).
+- **[TBD]**: Implement fungible draw for fighter rearming — currently rearming is not yet implemented.
 
 ---
 
@@ -200,7 +206,7 @@ A squadron with `docked_at = carrier_id` is **docked**. Docked squadrons:
 - Requires an empty active `Bh` on the carrier.
 - Emits `RecoveryEvent`.
 - **[TBD]**: Recovery should also consume a `Bl` slot (currently only checks `Bh`).
-- **[TBD]**: Refuel/rearm while docked — restore endurance and external ordnance over one or more turns.
+- **[TBD]**: Refuel/rearm while docked — restore endurance each turn; restore external ordnance mounts by drawing from the carrier's fungible Mg pool (1 charge per shot reloaded).
 
 ---
 
