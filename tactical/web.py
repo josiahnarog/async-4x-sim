@@ -952,11 +952,14 @@ def _fire_orders_json(session: GameSession) -> str:
 
 
 def _game_template_context(request: Request, session: GameSession, view: str) -> dict:
+    enc = session.enc
     return {
         "request":              request,
         "game_id":              session.game_id,
         "game_name":            session.name,
         "phase":                _render_phase(session),
+        "phase_name":           enc.phase.value,
+        "sides":                sorted(enc.sides()),
         "units_text":           _render_units(session, view),
         "ships_json":           _ships_json(session, view),
         "squadrons_json":       _squadrons_json(session, view),
@@ -1108,6 +1111,62 @@ async def game_command(request: Request, game_id: str, cmd: str = Form(default="
     session.log.extend(output)
     if len(session.log) > _MAX_LOG:
         session.log = session.log[-_MAX_LOG:]
+    return RedirectResponse(url=f"/tactical/game/{game_id}/?view={view}", status_code=303)
+
+
+@router.post("/game/{game_id}/ai_turn/{side_id}")
+async def game_ai_turn(request: Request, game_id: str, side_id: str):
+    """Stage AI orders for side_id in the current phase, then redirect back."""
+    try:
+        session = _get_session(game_id)
+    except KeyError:
+        return HTMLResponse(f"Game {game_id!r} not found.", status_code=404)
+    view = request.query_params.get("view", "master")
+
+    from tactical.encounter import Phase
+    from tactical.ai import DEFAULT, make_fire_orders, make_move_orders, make_squadron_orders
+
+    enc = session.enc
+    if enc.phase == Phase.MOVE_SUBMISSION:
+        session.enc = make_move_orders(enc, side_id, DEFAULT, session.rng)
+        session.log.append(f"[AI] {side_id}: staged move orders")
+    elif enc.phase == Phase.COMBAT_SUBMISSION:
+        session.enc = make_fire_orders(enc, side_id, DEFAULT, session.rng)
+        session.log.append(f"[AI] {side_id}: staged fire orders")
+    elif enc.phase == Phase.COMBAT_SMALL:
+        session.enc = make_squadron_orders(enc, side_id, DEFAULT, session.rng)
+        session.log.append(f"[AI] {side_id}: staged squadron orders")
+    else:
+        session.log.append(f"[AI] {side_id}: no orders for phase {enc.phase.value}")
+
+    if len(session.log) > _MAX_LOG:
+        session.log = session.log[-_MAX_LOG:]
+    return RedirectResponse(url=f"/tactical/game/{game_id}/?view={view}", status_code=303)
+
+
+@router.post("/game/{game_id}/commit_phase")
+async def game_commit_phase(request: Request, game_id: str):
+    """Commit the current phase for all uncommitted sides, then redirect back."""
+    try:
+        session = _get_session(game_id)
+    except KeyError:
+        return HTMLResponse(f"Game {game_id!r} not found.", status_code=404)
+    view = request.query_params.get("view", "master")
+
+    from tactical.encounter import Phase
+    phase_to_cmd = {
+        Phase.MOVE_SUBMISSION:   "commit move",
+        Phase.COMBAT_SUBMISSION: "commit fire",
+        Phase.COMBAT_SMALL:      "commit squadrons",
+    }
+    cmd = phase_to_cmd.get(session.enc.phase)
+    if cmd:
+        session.log.append(f"> {cmd}")
+        output = _process(session, cmd)
+        session.log.extend(output)
+        if len(session.log) > _MAX_LOG:
+            session.log = session.log[-_MAX_LOG:]
+
     return RedirectResponse(url=f"/tactical/game/{game_id}/?view={view}", status_code=303)
 
 

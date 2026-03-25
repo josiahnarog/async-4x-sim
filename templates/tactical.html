@@ -26,6 +26,12 @@
     .tab-bar { display: flex; gap: 4px; margin-bottom: 10px; }
     .tab { padding: 6px 16px; border-radius: 6px 6px 0 0; border: 1px solid #444; background: #1a1a2e; color: #888; text-decoration: none; font-size: 0.88em; }
     .tab.active { background: #2a2a4a; color: #a8d8ea; border-bottom-color: #2a2a4a; }
+    .action-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .btn-ai     { background: #1a3a2a; border-color: #3a6a4a; color: #a0d8b0; }
+    .btn-ai:hover { background: #2a5a3a; }
+    .btn-commit { background: #2a1a3a; border-color: #5a3a6a; color: #c8a8e8; font-weight: bold; }
+    .btn-commit:hover { background: #3a2a5a; }
+    .action-sep { color: #555; margin: 0 4px; }
   </style>
 </head>
 <body>
@@ -37,6 +43,25 @@
     <a href="/tactical/game/{{ game_id }}/?view=A"      class="tab {% if view == 'A' %}active{% endif %}">Side A</a>
     <a href="/tactical/game/{{ game_id }}/?view=B"      class="tab {% if view == 'B' %}active{% endif %}">Side B</a>
     <a href="/tactical/game/{{ game_id }}/?view=master" class="tab {% if view == 'master' %}active{% endif %}">Master</a>
+  </div>
+
+  <div class="action-bar">
+    {% for side in sides %}
+    <form method="post" action="/tactical/game/{{ game_id }}/ai_turn/{{ side }}?view={{ view }}" style="display:inline">
+      <button type="submit" class="btn-ai">Auto Turn {{ side }}</button>
+    </form>
+    {% endfor %}
+    <span class="action-sep">|</span>
+    {% if phase_name != 'complete' %}
+    <form method="post" action="/tactical/game/{{ game_id }}/commit_phase?view={{ view }}" style="display:inline">
+      <button type="submit" class="btn-commit">
+        {% if phase_name == 'move_submission' %}Commit Movement
+        {% elif phase_name == 'combat_submission' %}Commit Fire
+        {% elif phase_name == 'combat_small' %}Commit Squadrons
+        {% else %}Commit{% endif %}
+      </button>
+    </form>
+    {% endif %}
   </div>
 
   <div class="row">
@@ -110,6 +135,10 @@
     const INTERCEPT_PATHS = {{ intercept_paths_json | safe }};
     const INTERCEPT_ZONES = {{ intercept_zones_json | safe }};
     const RECOVER_PATHS   = {{ recover_paths_json | safe }};
+    const VIEW = "{{ view }}";   // "master" | "A" | "B"
+    // Ghost paths are visible when: master view (sees all) OR the path belongs to
+    // the current player's side.  Mirrors the same visibility rule as unit detection.
+    function visibleFor(owner) { return VIEW === 'master' || owner === VIEW; }
     const RADIUS = 8;         // intercept zone boundary guard
     const SIZE   = 28;        // hex circumradius in px at zoom 1
     const SQ3    = Math.sqrt(3);
@@ -620,12 +649,12 @@
       // Using the larger canvas dimension so both axes are covered.
       const drawR = Math.ceil(Math.max(canvas.width, canvas.height) / 2 / (SIZE * zoom * 1.3)) + 2;
       drawGrid(ctx, 0, 0, cq, cr, drawR);
-      for (const z of INTERCEPT_ZONES) drawInterceptZone(ctx, z, 0, 0);
-      for (const p of INTERCEPT_PATHS) drawSquadronPath(ctx, p, 0, 0);
-      for (const p of RECOVER_PATHS)   drawRecoverPath(ctx, p, 0, 0);
-      for (const p of PATHS)           drawDraftPath(ctx, p, 0, 0);
-      for (const fo of FIRE_ORDERS)    drawFireOrder(ctx, fo, 0, 0);
-      for (const so of STRIKE_ORDERS)  drawFireOrder(ctx, so, 0, 0);
+      for (const z of INTERCEPT_ZONES) if (visibleFor(z.owner))            drawInterceptZone(ctx, z, 0, 0);
+      for (const p of INTERCEPT_PATHS) if (visibleFor(p.owner))            drawSquadronPath(ctx, p, 0, 0);
+      for (const p of RECOVER_PATHS)   if (visibleFor(p.owner))            drawRecoverPath(ctx, p, 0, 0);
+      for (const p of PATHS)           if (visibleFor(p.owner))            drawDraftPath(ctx, p, 0, 0);
+      for (const fo of FIRE_ORDERS)    if (visibleFor(fo.attacker_owner))  drawFireOrder(ctx, fo, 0, 0);
+      for (const so of STRIKE_ORDERS)  if (visibleFor(so.attacker_owner)) drawFireOrder(ctx, so, 0, 0);
       // Compute per-hex jitter so co-located units spread into a small cluster.
       const JITTER_R = SIZE * 0.27;
       const hexGroups = {};
