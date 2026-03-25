@@ -30,12 +30,12 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
     cv_systems_str = "SSSAAAFQ(I)(I)BhBhBlBlR"
 
     a = ShipState(
-        ship_id="A1", owner_id="A", pos=Hex(-1, 0), facing=Facing.NE,
+        ship_id="AFG1", owner_id="A", pos=Hex(-1, 0), facing=Facing.NE,
         mp=5, turn_cost=FG.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(fg_systems), hull_type=FG,
     )
     b = ShipState(
-        ship_id="B1", owner_id="B", pos=Hex(7, 0), facing=Facing.S,
+        ship_id="BFG1", owner_id="B", pos=Hex(7, 0), facing=Facing.S,
         mp=5, turn_cost=FG.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(fg_systems), hull_type=FG,
     )
@@ -78,18 +78,18 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
         endurance=20, max_endurance=20,
     )
     a2 = ShipState(
-        ship_id="A2", owner_id="A", pos=Hex(-10, 0), facing=Facing.NE,
+        ship_id="ACA-V2", owner_id="A", pos=Hex(-10, 0), facing=Facing.NE,
         mp=4, turn_cost=CV.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(cv_systems_str), hull_type=CV,
     )
     b2 = ShipState(
-        ship_id="B2", owner_id="B", pos=Hex(20, 0), facing=Facing.SW,
+        ship_id="BCA-V2", owner_id="B", pos=Hex(20, 0), facing=Facing.SW,
         mp=4, turn_cost=CV.turn_cost, turn_charge=0,
         systems=ShipSystems.parse(cv_systems_str), hull_type=CV,
     )
 
     battle = BattleState(
-        ships={"A1": a, "A2": a2, "B1": b, "B2": b2},
+        ships={"AFG1": a, "ACA-V2": a2, "BFG1": b, "BCA-V2": b2},
         squadrons={"AF1": af1, "AF2": af2, "BF1": bf1, "BF2": bf2},
     )
     return battle, rng

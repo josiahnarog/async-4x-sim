@@ -178,37 +178,19 @@ from tactical.web_formatters import (
 # ID resolution helpers
 # ---------------------------------------------------------------------------
 
-def _ship_mod_suffix(ship) -> str:
-    """Return the hull-modifier suffix for display (e.g. '-V' for carriers with Bh bays)."""
-    if ship.systems and any(s.token == "Bh" for s in ship.systems.systems):
-        return "-V"
-    return ""
-
-
-def _display_ship_id(sid: str, ship) -> str:
-    """Compute the display ID for a ship (e.g. internal 'A1' → display 'AFG1')."""
-    num = sid[len(ship.owner_id):]
-    hull_class = ship.hull_type.designation if ship.hull_type else "??"
-    return ship.owner_id + hull_class + _ship_mod_suffix(ship) + num
-
-
 def _resolve_ship_id(session: GameSession, id_str: str) -> str:
-    """Resolve a display or internal ship ID to the internal ship_id.
+    """Resolve a ship ID string to the internal ship_id key.
 
-    Accepts both 'A1' (internal) and 'AFG1' (display) forms.
-    Raises KeyError if not found.
+    Ship IDs are now display IDs (e.g. 'AFG1', 'ACA-V2'), so this is a
+    direct dict lookup.  Raises KeyError if not found.
     """
-    ships = session.enc.battle.ships
-    if id_str in ships:
+    if id_str in session.enc.battle.ships:
         return id_str
-    for sid, ship in ships.items():
-        if _display_ship_id(sid, ship) == id_str:
-            return sid
     raise KeyError(id_str)
 
 
 def _resolve_unit_id(session: GameSession, id_str: str) -> str:
-    """Resolve a display or internal ID for any unit (ship or squadron).
+    """Resolve an ID for any unit (ship or squadron).
 
     Used for StrikeOrder targets which may be either.
     """
@@ -219,28 +201,6 @@ def _resolve_unit_id(session: GameSession, id_str: str) -> str:
     if id_str in session.enc.battle.squadrons:
         return id_str
     raise KeyError(id_str)
-
-
-def _build_id_map(battle) -> dict[str, str]:
-    """Return {internal_id: display_id} for every ship whose IDs differ.
-
-    Sorted longest-first so that str.replace substitutions on longer IDs
-    (e.g. 'A10') are applied before shorter ones ('A1') to avoid partial matches.
-    """
-    pairs = []
-    for sid, ship in battle.ships.items():
-        display = _display_ship_id(sid, ship)
-        if sid != display:
-            pairs.append((sid, display))
-    pairs.sort(key=lambda p: len(p[0]), reverse=True)
-    return dict(pairs)
-
-
-def _apply_id_map(text: str, id_map: dict[str, str]) -> str:
-    """Replace all internal ship IDs in *text* with their display equivalents."""
-    for internal, display in id_map.items():
-        text = text.replace(internal, display)
-    return text
 
 
 # ---------------------------------------------------------------------------
@@ -654,9 +614,6 @@ def _process(session: GameSession, cmd_line: str) -> list[str]:
     except Exception as e:
         out.append(f"ERROR: {e}")
 
-    id_map = _build_id_map(session.enc.battle)
-    if id_map:
-        out = [_apply_id_map(line, id_map) for line in out]
     return out
 
 
@@ -665,6 +622,7 @@ def _process(session: GameSession, cmd_line: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _render_units(session: GameSession, view: str = "master") -> str:
+    import re
     from tactical.sensor_rules import major_status_flags
     enc = session.enc
     lines = []
@@ -674,32 +632,29 @@ def _render_units(session: GameSession, view: str = "master") -> str:
             continue
 
         det = _detection_level(sid, ship.owner_id, view, enc)
-        num = sid[len(ship.owner_id):]
-        hull_class = ship.hull_type.designation if ship.hull_type else "??"
-        mod_suffix = _ship_mod_suffix(ship)
 
         if det == 0:
             continue
         elif det == 1:
+            m = re.search(r'\d+$', sid)
+            num_str = m.group() if m else ""
             flags = major_status_flags(ship)
             flag_str = f"  [{', '.join(flags)}]" if flags else ""
-            display_id = ship.owner_id + "??" + num
-            lines.append(f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}")
+            lines.append(f"  {ship.owner_id}??{num_str}  pos=({ship.pos.q:+},{ship.pos.r:+}){flag_str}")
         elif det == 2:
             revealed = enc._revealed_systems.get(sid, frozenset())
             track = "".join(
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(ship.systems)
             ) if ship.systems else ""
-            display_id = ship.owner_id + hull_class + mod_suffix + num
+            hull_class = ship.hull_type.designation if ship.hull_type else "??"
             lines.append(
-                f"  {display_id}  pos=({ship.pos.q:+},{ship.pos.r:+})"
+                f"  {sid}  pos=({ship.pos.q:+},{ship.pos.r:+})"
                 f"  class={hull_class}  systems=[{track}]"
             )
         else:
-            display_id = ship.owner_id + hull_class + mod_suffix + num
             lines.append(
-                f"{display_id:>6}  pos=({ship.pos.q:+},{ship.pos.r:+})"
+                f"{sid:>8}  pos=({ship.pos.q:+},{ship.pos.r:+})"
                 f"  face={int(ship.facing)}  mp={ship.mp}"
                 f"\n      systems=[{ship.systems.render_compact() if ship.systems else '-'}]"
             )
@@ -749,21 +704,21 @@ def _render_phase(session: GameSession) -> str:
 # ---------------------------------------------------------------------------
 
 def _ships_json(session: GameSession, view: str = "master") -> str:
+    import re
     from tactical.sensor_rules import major_status_flags
     enc = session.enc
     result = []
     for sid, s in enc.battle.ships.items():
         is_destroyed = bool(s.systems is not None and s.systems.is_destroyed())
         det = _detection_level(sid, s.owner_id, view, enc)
-        num = sid[len(s.owner_id):]
-        hull_class = s.hull_type.designation if s.hull_type else "??"
-        mod_suffix = _ship_mod_suffix(s)
 
         if det == 0:
             continue
         elif det == 1:
+            m = re.search(r'\d+$', sid)
+            num_str = m.group() if m else ""
             result.append({
-                "id": s.owner_id + "??" + num,
+                "id": s.owner_id + "??" + num_str,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
@@ -778,7 +733,7 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
                 for i, sys in enumerate(s.systems)
             ] if s.systems else []
             result.append({
-                "id": s.owner_id + hull_class + mod_suffix + num,
+                "id": sid,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
@@ -789,7 +744,7 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
             })
         else:
             result.append({
-                "id": s.owner_id + hull_class + mod_suffix + num,
+                "id": sid,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
@@ -1173,9 +1128,8 @@ async def game_ai_turn(request: Request, game_id: str, side_id: str):
                 "path":         list(path),
                 "mp_used":      order.total_mp_cost,
             }
-            display_id = _display_ship_id(ship_id, ship)
             new_log.append(
-                f"[AI] {display_id}: move → ({order.dest.q},{order.dest.r}) "
+                f"[AI] {ship_id}: move → ({order.dest.q},{order.dest.r}) "
                 f"facing={facing_names[int(order.dest_facing)]} cost={order.total_mp_cost}"
             )
     elif enc.phase == Phase.COMBAT_SUBMISSION:
@@ -1184,16 +1138,10 @@ async def game_ai_turn(request: Request, game_id: str, side_id: str):
             ship = session.enc.battle.ships.get(ship_id)
             if ship is None or ship.owner_id != side_id:
                 continue
-            display_id = _display_ship_id(ship_id, ship)
             if order is None:
-                new_log.append(f"[AI] {display_id}: pass fire")
+                new_log.append(f"[AI] {ship_id}: pass fire")
             else:
-                target_ship = session.enc.battle.ships.get(order.target_id)
-                target_display = (
-                    _display_ship_id(order.target_id, target_ship)
-                    if target_ship else order.target_id
-                )
-                new_log.append(f"[AI] {display_id}: fire → {target_display}")
+                new_log.append(f"[AI] {ship_id}: fire → {order.target_id}")
     elif enc.phase == Phase.COMBAT_SMALL:
         session.enc = make_squadron_orders(enc, side_id, DEFAULT, session.rng)
         new_log.append(f"[AI] {side_id}: staged squadron orders")

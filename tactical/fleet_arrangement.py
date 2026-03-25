@@ -123,8 +123,15 @@ def _place_fleet(
     sq_counter = 1
 
     for i, design in enumerate(sorted_designs):
-        ship_num = i + 1
-        ship_id  = f"{side_id}{ship_num}"
+        ship_num  = i + 1
+        hull_desig = design.get("hull_type", "??")
+        has_bh    = any(
+            isinstance(slot, dict)
+            and slot.get("type") == "system"
+            and slot.get("code") == "Bh"
+            for slot in design.get("track", [])
+        )
+        ship_id   = f"{side_id}{hull_desig}{'-V' if has_bh else ''}{ship_num}"
         ship = _design_to_ship(design, ship_id, side_id, hex_pool[i], facing)
         if ship is None:
             continue
