@@ -221,6 +221,28 @@ def _resolve_unit_id(session: GameSession, id_str: str) -> str:
     raise KeyError(id_str)
 
 
+def _build_id_map(battle) -> dict[str, str]:
+    """Return {internal_id: display_id} for every ship whose IDs differ.
+
+    Sorted longest-first so that str.replace substitutions on longer IDs
+    (e.g. 'A10') are applied before shorter ones ('A1') to avoid partial matches.
+    """
+    pairs = []
+    for sid, ship in battle.ships.items():
+        display = _display_ship_id(sid, ship)
+        if sid != display:
+            pairs.append((sid, display))
+    pairs.sort(key=lambda p: len(p[0]), reverse=True)
+    return dict(pairs)
+
+
+def _apply_id_map(text: str, id_map: dict[str, str]) -> str:
+    """Replace all internal ship IDs in *text* with their display equivalents."""
+    for internal, display in id_map.items():
+        text = text.replace(internal, display)
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Detection helpers
 # ---------------------------------------------------------------------------
@@ -632,6 +654,9 @@ def _process(session: GameSession, cmd_line: str) -> list[str]:
     except Exception as e:
         out.append(f"ERROR: {e}")
 
+    id_map = _build_id_map(session.enc.battle)
+    if id_map:
+        out = [_apply_id_map(line, id_map) for line in out]
     return out
 
 
@@ -1127,18 +1152,55 @@ async def game_ai_turn(request: Request, game_id: str, side_id: str):
     from tactical.ai import DEFAULT, make_fire_orders, make_move_orders, make_squadron_orders
 
     enc = session.enc
+    new_log: list[str] = []
+
     if enc.phase == Phase.MOVE_SUBMISSION:
         session.enc = make_move_orders(enc, side_id, DEFAULT, session.rng)
-        session.log.append(f"[AI] {side_id}: staged move orders")
+        # Mirror staged move orders into session.drafts so ghost paths render.
+        facing_names = ["N", "NE", "SE", "S", "SW", "NW"]
+        for ship_id, order in session.enc._move_orders.items():
+            ship = session.enc.battle.ships.get(ship_id)
+            if ship is None or ship.owner_id != side_id:
+                continue
+            cap = session.enc._mp_capacity.get(ship_id, ship.mp)
+            path = order.path if order.path else (ship.pos, order.dest)
+            session.drafts[ship_id] = {
+                "pos":          order.dest,
+                "facing":       int(order.dest_facing),
+                "mp_remaining": cap - order.total_mp_cost,
+                "turn_charge":  order.final_turn_charge,
+                "turn_cost":    ship.turn_cost,
+                "path":         list(path),
+                "mp_used":      order.total_mp_cost,
+            }
+            display_id = _display_ship_id(ship_id, ship)
+            new_log.append(
+                f"[AI] {display_id}: move → ({order.dest.q},{order.dest.r}) "
+                f"facing={facing_names[int(order.dest_facing)]} cost={order.total_mp_cost}"
+            )
     elif enc.phase == Phase.COMBAT_SUBMISSION:
         session.enc = make_fire_orders(enc, side_id, DEFAULT, session.rng)
-        session.log.append(f"[AI] {side_id}: staged fire orders")
+        for ship_id, order in session.enc._fire_orders.items():
+            ship = session.enc.battle.ships.get(ship_id)
+            if ship is None or ship.owner_id != side_id:
+                continue
+            display_id = _display_ship_id(ship_id, ship)
+            if order is None:
+                new_log.append(f"[AI] {display_id}: pass fire")
+            else:
+                target_ship = session.enc.battle.ships.get(order.target_id)
+                target_display = (
+                    _display_ship_id(order.target_id, target_ship)
+                    if target_ship else order.target_id
+                )
+                new_log.append(f"[AI] {display_id}: fire → {target_display}")
     elif enc.phase == Phase.COMBAT_SMALL:
         session.enc = make_squadron_orders(enc, side_id, DEFAULT, session.rng)
-        session.log.append(f"[AI] {side_id}: staged squadron orders")
+        new_log.append(f"[AI] {side_id}: staged squadron orders")
     else:
-        session.log.append(f"[AI] {side_id}: no orders for phase {enc.phase.value}")
+        new_log.append(f"[AI] {side_id}: no orders for phase {enc.phase.value}")
 
+    session.log.extend(new_log)
     if len(session.log) > _MAX_LOG:
         session.log = session.log[-_MAX_LOG:]
     return RedirectResponse(url=f"/tactical/game/{game_id}/?view={view}", status_code=303)
