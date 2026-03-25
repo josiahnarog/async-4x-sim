@@ -259,7 +259,18 @@ def _score_candidate(
     # Fully aggressive (1.0) → evasion weight = 0.7 (still considers it).
     # Fully defensive (0.0) → evasion weight = 1.0 (full cost).
     evasion_weight = 1.0 - 0.3 * profile.aggression
-    return outgoing - evasion_weight * incoming
+
+    # Approach bonus: when enemies are beyond weapon range the outgoing/incoming
+    # terms are both zero and the score collapses to noise.  Add a small reward
+    # for being close to preferred engagement range so the AI consistently
+    # closes distance rather than wandering randomly.
+    pref = _preferred_range(ship)
+    approach = 0.0
+    for enemy in enemy_ships:
+        gap = max(0, hex_distance(dest, enemy.pos) - pref)
+        approach -= 0.3 * profile.aggression * gap
+
+    return outgoing - evasion_weight * incoming + approach
 
 
 # ---------------------------------------------------------------------------

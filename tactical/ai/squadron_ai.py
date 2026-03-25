@@ -31,9 +31,6 @@ from tactical.ai.profile import AIProfile
 # Recover if endurance drops to this threshold (turns remaining).
 _RECOVER_THRESHOLD = 3
 
-# Launch if any enemy is within this many hexes of a carrier.
-_LAUNCH_THREAT_RANGE = 12
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -126,15 +123,14 @@ def choose_launch_orders(
 ) -> list[tuple[str, str]]:
     """Return (carrier_id, squadron_id) pairs to launch this turn.
 
-    Launches squadrons when there is a credible threat — enemy units
-    within _LAUNCH_THREAT_RANGE hexes of a carrier, or any enemy
-    squadrons already deployed.
+    Launches all docked squadrons immediately if any enemies exist.
+    A tactical engagement has no safe moment to hold fighters in reserve.
     """
-    enemy_deployed = any(
-        sq.is_deployed
-        for sq in battle.squadrons.values()
-        if sq.owner_id != owner_id
+    has_enemies = any(
+        s.owner_id != owner_id for s in battle.ships.values()
     )
+    if not has_enemies:
+        return []
 
     launches: list[tuple[str, str]] = []
 
@@ -145,25 +141,11 @@ def choose_launch_orders(
         if bl_cap == 0:
             continue
 
-        # Find squadrons docked at this carrier.
         docked = [
             sq_id
             for sq_id, sq in battle.squadrons.items()
             if not sq.is_deployed and sq.docked_at == ship_id
         ]
-        if not docked:
-            continue
-
-        # Check for threats.
-        enemy_nearby = enemy_deployed or any(
-            hex_distance(ship.pos, es.pos) <= _LAUNCH_THREAT_RANGE
-            for es in battle.ships.values()
-            if es.owner_id != owner_id
-        )
-        if not enemy_nearby:
-            continue
-
-        # Launch up to bl_cap squadrons this turn.
         for sq_id in docked[:bl_cap]:
             launches.append((ship_id, sq_id))
 
