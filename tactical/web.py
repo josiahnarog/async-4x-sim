@@ -252,6 +252,17 @@ def _process(session: GameSession, cmd_line: str) -> list[str]:
                     )
                     side = ship.owner_id
                     session.enc = session.enc.stage_move(side, ship_id, dest, dest_facing)
+                    order = session.enc._move_orders[ship_id]
+                    cap   = session.enc._mp_capacity.get(ship_id, ship.mp)
+                    session.drafts[ship_id] = {
+                        "pos":          dest,
+                        "facing":       int(dest_facing),
+                        "mp_remaining": cap - order.total_mp_cost,
+                        "turn_charge":  order.final_turn_charge,
+                        "turn_cost":    ship.turn_cost,
+                        "path":         list(order.path) if order.path else [ship.pos, dest],
+                        "mp_used":      order.total_mp_cost,
+                    }
                     out.append(f"Staged: {ship_id} → ({dest.q},{dest.r}) facing={int(dest_facing)}")
             else:
                 out.append(f"Cannot move: phase is {session.enc.phase.value!r}")
@@ -751,6 +762,9 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
                 "facing": int(s.facing),
                 "is_destroyed": is_destroyed,
                 "detection": 3,
+                "mp": s.mp,
+                "turn_cost": s.turn_cost,
+                "turn_charge": s.turn_charge,
             })
     return json.dumps(result)
 

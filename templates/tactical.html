@@ -66,7 +66,7 @@
 
   <div class="row">
     <div class="col-map">
-      <h2>Map <span style="font-size:0.8em;font-weight:normal;color:#888">(drag to pan · scroll to zoom)</span></h2>
+      <h2>Map <span style="font-size:0.8em;font-weight:normal;color:#888">(drag to pan · scroll to zoom · left-click to select · right-click to command)</span></h2>
       <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
         <button id="btn-zoom-in"  onclick="adjustZoom(1.25)">＋</button>
         <button id="btn-zoom-out" onclick="adjustZoom(0.8)">－</button>
@@ -135,7 +135,8 @@
     const INTERCEPT_PATHS = {{ intercept_paths_json | safe }};
     const INTERCEPT_ZONES = {{ intercept_zones_json | safe }};
     const RECOVER_PATHS   = {{ recover_paths_json | safe }};
-    const VIEW = "{{ view }}";   // "master" | "A" | "B"
+    const VIEW       = "{{ view }}";        // "master" | "A" | "B"
+    const PHASE_NAME = "{{ phase_name }}";  // "move_submission" | "combat_submission" | "combat_small" | ...
     // Ghost paths are visible when: master view (sees all) OR the path belongs to
     // the current player's side.  Mirrors the same visibility rule as unit detection.
     function visibleFor(owner) { return VIEW === 'master' || owner === VIEW; }
@@ -159,21 +160,312 @@
       render();
     }
 
-    // ---- Mouse pan ----
-    let isPanning = false, lastMX = 0, lastMY = 0;
+    // ---- Selection / movement state ----
+    // { id, type, owner, q, r, facing, mp, turn_cost, turn_charge } or null
+    let selectedUnit = null;
+    // Anchored destination hex for the second right-click facing pick.
+    let moveDest = null;     // { q, r } or null
+    // Live mouse position in canvas coords (for facing preview arrow).
+    let mouseCanvasX = 0, mouseCanvasY = 0;
+
+    // ---- Pixel ↔ hex helpers ----
+    // Inverse of hexToPixel with the canvas transform (cx=0,cy=0,panX,panY,zoom).
+    function canvasToWorld(canvasPx, canvasPy) {
+      return {
+        wx: (canvasPx - canvas.width  / 2 - panX) / zoom,
+        wy: (canvasPy - canvas.height / 2 - panY) / zoom,
+      };
+    }
+    // Fractional axial hex from world (cx=0,cy=0) coords.
+    function worldToHex(wx, wy) {
+      const q = wx / (SIZE * 1.5);
+      const r = -wy / (SIZE * SQ3) - q / 2;
+      return { q, r };
+    }
+    // Round fractional cube/axial to nearest integer hex.
+    function hexRound(fq, fr) {
+      const fs = -fq - fr;
+      let rq = Math.round(fq), rr = Math.round(fr), rs = Math.round(fs);
+      const dq = Math.abs(rq - fq), dr = Math.abs(rr - fr), ds = Math.abs(rs - fs);
+      if (dq > dr && dq > ds) rq = -rr - rs;
+      else if (dr > ds)        rr = -rq - rs;
+      return { q: rq, r: rr };
+    }
+
+    // ---- Hex math helpers ----
+    // Flat-top axial hex directions: N NE SE S SW NW
+    const HEX_OFFSETS = [{dq:0,dr:1},{dq:1,dr:0},{dq:1,dr:-1},{dq:0,dr:-1},{dq:-1,dr:0},{dq:-1,dr:1}];
+
+    // All occupied hex keys (excluding the given ship_id so it doesn't block itself).
+    function occupiedKeys(excludeId) {
+      const s = new Set();
+      for (const ship of SHIPS) {
+        if (ship.id !== excludeId && !ship.is_destroyed) s.add(`${ship.q},${ship.r}`);
+      }
+      return s;
+    }
+
+    // Snap angle to nearest facing index (0-5).
+    function angleToFacing(dx, dy) {
+      const angle = Math.atan2(dy, dx);
+      return ((Math.round((angle + Math.PI / 2) / (Math.PI / 3)) % 6) + 6) % 6;
+    }
+
+    // BFS-based reachability over (q, r, facing, charge) states.
+    // Returns { reach: Set<"q,r">, costs: Map<"q,r,f", mpCost> }
+    // Uses 0-1 BFS: turn transitions cost 0, move/spend cost 1.
+    let _reachCache = null;  // { shipId, result } — invalidated on selection change
+
+    function computeReachability(ship) {
+      if (!ship || ship.mp === undefined) return { reach: new Set(), costs: new Map() };
+      if (_reachCache && _reachCache.shipId === ship.id) return _reachCache.result;
+
+      const cap  = ship.mp;
+      const tc   = ship.turn_cost || 1;
+      const occ  = occupiedKeys(ship.id);
+      const initC = ship.turn_charge || 0;
+
+      // State key: "q,r,f,c"
+      const stKey = (q, r, f, c) => `${q},${r},${f},${c}`;
+      const distMap = new Map();
+      const initKey = stKey(ship.q, ship.r, ship.facing, initC);
+      distMap.set(initKey, 0);
+
+      // Deque: 0-cost (turns) → front, 1-cost (move/spend) → back.
+      const dq_arr = [{q: ship.q, r: ship.r, f: ship.facing, c: initC, mp: 0}];
+      const reach = new Set();
+      const costs = new Map();  // "q,r,f" → min mp cost
+
+      while (dq_arr.length > 0) {
+        const {q, r, f, c, mp} = dq_arr.shift();
+        if ((distMap.get(stKey(q, r, f, c)) ?? Infinity) < mp) continue; // stale
+
+        // Record this (hex, facing) as reachable.
+        if (!(q === ship.q && r === ship.r)) {
+          reach.add(`${q},${r}`);
+          const hf = `${q},${r},${f}`;
+          if (!costs.has(hf) || costs.get(hf) > mp) costs.set(hf, mp);
+        }
+
+        // Turn transitions (0 MP cost, requires c >= tc).
+        if (c >= tc) {
+          for (const df of [-1, 1]) {
+            const nf = ((f + df) % 6 + 6) % 6;
+            const nc = c - tc;
+            const nk = stKey(q, r, nf, nc);
+            if (!distMap.has(nk) || distMap.get(nk) > mp) {
+              distMap.set(nk, mp);
+              dq_arr.unshift({q, r, f: nf, c: nc, mp}); // 0-cost → front
+            }
+          }
+        }
+
+        if (mp >= cap) continue;
+
+        // Move forward 1 hex (1 MP, earn 1 charge).
+        const off = HEX_OFFSETS[f];
+        const nq = q + off.dq, nr = r + off.dr;
+        if (!occ.has(`${nq},${nr}`)) {
+          const nc = c + 1, nmp = mp + 1;
+          const nk = stKey(nq, nr, f, nc);
+          if (!distMap.has(nk) || distMap.get(nk) > nmp) {
+            distMap.set(nk, nmp);
+            dq_arr.push({q: nq, r: nr, f, c: nc, mp: nmp}); // 1-cost → back
+          }
+        }
+
+        // Spend 1 MP (earn 1 charge without moving).
+        {
+          const nc = c + 1, nmp = mp + 1;
+          const nk = stKey(q, r, f, nc);
+          if (!distMap.has(nk) || distMap.get(nk) > nmp) {
+            distMap.set(nk, nmp);
+            dq_arr.push({q, r, f, c: nc, mp: nmp}); // 1-cost → back
+          }
+        }
+      }
+
+      const result = { reach, costs };
+      _reachCache = { shipId: ship.id, result };
+      return result;
+    }
+
+    // ---- Jitter (extracted so click handler can reuse) ----
+    function computeJitter() {
+      const JITTER_R = SIZE * 0.27;
+      const hexGroups = {};
+      for (const ship of SHIPS) {
+        const key = `${ship.q},${ship.r}`;
+        (hexGroups[key] = hexGroups[key] || []).push(ship.id);
+      }
+      for (const sq of SQUADRONS) {
+        const key = `${sq.q},${sq.r}`;
+        (hexGroups[key] = hexGroups[key] || []).push(sq.id);
+      }
+      const jitterOf = {};
+      for (const key of Object.keys(hexGroups)) {
+        const ids = hexGroups[key];
+        const n = ids.length;
+        for (let i = 0; i < n; i++) {
+          if (n === 1) {
+            jitterOf[ids[i]] = { x: 0, y: 0 };
+          } else {
+            const angle = (2 * Math.PI * i / n) - Math.PI / 2;
+            jitterOf[ids[i]] = { x: Math.cos(angle) * JITTER_R, y: Math.sin(angle) * JITTER_R };
+          }
+        }
+      }
+      return jitterOf;
+    }
+
+    // ---- Unit hit detection (shared by left- and right-click) ----
+    function findUnitAt(wx, wy, jitterOf) {
+      const HIT_R = SIZE * 0.55;
+      for (const ship of SHIPS) {
+        if (ship.is_destroyed) continue;
+        const j = jitterOf[ship.id] || { x: 0, y: 0 };
+        const p = hexToPixel(ship.q, ship.r, j.x, j.y);
+        const dx = wx - p.x, dy = wy - p.y;
+        if (Math.sqrt(dx*dx + dy*dy) <= HIT_R) return { id: ship.id, type: "ship", owner: ship.owner };
+      }
+      for (const sq of SQUADRONS) {
+        const j = jitterOf[sq.id] || { x: 0, y: 0 };
+        const p = hexToPixel(sq.q, sq.r, j.x, j.y);
+        const dx = wx - p.x, dy = wy - p.y;
+        if (Math.sqrt(dx*dx + dy*dy) <= HIT_R) return { id: sq.id, type: "squadron", owner: sq.owner };
+      }
+      return null;
+    }
+
+    // ---- Left-click: select own unit, or cancel anchor ----
+    function handleCanvasClick(canvasPx, canvasPy) {
+      // If we're in anchor mode, left-click cancels back to just "unit selected".
+      if (moveDest) { moveDest = null; render(); return; }
+
+      const { wx, wy } = canvasToWorld(canvasPx, canvasPy);
+      const hitUnit = findUnitAt(wx, wy, computeJitter());
+
+      if (!hitUnit) { selectedUnit = null; render(); return; }
+
+      // On player views only own units are selectable; master can select any.
+      const selectable = VIEW === "master" || hitUnit.owner === VIEW;
+      if (!selectable) return;
+
+      if (selectedUnit && hitUnit.id === selectedUnit.id) {
+        selectedUnit = null;   // re-click → deselect
+      } else {
+        // Capture full ship data for movement calculations.
+        const shipData = SHIPS.find(s => s.id === hitUnit.id);
+        selectedUnit = shipData ? { ...hitUnit, ...shipData } : hitUnit;
+      }
+      _reachCache = null;  // invalidate BFS cache for new selection
+      render();
+    }
+
+    // ---- Right-click: issue command based on phase ----
+    function handleCanvasRightClick(canvasPx, canvasPy) {
+      if (!selectedUnit) return;
+
+      const { wx, wy } = canvasToWorld(canvasPx, canvasPy);
+
+      // ---- MOVE phase: two-stage anchor + facing pick ----
+      if (PHASE_NAME === "move_submission" && selectedUnit.type === "ship") {
+        if (!moveDest) {
+          // First right-click: anchor a destination hex.
+          const fh = worldToHex(wx, wy);
+          const h  = hexRound(fh.q, fh.r);
+          // Only anchor if it's a reachable hex (not occupied, within range).
+          const { reach } = computeReachability(selectedUnit);
+          if (reach.has(`${h.q},${h.r}`)) {
+            moveDest = { q: h.q, r: h.r };
+          }
+          render();
+        } else {
+          // Second right-click: snap to nearest facing and submit.
+          const destPx = hexToPixel(moveDest.q, moveDest.r, 0, 0);
+          const dx = wx - destPx.x, dy = wy - destPx.y;
+          const facing = angleToFacing(dx, dy);
+          const { costs } = computeReachability(selectedUnit);
+          if (costs.has(`${moveDest.q},${moveDest.r},${facing}`)) {
+            submitCmd(`move ${selectedUnit.id} ${moveDest.q} ${moveDest.r} ${facing}`);
+          }
+          moveDest = null;
+          selectedUnit = null;
+          render();
+        }
+        return;
+      }
+
+      // ---- Other phases ----
+      const hitUnit = findUnitAt(wx, wy, computeJitter());
+      const selOwner       = selectedUnit.owner;
+      const isEnemy        = hitUnit && hitUnit.owner !== selOwner;
+      const isFriendlyShip = hitUnit && hitUnit.owner === selOwner && hitUnit.type === "ship";
+
+      let cmd = null;
+      if (PHASE_NAME === "combat_submission" && selectedUnit.type === "ship") {
+        if (isEnemy) cmd = `fireall ${selectedUnit.id} ${hitUnit.id}`;
+      } else if (PHASE_NAME === "combat_small" && selectedUnit.type === "squadron") {
+        if (isEnemy) {
+          cmd = `strike ${selectedUnit.id} ${hitUnit.id}`;
+        } else if (isFriendlyShip) {
+          cmd = `recover ${selectedUnit.id} ${hitUnit.id}`;
+        } else if (!hitUnit) {
+          const fh = worldToHex(wx, wy);
+          const h  = hexRound(fh.q, fh.r);
+          cmd = `intercept ${selectedUnit.id} ${h.q} ${h.r}`;
+        }
+      }
+
+      if (cmd) { submitCmd(cmd); selectedUnit = null; moveDest = null; render(); }
+    }
+
+    function submitCmd(cmd) {
+      const input = document.getElementById("cmd");
+      input.value = cmd;
+      input.closest("form").requestSubmit();
+    }
+
+    // ---- Mouse pan (with drag-vs-click detection) — left button only ----
+    let isPanning = false, lastMX = 0, lastMY = 0, mouseDownX = 0, mouseDownY = 0;
     const canvas = document.getElementById("hexmap");
     canvas.addEventListener("mousedown", e => {
-      isPanning = true; lastMX = e.clientX; lastMY = e.clientY;
+      if (e.button !== 0) return;   // left button only
+      isPanning = true;
+      lastMX = mouseDownX = e.clientX;
+      lastMY = mouseDownY = e.clientY;
       canvas.style.cursor = "grabbing";
     });
     canvas.addEventListener("mousemove", e => {
-      if (!isPanning) return;
-      panX += e.clientX - lastMX; panY += e.clientY - lastMY;
-      lastMX = e.clientX; lastMY = e.clientY;
-      render();
+      const rect = canvas.getBoundingClientRect();
+      mouseCanvasX = e.clientX - rect.left;
+      mouseCanvasY = e.clientY - rect.top;
+      if (isPanning) {
+        panX += e.clientX - lastMX; panY += e.clientY - lastMY;
+        lastMX = e.clientX; lastMY = e.clientY;
+      }
+      // Redraw whenever anchor is active (live facing preview) or panning.
+      if (isPanning || moveDest) render();
     });
-    canvas.addEventListener("mouseup",    () => { isPanning = false; canvas.style.cursor = "grab"; });
+    canvas.addEventListener("mouseup", e => {
+      if (e.button !== 0) return;   // left button only
+      if (!isPanning) return;
+      isPanning = false;
+      canvas.style.cursor = "grab";
+      const dx = e.clientX - mouseDownX, dy = e.clientY - mouseDownY;
+      if (Math.sqrt(dx*dx + dy*dy) < 5) {
+        const rect = canvas.getBoundingClientRect();
+        handleCanvasClick(e.clientX - rect.left, e.clientY - rect.top);
+      }
+    });
     canvas.addEventListener("mouseleave", () => { isPanning = false; canvas.style.cursor = "grab"; });
+
+    // ---- Right-click (contextmenu): suppress browser menu, issue command ----
+    canvas.addEventListener("contextmenu", e => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      handleCanvasRightClick(e.clientX - rect.left, e.clientY - rect.top);
+    });
 
     // ---- Scroll zoom (zoom toward cursor) ----
     canvas.addEventListener("wheel", e => {
@@ -627,6 +919,123 @@
       ctx.fillText(`${sq.strength}/${sq.max}`, x, y + SIZE * 0.55);
     }
 
+    function drawReachableOverlay(ctx, ship, reachable, cx, cy) {
+      if (!reachable || reachable.size === 0) return;
+      const color = OWNER_COLORS[ship.owner] || "#ffffff";
+      ctx.save();
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = color;
+      for (const key of reachable) {
+        const [q, r] = key.split(",").map(Number);
+        const { x, y } = hexToPixel(q, r, cx, cy);
+        drawHexPath(ctx, x, y);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      for (const key of reachable) {
+        const [q, r] = key.split(",").map(Number);
+        const { x, y } = hexToPixel(q, r, cx, cy);
+        drawHexPath(ctx, x, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Draw the anchor: facing arrows for all 6 directions at moveDest, plus
+    // a live preview arrow pointing toward the current mouse position.
+    function drawFacingPicker(ctx, ship, destQ, destR, mouseWx, mouseWy, bfsCosts, cx, cy) {
+      const { x, y } = hexToPixel(destQ, destR, cx, cy);
+      const color = OWNER_COLORS[ship.owner] || "#ffffff";
+      const arrowLen = SIZE * 0.65;
+
+      // Dim arrows at all 6 facing directions.
+      ctx.save();
+      for (let f = 0; f < 6; f++) {
+        const cost = bfsCosts.get(`${destQ},${destR},${f}`);
+        const reachable = cost !== undefined;
+        const angle = -Math.PI / 2 + f * (Math.PI / 3);
+        const tipX = x + arrowLen * Math.cos(angle);
+        const tipY = y + arrowLen * Math.sin(angle);
+        ctx.globalAlpha = reachable ? 0.45 : 0.15;
+        ctx.strokeStyle = reachable ? color : "#888888";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(tipX, tipY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const hl = SIZE * 0.12;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - hl * Math.cos(angle - 0.6), tipY - hl * Math.sin(angle - 0.6));
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - hl * Math.cos(angle + 0.6), tipY - hl * Math.sin(angle + 0.6));
+        ctx.stroke();
+      }
+
+      // Bright preview arrow toward mouse.
+      const dx = mouseWx - x, dy = mouseWy - y;
+      if (Math.sqrt(dx*dx + dy*dy) > 5) {
+        const snapFacing   = angleToFacing(dx, dy);
+        const snapCost     = bfsCosts.get(`${destQ},${destR},${snapFacing}`);
+        const snapReachable = snapCost !== undefined;
+        const snapAngle = -Math.PI / 2 + snapFacing * (Math.PI / 3);
+        const tipX = x + arrowLen * Math.cos(snapAngle);
+        const tipY = y + arrowLen * Math.sin(snapAngle);
+        ctx.setLineDash([]);
+        ctx.globalAlpha = snapReachable ? 0.95 : 0.35;
+        ctx.strokeStyle = snapReachable ? "#ffffff" : "#ff6666";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(tipX, tipY);
+        ctx.stroke();
+        const hl = SIZE * 0.17;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - hl * Math.cos(snapAngle - 0.5), tipY - hl * Math.sin(snapAngle - 0.5));
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - hl * Math.cos(snapAngle + 0.5), tipY - hl * Math.sin(snapAngle + 0.5));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = snapReachable ? "#ffffff" : "#ff6666";
+        ctx.font = "bold 9px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const label = snapReachable ? `${snapCost}MP` : "—";
+        ctx.fillText(label, x + (tipX - x) * 0.55, y + (tipY - y) * 0.55);
+      }
+      ctx.restore();
+    }
+
+    function drawSelectionRing(ctx, q, r, jx, jy, isSquadron) {
+      const { x, y } = hexToPixel(q, r, jx, jy);
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([4, 3]);
+      if (isSquadron) {
+        const rr = SIZE * 0.62;
+        ctx.beginPath();
+        ctx.moveTo(x,      y - rr);
+        ctx.lineTo(x + rr, y     );
+        ctx.lineTo(x,      y + rr);
+        ctx.lineTo(x - rr, y     );
+        ctx.closePath();
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, SIZE * 0.52, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     function render() {
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -649,6 +1058,17 @@
       // Using the larger canvas dimension so both axes are covered.
       const drawR = Math.ceil(Math.max(canvas.width, canvas.height) / 2 / (SIZE * zoom * 1.3)) + 2;
       drawGrid(ctx, 0, 0, cq, cr, drawR);
+
+      // Movement overlay (reachable hexes + facing picker) — drawn before units.
+      if (PHASE_NAME === "move_submission" && selectedUnit && selectedUnit.type === "ship") {
+        const { reach, costs } = computeReachability(selectedUnit);
+        drawReachableOverlay(ctx, selectedUnit, reach, 0, 0);
+        if (moveDest) {
+          const { wx: mwx, wy: mwy } = canvasToWorld(mouseCanvasX, mouseCanvasY);
+          drawFacingPicker(ctx, selectedUnit, moveDest.q, moveDest.r, mwx, mwy, costs, 0, 0);
+        }
+      }
+
       for (const z of INTERCEPT_ZONES) if (visibleFor(z.owner))            drawInterceptZone(ctx, z, 0, 0);
       for (const p of INTERCEPT_PATHS) if (visibleFor(p.owner))            drawSquadronPath(ctx, p, 0, 0);
       for (const p of RECOVER_PATHS)   if (visibleFor(p.owner))            drawRecoverPath(ctx, p, 0, 0);
@@ -656,35 +1076,29 @@
       for (const fo of FIRE_ORDERS)    if (visibleFor(fo.attacker_owner))  drawFireOrder(ctx, fo, 0, 0);
       for (const so of STRIKE_ORDERS)  if (visibleFor(so.attacker_owner)) drawFireOrder(ctx, so, 0, 0);
       // Compute per-hex jitter so co-located units spread into a small cluster.
-      const JITTER_R = SIZE * 0.27;
-      const hexGroups = {};
+      const jitterOf = computeJitter();
+
       for (const ship of SHIPS) {
-        const key = `${ship.q},${ship.r}`;
-        (hexGroups[key] = hexGroups[key] || []).push(ship.id);
+        const j = jitterOf[ship.id] || {x:0,y:0};
+        drawShip(ctx, ship, j.x, j.y);
+        if (selectedUnit && selectedUnit.id === ship.id) drawSelectionRing(ctx, ship.q, ship.r, j.x, j.y, false);
       }
       for (const sq of SQUADRONS) {
-        const key = `${sq.q},${sq.r}`;
-        (hexGroups[key] = hexGroups[key] || []).push(sq.id);
+        const j = jitterOf[sq.id] || {x:0,y:0};
+        drawSquadron(ctx, sq, j.x, j.y);
+        if (selectedUnit && selectedUnit.id === sq.id) drawSelectionRing(ctx, sq.q, sq.r, j.x, j.y, true);
       }
-      const jitterOf = {};
-      for (const key of Object.keys(hexGroups)) {
-        const ids = hexGroups[key];
-        const n = ids.length;
-        for (let i = 0; i < n; i++) {
-          if (n === 1) {
-            jitterOf[ids[i]] = { x: 0, y: 0 };
-          } else {
-            const angle = (2 * Math.PI * i / n) - Math.PI / 2;
-            jitterOf[ids[i]] = { x: Math.cos(angle) * JITTER_R, y: Math.sin(angle) * JITTER_R };
-          }
-        }
-      }
-
-      for (const ship of SHIPS) { const j = jitterOf[ship.id] || {x:0,y:0}; drawShip(ctx, ship, j.x, j.y); }
-      for (const sq of SQUADRONS) { const j = jitterOf[sq.id] || {x:0,y:0}; drawSquadron(ctx, sq, j.x, j.y); }
 
       ctx.restore();
     }
+
+    // Escape: cancel anchor → deselect
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        if (moveDest)      { moveDest = null; render(); }
+        else if (selectedUnit) { selectedUnit = null; render(); }
+      }
+    });
 
     render();
 

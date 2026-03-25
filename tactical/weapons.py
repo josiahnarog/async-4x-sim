@@ -147,8 +147,8 @@ LASER = WeaponSpec(
     type=WeaponType.LASER,
     name="Laser",
     rate_of_fire=1,
-    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 7]),
-    damage=RangeTable.from_list([2, 2, 2, 1, 1, 1, 1]),
+    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, "-"]),
+    damage=RangeTable.from_list([2, 2, 2, 1, 1, 1, "-"]),
     # Bypasses all shields — hits armor directly
     skip=SkipRule(shields=SKIP_ALL),
 )
@@ -157,7 +157,7 @@ FORCE_BEAM = WeaponSpec(
     type=WeaponType.FORCE_BEAM,
     name="Force Beam",
     rate_of_fire=1,
-    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 7, 6, 6]),
+    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 7, 6, "-"]),
     damage=RangeTable.from_list([3, 2, 2, 2, 1, 1, 1, 1, "-"]),
     # No skip rules — hits shields first like normal fire
 )
@@ -166,7 +166,7 @@ NEEDLE_BEAM = WeaponSpec(
     type=WeaponType.NEEDLE_BEAM,
     name="Needle Beam",
     rate_of_fire=1,
-    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 6, 6, 5, 5]),
+    to_hit=RangeTable.from_list([8, 8, 8, 7, 7, 7, 6, 6, 5, "-"]),
     # Always destroys exactly 1 system; damage field unused for needle beams
     # but must be non-None so damage_at() doesn't crash.
     damage=RangeTable.from_list([1]),
