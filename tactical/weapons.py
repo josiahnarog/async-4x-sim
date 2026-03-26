@@ -124,6 +124,14 @@ class WeaponSpec:
     # Value = how many combined S/A systems are bypassed before the random system roll.
     needle_skip: int = 0
 
+    # Ordnance penalties applied to any fighter carrying this weapon externally.
+    # ordnance_mp_penalty  — flat MP reduction while at least one shot of this
+    #                        weapon type remains loaded on the fighter.
+    # ordnance_mvr_penalty_per_shot — MVR reduction per remaining external shot
+    #                                 of this weapon type.
+    ordnance_mp_penalty: int = 0
+    ordnance_mvr_penalty_per_shot: int = 0
+
     def damage_at(self, rng: int) -> int:
         v = self.damage.at(rng)
         assert v is not None
@@ -185,6 +193,9 @@ STANDARD_MISSILE = WeaponSpec(
     damage=RangeTable.from_list([1]),
     requires_ammo=True,
     can_target_fighters=False,
+    # Ordnance penalties: a loaded missile slows and unmaneuverable fighters.
+    ordnance_mp_penalty=2,          # -2 MP flat while any R remains loaded
+    ordnance_mvr_penalty_per_shot=1, # -1 MVR per R shot still carried
 )
 
 GUN = WeaponSpec(

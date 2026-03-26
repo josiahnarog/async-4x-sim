@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from sim.hexgrid import Hex
 from tactical.fighter_class import FighterClass
-from tactical.weapons import WeaponType
+from tactical.weapons import WEAPONS, WeaponType
 
 
 SquadronID = str
@@ -29,9 +29,13 @@ class FighterLoadout:
                 each time the squadron fires an external salvo.  Penalties
                 disappear when this reaches 0.
 
-    Derived movement/maneuverability penalties (per design):
-        effective_mp  = base_mp - 2            while any external shots remain
-        effective_mvr = base_mvr - external_shots_remaining
+    Derived movement/maneuverability penalties:
+        effective_mp  = base_mp - max(ordnance_mp_penalty)   while any external shots remain
+        effective_mvr = base_mvr - sum(ordnance_mvr_penalty_per_shot for each remaining shot)
+
+    Penalties are read from WeaponSpec.ordnance_mp_penalty and
+    ordnance_mvr_penalty_per_shot so future weapon types can carry different
+    values without touching this class.
     """
 
     fighter_class: FighterClass             # defines base_mvr and base_mp
@@ -57,13 +61,34 @@ class FighterLoadout:
 
     @property
     def effective_mvr(self) -> int:
-        """MVR after ordnance penalty (-1 per external shot remaining)."""
-        return max(0, self.base_mvr - self.external_shots_remaining)
+        """MVR after ordnance penalty.
+
+        Each remaining external shot contributes its weapon's
+        ordnance_mvr_penalty_per_shot.  Uses external[:external_shots_remaining]
+        as a proxy for which slots still carry a round (shots expended last-first).
+        """
+        remaining_weapons = self.external[: self.external_shots_remaining]
+        penalty = sum(
+            WEAPONS[wt].ordnance_mvr_penalty_per_shot
+            for wt in remaining_weapons
+            if wt in WEAPONS
+        )
+        return max(0, self.base_mvr - penalty)
 
     @property
     def effective_mp(self) -> int:
-        """MP after ordnance penalty (-2 flat while any external shots remain)."""
-        return max(0, self.base_mp - (2 if self.external_shots_remaining > 0 else 0))
+        """MP after ordnance penalty.
+
+        While any external shots remain, applies the highest
+        ordnance_mp_penalty found across the external weapon types.
+        """
+        if self.external_shots_remaining <= 0:
+            return self.base_mp
+        penalty = max(
+            (WEAPONS[wt].ordnance_mp_penalty for wt in self.external if wt in WEAPONS),
+            default=0,
+        )
+        return max(0, self.base_mp - penalty)
 
     # ------------------------------------------------------------------
     # Mutations (pure)
