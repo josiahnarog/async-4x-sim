@@ -811,6 +811,7 @@ def _squadrons_json(session: GameSession, view: str = "master") -> str:
                 "r": sq.pos.r,
                 "strength": sq.strength,
                 "max": sq.max_strength,
+                "endurance": sq.endurance,
                 "detection": 3,
             })
     return json.dumps(result)

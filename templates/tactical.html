@@ -193,9 +193,11 @@
           + sysLine;
       } else {
         // Squadron
+        const str = u.strength != null ? `  str ${u.strength}/${u.max ?? u.strength}` : "";
+        const end = u.endurance != null ? `  endurance ${u.endurance}` : "";
         panel.innerHTML =
           `<span class="unit-info-id">${u.id}</span>`
-          + `<span class="unit-info-meta">  Squadron  (${u.q},${u.r})</span>`;
+          + `<span class="unit-info-meta">  Squadron  (${u.q ?? "?"},${u.r ?? "?"})${str}${end}</span>`;
       }
     }
 
@@ -417,9 +419,10 @@
         selectedUnit = null;   // re-click → deselect
         firepowerMap = null;
       } else {
-        // Capture full ship data for movement calculations.
-        const shipData = SHIPS.find(s => s.id === hitUnit.id);
-        selectedUnit = shipData ? { ...hitUnit, ...shipData } : hitUnit;
+        // Merge full unit data (ship or squadron) for panel and movement calculations.
+        const unitData = SHIPS.find(s => s.id === hitUnit.id)
+                      || SQUADRONS.find(s => s.id === hitUnit.id);
+        selectedUnit = unitData ? { ...hitUnit, ...unitData } : hitUnit;
         firepowerMap = null;
         // Fetch firepower heat map when a friendly ship is selected in combat phase.
         if (PHASE_NAME === "combat_submission" && hitUnit.type === "ship") {
