@@ -143,9 +143,12 @@ def major_status_flags(ship: "ShipState") -> list[str]:
     if not has_shield:
         flags.append("SHIELDS DOWN")
 
-    # Armor check
-    has_armor = any(s.base == "A" and s.is_active() for s in ship.systems)
-    if not has_armor:
+    # Streaming atmosphere: any non-shield, non-armor system has been destroyed
+    has_internal_damage = any(
+        s.base not in ("S", "A") and not s.is_active()
+        for s in ship.systems
+    )
+    if has_internal_damage:
         flags.append("STREAMING ATMO")
 
     # Engine check

@@ -218,9 +218,22 @@ def test_major_status_shields_down():
 
 
 def test_major_status_streaming_atmo():
-    ship = make_ship(systems_str="SSSI")
+    # STREAMING ATMO triggers when the first non-S/A system is destroyed,
+    # regardless of whether shields/armor are intact.
+    from tactical.ship_systems import ShipSystems as SS
+    systems = ShipSystems.parse("SSSAAI")
+    # Destroy the engine (index 5) — armor still intact
+    new_systems = list(systems.systems)
+    new_systems[5] = new_systems[5].destroy()
+    ship = ShipState(
+        ship_id="X1", owner_id="A", pos=Hex(0, 0),
+        facing=Facing.N, mp=5, turn_cost=2, turn_charge=0,
+        systems=SS(tuple(new_systems)),
+    )
     flags = major_status_flags(ship)
     assert "STREAMING ATMO" in flags
+    # Intact armor alone does NOT trigger the flag
+    assert "STREAMING ATMO" not in major_status_flags(make_ship(systems_str="SSSAAI"))
 
 
 def test_major_status_engines_damaged():

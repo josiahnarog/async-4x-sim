@@ -250,7 +250,10 @@ def resolve_large_fire(
     )
     hit = check.hit
 
-    raw_damage = spec.damage_at(base_range)
+    # Only look up damage if the weapon is actually in range and hit.
+    # spec.damage.at() returns None beyond max range; guard against that here
+    # so the asserting damage_at() is never called out-of-range.
+    raw_damage = (spec.damage.at(base_range) or 0) if hit else 0
 
     event = FireEvent(
         attacker_id=attacker_id,
