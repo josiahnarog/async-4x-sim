@@ -544,15 +544,27 @@ class Encounter:
         for sqid, sq in self.battle.squadrons.items():
             if not sq.is_deployed:
                 # Refuel and rearm while docked.
+                full_shots = len(sq.loadout.external)
+                shots_restored = full_shots - sq.loadout.external_shots_remaining
                 refueled_loadout = dataclasses.replace(
                     sq.loadout,
-                    external_shots_remaining=len(sq.loadout.external),
+                    external_shots_remaining=full_shots,
                 )
                 new_squads[sqid] = dataclasses.replace(
                     sq,
                     endurance=sq.max_endurance,
                     loadout=refueled_loadout,
                 )
+                # Deduct restored R missiles from the carrier's Mg.
+                # Cost: 1 missile per fighter per shot restored (strength × shots_restored).
+                if shots_restored > 0 and sq.docked_at and sq.docked_at in new_ships:
+                    missiles_needed = shots_restored * sq.strength
+                    carrier = new_ships[sq.docked_at]
+                    if carrier.systems is not None:
+                        new_ships[sq.docked_at] = dataclasses.replace(
+                            carrier,
+                            systems=carrier.systems.consume_ammo_for("R", missiles_needed),
+                        )
                 continue
             if sq.endurance == 1:
                 # Will reach 0 after this decrement — warn before destroying.

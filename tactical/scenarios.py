@@ -27,7 +27,7 @@ def default_scenario(seed: int = 1) -> tuple[BattleState, random.Random]:
     rng = random.Random(seed)
 
     fg_systems  = "SSSSSAAAAA(I)FFRRQD(I)(I)(I)"
-    cv_systems_str = "SSSAAAFQ(I)(I)BhBhBlBlR"
+    cv_systems_str = "SSSAAAFQ(I)(I)BhBhBlBlMgR"
 
     a = ShipState(
         ship_id="AFG1", owner_id="A", pos=Hex(-1, 0), facing=Facing.NE,

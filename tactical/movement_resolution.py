@@ -50,6 +50,11 @@ def resolve_movement(
             sq = new_battle.squadrons[sq_id]
             if carrier.systems is not None:
                 new_sys = carrier.systems.undock_squadron(sq_id)
+                # Deduct external R missiles loaded onto fighters from the carrier Mg.
+                from tactical.weapons import WeaponType
+                r_count = sum(1 for w in sq.loadout.external if w == WeaponType.STANDARD_MISSILE)
+                if r_count > 0:
+                    new_sys = new_sys.consume_ammo_for("R", r_count * sq.strength)
                 carrier = dataclasses.replace(carrier, systems=new_sys)
                 new_battle = new_battle.with_ship(carrier)
             new_sq = sq.undock(carrier.pos)
