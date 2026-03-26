@@ -1055,17 +1055,28 @@
       ctx.restore();
     }
 
-    // Heat-map colour: low EV → dim green, mid → yellow, high → red.
+    // Viridis colormap — piecewise linear through standard keypoints.
+    // t in [0, 1]: dark purple (low) → blue → teal → green → yellow (high).
+    const VIRIDIS = [
+      [  68,   1,  84],  // t=0.00
+      [  72,  40, 120],  // t=0.14
+      [  62,  74, 137],  // t=0.29
+      [  49, 104, 142],  // t=0.43
+      [  38, 130, 142],  // t=0.57
+      [  53, 183, 121],  // t=0.71
+      [ 144, 215,  67],  // t=0.86
+      [ 253, 231,  37],  // t=1.00
+    ];
     function heatColor(t) {
-      // t in [0, 1]
-      if (t < 0.5) {
-        const g = Math.round(128 + 127 * (t * 2));
-        return `rgba(0,${g},0,`;
-      } else {
-        const r = Math.round(128 + 127 * ((t - 0.5) * 2));
-        const g = Math.round(255 * (1 - (t - 0.5) * 2));
-        return `rgba(${r},${g},0,`;
-      }
+      const n   = VIRIDIS.length - 1;
+      const idx = Math.min(t * n, n - 0.001);
+      const lo  = Math.floor(idx);
+      const f   = idx - lo;
+      const a   = VIRIDIS[lo], b = VIRIDIS[lo + 1];
+      const r   = Math.round(a[0] + f * (b[0] - a[0]));
+      const g   = Math.round(a[1] + f * (b[1] - a[1]));
+      const bl  = Math.round(a[2] + f * (b[2] - a[2]));
+      return `rgba(${r},${g},${bl},`;
     }
 
     function drawFirepowerHeatmap(ctx, map, cx, cy) {
