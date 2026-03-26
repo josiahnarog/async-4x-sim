@@ -23,6 +23,15 @@ _WEAPON_MAGAZINE: dict[str, str] = {"R": "Mg"}
 
 
 class SystemStatus(str, Enum):
+    """Operational status of a single ship system.
+
+    Status transitions are strictly one-way: INTACT → DESTROYED.
+    There is no repair mechanic in tactical combat; a destroyed system
+    stays destroyed for the duration of the encounter.
+
+    Use System.destroy() to transition; direct attribute assignment will
+    silently fail on the frozen dataclass.
+    """
     INTACT = "intact"
     DESTROYED = "destroyed"
 
@@ -326,9 +335,19 @@ class ShipSystems:
     # ---------------------------------------------------------------------
 
     def apply_damage(self, amount: int = 1) -> ShipSystems:
-        """Apply damage left-to-right to intact systems.
+        """Apply `amount` points of raw damage left-to-right along the system track.
 
-        Returns a new SystemTrack (does not mutate).
+        Each point destroys the next intact system in track order.  Excess
+        damage beyond the number of intact systems is silently absorbed (the
+        ship is already fully destroyed).
+
+        This is raw damage — no skip rules, no multipliers, no weapon-specific
+        mechanics.  Use apply_weapon_damage() for all weapon fire; reserve this
+        method for environmental or scripted damage that intentionally bypasses
+        those rules.
+
+        Track order is authoritative for sequencing and matches the rendering
+        and display order.  Returns a new ShipSystems; does not mutate self.
         """
         if amount <= 0:
             return self

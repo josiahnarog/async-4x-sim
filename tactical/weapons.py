@@ -88,10 +88,17 @@ class SkipRule:
     Use SKIP_ALL to bypass all systems of that type (e.g. Laser skips all shields).
     Multipliers (shield_multiplier / armor_multiplier on WeaponSpec) are still applied
     to the *first eligible* system of that type after any skips.
+
+    All fields must be >= 0.  SKIP_ALL is the only legitimate large value.
     """
     shields: int = 0
     armor: int = 0
     holds: int = 0
+
+    def __post_init__(self) -> None:
+        for name, val in (("shields", self.shields), ("armor", self.armor), ("holds", self.holds)):
+            if val < 0:
+                raise ValueError(f"SkipRule.{name} must be >= 0, got {val!r}")
 
 
 @dataclass(frozen=True, slots=True)

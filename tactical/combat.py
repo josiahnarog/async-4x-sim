@@ -56,6 +56,12 @@ def resolve_large_fire(
     target = battle.ships[target_id]
     spec: WeaponSpec = WEAPONS[weapon]
 
+    if attacker.systems is not None:
+        if not any(s.base == weapon.value and s.is_active() for s in attacker.systems):
+            raise ValueError(
+                f"Attacker {attacker_id!r} has no active {weapon.value!r} weapon"
+            )
+
     base_range = hex_distance(attacker.pos, target.pos)
 
     dq = target.pos.q - attacker.pos.q
@@ -70,7 +76,7 @@ def resolve_large_fire(
             f"target is at relative bearing {rb_from_attacker}"
         )
     if attacker.systems is not None:
-        ship_hs_single = sum(system_hull_spaces(s.token) for s in attacker.systems)
+        ship_hs_single = attacker.systems.total_hull_spaces()
         whs_single     = system_hull_spaces(weapon.value)
         mt_single      = mount_type(whs_single, ship_hs_single)
         if bearing_blocked(rb_from_attacker, mt_single):
@@ -314,7 +320,7 @@ def resolve_fire_all(
     events: list[FireEvent] = []
     missile_fired = False
 
-    ship_hs = sum(system_hull_spaces(s.token) for s in attacker.systems)
+    ship_hs = attacker.systems.total_hull_spaces()
 
     for system in attacker.systems:
         if not system.is_active():
