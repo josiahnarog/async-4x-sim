@@ -87,6 +87,10 @@ class ShipSystems:
     # Parsing
     # ---------------------------------------------------------------------
 
+    def __post_init__(self) -> None:
+        if not self.systems:
+            raise ValueError("ShipSystems cannot be empty")
+
     @staticmethod
     def parse(compact: str) -> ShipSystems:
         """Parse a compact system-track string.
@@ -158,6 +162,10 @@ class ShipSystems:
     def from_systems(systems: Iterable[System]) -> ShipSystems:
         return ShipSystems(tuple(systems))
 
+    def total_hull_spaces(self) -> int:
+        """Total hull-spaces occupied by all systems (active and destroyed)."""
+        return sum(system_hull_spaces(s.token) for s in self.systems)
+
     # ---------------------------------------------------------------------
     # Rendering / serialization
     # ---------------------------------------------------------------------
@@ -173,7 +181,7 @@ class ShipSystems:
           '↔' — side mount  (lateral arcs;  weapon HS > one-third ship HS)
           (no suffix) — turret mount (all non-blind-spot arcs)
         """
-        ship_hs = sum(system_hull_spaces(s.token) for s in self.systems)
+        ship_hs = self.total_hull_spaces()
 
         out: list[str] = []
         current_group: int | None = None
@@ -423,6 +431,10 @@ class ShipSystems:
              not a bay (base == 'B').
           3. Select pool[((roll - 1) % len(pool))], wrapping when roll > pool size.
           4. Returns the system's index in self.systems, or None if pool is empty.
+
+        Returns:
+          int  — index into self.systems of the targeted system (always active).
+          None — all eligible systems are already destroyed; the shot has no effect.
 
         'roll' is expected to be 1..10 (a d10 result).
         """

@@ -55,12 +55,12 @@ class BattleState:
     # Occupancy (ships only — squadrons do not block ship movement)
     # ------------------------------------------------------------------
 
-    def occupied_hexes(self, *, exclude: Iterable[ShipID] = ()) -> set[Hex]:
+    def ship_occupied_hexes(self, *, exclude: Iterable[ShipID] = ()) -> set[Hex]:
         ex = set(exclude)
         return {s.pos for sid, s in self.ships.items() if sid not in ex}
 
-    def is_occupied(self, hex_: Hex, *, exclude: Iterable[ShipID] = ()) -> bool:
-        return hex_ in self.occupied_hexes(exclude=exclude)
+    def is_ship_occupied(self, hex_: Hex, *, exclude: Iterable[ShipID] = ()) -> bool:
+        return hex_ in self.ship_occupied_hexes(exclude=exclude)
 
     # ------------------------------------------------------------------
     # Engagement helpers
@@ -104,6 +104,6 @@ class BattleState:
         if ship_id not in self.ships:
             raise KeyError(f"Unknown ship_id: {ship_id}")
         ship = self.ships[ship_id]
-        occupied = self.occupied_hexes(exclude=[ship_id])
+        occupied = self.ship_occupied_hexes(exclude=[ship_id])
         moved = ship.move_forward(steps, occupied=occupied)
         return self.with_ship(moved)

@@ -40,6 +40,10 @@ _SPINAL_BEARINGS = frozenset({0})
 _SIDE_BEARINGS   = frozenset({1, 2, 4, 5})
 
 
+_SPINAL_THRESHOLD_DENOM = 2   # weapon_hs > ship_hs / 2  → spinal
+_SIDE_THRESHOLD_DENOM   = 3   # weapon_hs > ship_hs / 3  → side
+
+
 def mount_type(weapon_hs: int, ship_hs: int) -> MountType:
     """Classify weapon mount by hull-space ratio.
 
@@ -49,9 +53,9 @@ def mount_type(weapon_hs: int, ship_hs: int) -> MountType:
     """
     if ship_hs <= 0:
         return MountType.TURRET
-    if weapon_hs * 2 > ship_hs:
+    if weapon_hs * _SPINAL_THRESHOLD_DENOM > ship_hs:
         return MountType.SPINAL
-    if weapon_hs * 3 > ship_hs:
+    if weapon_hs * _SIDE_THRESHOLD_DENOM > ship_hs:
         return MountType.SIDE
     return MountType.TURRET
 
@@ -73,7 +77,7 @@ def bearing_blocked(rb: int, mt: MountType) -> bool:
     return False
 
 
-def _absolute_bearing(dq: int, dr: int) -> int:
+def absolute_bearing(dq: int, dr: int) -> int:
     """Facing index (0-5) most closely aligned with vector (dq, dr).
 
     Converts axial hex delta to flat-top pixel space (r increases upward,
@@ -98,7 +102,7 @@ def relative_bearing(from_facing: int, dq: int, dr: int) -> int:
     0 = dead ahead, 1 = 60° right, 2 = 120° right,
     3 = dead astern, 4 = 120° left, 5 = 60° left.
     """
-    return (_absolute_bearing(dq, dr) - from_facing) % 6
+    return (absolute_bearing(dq, dr) - from_facing) % 6
 
 
 def arc_of(observer_facing: int, dq: int, dr: int) -> Arc:

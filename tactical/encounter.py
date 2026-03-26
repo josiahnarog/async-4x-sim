@@ -408,6 +408,18 @@ class Encounter:
                 f"Squadron {squadron_id!r} is docked and cannot receive orders"
             )
 
+        from tactical.turn_orders import RecoverOrder
+        if isinstance(order, RecoverOrder):
+            carrier_id = order.carrier_id
+            if carrier_id not in self.battle.ships:
+                raise KeyError(
+                    f"RecoverOrder references unknown carrier {carrier_id!r}"
+                )
+            if self.battle.ships[carrier_id].owner_id != side_id:
+                raise PermissionError(
+                    f"Carrier {carrier_id!r} is not controlled by side {side_id!r}"
+                )
+
         new_orders = {**self._squadron_orders, squadron_id: order}
         return dataclasses.replace(self, _squadron_orders=new_orders)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sim.hexgrid import Hex
+from sim.hexgrid import Hex, hex_distance
 from tactical.facing import Facing
 from tactical.movement import compute_move_forward
 from tactical.ship_systems import ShipSystems
@@ -39,14 +39,32 @@ class ShipState:
     # Invariants / helpers
     # ---------------------------------------------------------------------
 
-    def _clamped_charge(self, charge: int) -> int:
+    def __post_init__(self) -> None:
         if self.turn_cost <= 0:
-            raise ValueError("turn_cost must be >= 1")
+            raise ValueError(f"turn_cost must be >= 1, got {self.turn_cost!r}")
+        if not (0 <= self.turn_charge <= self.turn_cost):
+            raise ValueError(
+                f"turn_charge must be in [0, turn_cost={self.turn_cost}], "
+                f"got {self.turn_charge!r}"
+            )
+
+    def _clamped_charge(self, charge: int) -> int:
         if charge < 0:
             return 0
         if charge > self.turn_cost:
             return self.turn_cost
         return charge
+
+    def min_mp_to_reach(self, dest: Hex, dest_facing: Facing) -> int:
+        """Minimum MP required to move from current position/facing to dest at dest_facing.
+
+        Uses the same formula as Encounter.stage_move and move_ai._move_cost so
+        all reachability checks stay in sync.
+        """
+        dist = hex_distance(self.pos, dest)
+        facing_delta = (int(dest_facing) - int(self.facing)) % 6
+        turns_needed = min(facing_delta, 6 - facing_delta)
+        return max(dist, turns_needed * self.turn_cost - self.turn_charge)
 
     def can_turn(self) -> bool:
         return self.turn_charge >= self.turn_cost

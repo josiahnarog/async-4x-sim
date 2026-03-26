@@ -24,11 +24,10 @@ NOTE: _score_candidate() computes per-hex expected damage/incoming-damage
 
 from __future__ import annotations
 
-import math
 import random
 
 from sim.hexgrid import Hex, greedy_path, hex_distance
-from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, mount_type, bearing_blocked
+from tactical.arcs import absolute_bearing, relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, mount_type, bearing_blocked
 from tactical.ship_catalog import system_hull_spaces
 from tactical.battle_state import BattleState, ShipID
 from tactical.facing import Facing
@@ -47,36 +46,11 @@ _MAX_CANDIDATES = 24
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _absolute_bearing(dq: int, dr: int) -> int:
-    """Hex facing index (0-5) most closely aligned with vector (dq, dr).
-
-    Mirrors tactical.arcs._absolute_bearing without importing the private name.
-    """
-    if dq == 0 and dr == 0:
-        return 0
-    dx = 1.5 * dq
-    dy = -(math.sqrt(3) / 2 * dq + math.sqrt(3) * dr)
-    angle = math.atan2(dy, dx)
-    return round((angle + math.pi / 2) / (math.pi / 3)) % 6
-
-
 def _facing_toward(src: Hex, dest: Hex) -> Facing:
     """Facing that most closely points src toward dest."""
     if src == dest:
         return Facing.N
-    return Facing(_absolute_bearing(dest.q - src.q, dest.r - src.r))
-
-
-def _move_cost(ship: ShipState, dest: Hex, dest_facing: Facing) -> int:
-    """Minimum MP needed to reach dest at dest_facing.
-
-    Mirrors the direct-hex formula in Encounter.stage_move so the AI's
-    reachability checks agree with the encounter engine.
-    """
-    dist = hex_distance(ship.pos, dest)
-    facing_delta = (int(dest_facing) - int(ship.facing)) % 6
-    turns_needed = min(facing_delta, 6 - facing_delta)
-    return max(dist, turns_needed * ship.turn_cost - ship.turn_charge)
+    return Facing(absolute_bearing(dest.q - src.q, dest.r - src.r))
 
 
 def _preferred_range(ship: ShipState) -> int:
@@ -121,7 +95,7 @@ def _generate_candidates(
     position with all 6 possible facings is also included (so the AI can
     choose to "turn in place" if that improves arc coverage).
     """
-    occupied = battle.occupied_hexes(exclude=[ship.ship_id])
+    occupied = battle.ship_occupied_hexes(exclude=[ship.ship_id])
     enemy_ships = [s for s in battle.ships.values() if s.owner_id != ship.owner_id]
 
     if not enemy_ships:
@@ -138,7 +112,7 @@ def _generate_candidates(
         seen.add(key)
         if dest in occupied:
             return
-        cost = _move_cost(ship, dest, facing)
+        cost = ship.min_mp_to_reach(dest, facing)
         if cost > cap:
             return
         candidates.append((dest, facing))
@@ -196,7 +170,7 @@ def _score_candidate(
 
     outgoing = 0.0
     if ship.systems is not None:
-        ship_hs = sum(system_hull_spaces(s.token) for s in ship.systems)
+        ship_hs = ship.systems.total_hull_spaces()
         for enemy in enemy_ships:
             dq = enemy.pos.q - dest.q
             dr = enemy.pos.r - dest.r
