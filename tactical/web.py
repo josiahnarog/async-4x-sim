@@ -1140,8 +1140,13 @@ async def firepower_map(game_id: str, ship_id: str):
             if ev > 0:
                 hexes.append({"q": h.q, "r": h.r, "ev": round(ev, 3)})
 
-    max_ev = max((x["ev"] for x in hexes), default=1.0)
-    return {"hexes": hexes, "max_ev": max_ev}
+    if hexes:
+        evs = sorted(x["ev"] for x in hexes)
+        p90_idx = int(len(evs) * 0.90)
+        scale_ev = evs[min(p90_idx, len(evs) - 1)]
+    else:
+        scale_ev = 1.0
+    return {"hexes": hexes, "max_ev": max(scale_ev, 1e-6)}
 
 
 # ---------------------------------------------------------------------------

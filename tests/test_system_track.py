@@ -18,10 +18,10 @@ def test_parse_supports_camel_case_tokens():
 def test_apply_damage_left_to_right_and_marks_destroyed():
     t0 = ShipSystems.parse("SA(II)L")
     t1 = t0.apply_damage(2)
-    assert t1.render_compact() == "!S!A(II)L↕"
+    assert t1.render_compact() == "!S!A(II)L↔"
 
     t2 = t1.apply_damage(1)
-    assert t2.render_compact() == "!S!A(!II)L↕"
+    assert t2.render_compact() == "!S!A(!II)L↔"
     # One engine in the room is destroyed — the whole room is inactive.
     assert t2.movement_points() == 0
 

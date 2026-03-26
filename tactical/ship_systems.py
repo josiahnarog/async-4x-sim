@@ -169,8 +169,8 @@ class ShipSystems:
         letters remain available for system modifiers.
 
         Weapon systems are annotated with their mount type suffix:
-          '>' — spinal mount (forward-only; weapon HS > half ship HS)
-          '↕' — side mount  (lateral arcs;  weapon HS > one-third ship HS)
+          '^' — spinal mount (forward-only; weapon HS > half ship HS)
+          '↔' — side mount  (lateral arcs;  weapon HS > one-third ship HS)
           (no suffix) — turret mount (all non-blind-spot arcs)
         """
         ship_hs = sum(system_hull_spaces(s.token) for s in self.systems)
@@ -203,9 +203,9 @@ class ShipSystems:
                 whs = system_hull_spaces(b.token)
                 mt  = mount_type(whs, ship_hs)
                 if mt == MountType.SPINAL:
-                    token_str += ">"
+                    token_str += "^"
                 elif mt == MountType.SIDE:
-                    token_str += "↕"
+                    token_str += "↔"
             out.append(token_str)
 
         close_group()
