@@ -743,23 +743,27 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
                 sys.token if i in revealed else "?"
                 for i, sys in enumerate(s.systems)
             ] if s.systems else []
+            hull_class = s.hull_type.designation if s.hull_type else "??"
             result.append({
                 "id": sid,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
                 "facing": int(s.facing),
+                "hull_class": hull_class,
                 "systems": sys_list,
                 "is_destroyed": is_destroyed,
                 "detection": 2,
             })
         else:
+            hull_class = s.hull_type.designation if s.hull_type else "??"
             result.append({
                 "id": sid,
                 "owner": s.owner_id,
                 "q": s.pos.q,
                 "r": s.pos.r,
                 "facing": int(s.facing),
+                "hull_class": hull_class,
                 "is_destroyed": is_destroyed,
                 "detection": 3,
                 "mp": s.mp,

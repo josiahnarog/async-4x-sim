@@ -349,12 +349,25 @@
       return null;
     }
 
-    // ---- Left-click: select own unit, or cancel anchor ----
+    // ---- Left-click: select own unit; confirm facing when dest is anchored ----
     function handleCanvasClick(canvasPx, canvasPy) {
-      // If we're in anchor mode, left-click cancels back to just "unit selected".
-      if (moveDest) { moveDest = null; render(); return; }
-
       const { wx, wy } = canvasToWorld(canvasPx, canvasPy);
+
+      // If a destination is anchored, left-click picks facing and submits the move.
+      if (moveDest && selectedUnit) {
+        const destPx = hexToPixel(moveDest.q, moveDest.r, 0, 0);
+        const dx = wx - destPx.x, dy = wy - destPx.y;
+        const facing = angleToFacing(dx, dy);
+        const { costs } = computeReachability(selectedUnit);
+        if (costs.has(`${moveDest.q},${moveDest.r},${facing}`)) {
+          submitCmd(`move ${selectedUnit.id} ${moveDest.q} ${moveDest.r} ${facing}`);
+        }
+        moveDest = null;
+        selectedUnit = null;
+        render();
+        return;
+      }
+
       const hitUnit = findUnitAt(wx, wy, computeJitter());
 
       if (!hitUnit) { selectedUnit = null; firepowerMap = null; render(); return; }
@@ -387,31 +400,15 @@
 
       const { wx, wy } = canvasToWorld(canvasPx, canvasPy);
 
-      // ---- MOVE phase: two-stage anchor + facing pick ----
+      // ---- MOVE phase: right-click anchors destination hex ----
       if (PHASE_NAME === "move_submission" && selectedUnit.type === "ship") {
-        if (!moveDest) {
-          // First right-click: anchor a destination hex.
-          const fh = worldToHex(wx, wy);
-          const h  = hexRound(fh.q, fh.r);
-          // Only anchor if it's a reachable hex (not occupied, within range).
-          const { reach } = computeReachability(selectedUnit);
-          if (reach.has(`${h.q},${h.r}`)) {
-            moveDest = { q: h.q, r: h.r };
-          }
-          render();
-        } else {
-          // Second right-click: snap to nearest facing and submit.
-          const destPx = hexToPixel(moveDest.q, moveDest.r, 0, 0);
-          const dx = wx - destPx.x, dy = wy - destPx.y;
-          const facing = angleToFacing(dx, dy);
-          const { costs } = computeReachability(selectedUnit);
-          if (costs.has(`${moveDest.q},${moveDest.r},${facing}`)) {
-            submitCmd(`move ${selectedUnit.id} ${moveDest.q} ${moveDest.r} ${facing}`);
-          }
-          moveDest = null;
-          selectedUnit = null;
-          render();
+        const fh = worldToHex(wx, wy);
+        const h  = hexRound(fh.q, fh.r);
+        const { reach } = computeReachability(selectedUnit);
+        if (reach.has(`${h.q},${h.r}`)) {
+          moveDest = { q: h.q, r: h.r };
         }
+        render();
         return;
       }
 
@@ -772,16 +769,17 @@
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Label
+      // Hull class inside circle
       ctx.fillStyle = color;
-      ctx.font = "bold 10px monospace";
+      ctx.font = "bold 9px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(ship.id, x, y + 1);
+      ctx.fillText(ship.hull_class || "??", x, y + 1);
 
-      ctx.fillStyle = "#aaaaaa";
+      // Unit ID below circle
+      ctx.fillStyle = "#cccccc";
       ctx.font = "9px monospace";
-      ctx.fillText(FACING_NAMES[ship.facing], x, y + SIZE * 0.62);
+      ctx.fillText(ship.id, x, y + SIZE * 0.62);
     }
 
     function drawSquadronPath(ctx, pathData, cx, cy) {
