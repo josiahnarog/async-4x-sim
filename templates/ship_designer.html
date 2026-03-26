@@ -129,8 +129,9 @@
     .track-tile:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
     .track-tile.dragging { opacity: 0.4; transform: scale(0.95); }
     .track-tile.drag-target { border-color: #a8d8ea; box-shadow: 0 0 0 2px #a8d8ea44; }
-    .tile-code { font-size: 0.9em; font-weight: bold; }
-    .tile-hs   { font-size: 0.65em; color: rgba(255,255,255,0.55); margin-top: 1px; }
+    .tile-code  { font-size: 0.9em; font-weight: bold; }
+    .tile-mount { font-size: 0.55em; color: rgba(255,255,255,0.45); margin-top: 1px; letter-spacing: 0.02em; }
+    .tile-hs    { font-size: 0.65em; color: rgba(255,255,255,0.55); margin-top: 1px; }
     .tile-remove {
       position: absolute; top: -6px; right: -6px;
       width: 16px; height: 16px; border-radius: 50%;
@@ -364,6 +365,33 @@ const FIGHTER_INTERNAL_WEAPONS = [
   {code: "F", label: "F — Force Beam"},
   {code: "E", label: "E — Energy Beam"},
 ];
+
+// ---------------------------------------------------------------------------
+// Mount-type helpers (mirrors tactical/arcs.py mount_type logic)
+// ---------------------------------------------------------------------------
+const WEAPON_CODES = new Set(["L","E","F","N","R","G","D"]);
+
+function totalShipHs() {
+  let total = 0;
+  for (const slot of track) {
+    if (slot.type === "shield_room" || slot.type === "armor_room") {
+      total += slot.count || 0;
+    } else if (slot.type === "engine_room") {
+      total += Math.max(1, slot.count || 1);
+    } else if (slot.type === "system") {
+      const s = SYS_MAP[slot.code];
+      total += s ? (s.hull_spaces || 0) : 0;
+    }
+  }
+  return total;
+}
+
+function mountType(weaponHs, shipHs) {
+  if (shipHs === 0) return "turret";
+  if (weaponHs * 2 > shipHs) return "spinal";
+  if (weaponHs * 3 > shipHs) return "broadside";
+  return "turret";
+}
 
 // ---------------------------------------------------------------------------
 // System color palette
@@ -601,7 +629,14 @@ function trackToSystemString() {
       const n = Math.max(1, slot.count || 1);
       parts.push("(" + "I".repeat(n) + ")");
     } else if (slot.type === "system") {
-      parts.push(slot.code);
+      let code = slot.code;
+      if (WEAPON_CODES.has(slot.code)) {
+        const wHs = (SYS_MAP[slot.code]?.hull_spaces) || 0;
+        const mt  = mountType(wHs, totalShipHs());
+        if (mt === "spinal")    code += "^";
+        else if (mt === "broadside") code += "↔";
+      }
+      parts.push(code);
     }
   }
   return parts.join("");
@@ -684,8 +719,16 @@ function renderTrack() {
     } else {
       const s = SYS_MAP[slot.code] || {code:slot.code, hull_spaces:"?", cost:"?"};
       tile.style.cssText = sysStyle(slot.code);
+      let mountLine = "";
+      if (WEAPON_CODES.has(slot.code)) {
+        const wHs = typeof s.hull_spaces === "number" ? s.hull_spaces : 0;
+        const mt  = mountType(wHs, totalShipHs());
+        const label = mt === "spinal" ? "Spinal ^" : mt === "broadside" ? "Broadside ↔" : "Turret";
+        mountLine = `<div class="tile-mount">${label}</div>`;
+      }
       tile.innerHTML = `
         <div class="tile-code">${slot.code}</div>
+        ${mountLine}
         <div class="tile-hs">${s.hull_spaces} HS</div>
         <div class="tile-remove" onclick="removeSlot(${idx})">✕</div>
       `;
