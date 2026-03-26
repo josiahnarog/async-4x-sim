@@ -60,6 +60,7 @@ class WeaponType(str, Enum):
     NEEDLE_BEAM      = "N"  # Needle Beam — penetrates shields/armor; random deep system hit
     STANDARD_MISSILE = "R"  # Standard Missile
     GUN              = "G"  # Autocannon — fighter primary weapon, +2 vs fighters
+    RAIL_GUN         = "K"  # Rail Gun (Kinetic) — high close-range damage, no special rules
 
 
 class WeaponArc(Enum):
@@ -199,6 +200,15 @@ GUN = WeaponSpec(
 )
 
 
+RAIL_GUN = WeaponSpec(
+    type=WeaponType.RAIL_GUN,
+    name="Rail Gun",
+    rate_of_fire=1,
+    to_hit=RangeTable.from_list([7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 5, 5, 5, 5, "-"]),
+    damage=RangeTable.from_list([3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, "-"]),
+)
+
+
 WEAPONS: dict[WeaponType, WeaponSpec] = {
     WeaponType.ELECTRON_BEAM:    ELECTRON_BEAM,
     WeaponType.LASER:            LASER,
@@ -206,4 +216,5 @@ WEAPONS: dict[WeaponType, WeaponSpec] = {
     WeaponType.NEEDLE_BEAM:      NEEDLE_BEAM,
     WeaponType.STANDARD_MISSILE: STANDARD_MISSILE,
     WeaponType.GUN:              GUN,
+    WeaponType.RAIL_GUN:         RAIL_GUN,
 }
