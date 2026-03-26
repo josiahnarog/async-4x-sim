@@ -131,11 +131,10 @@ def choose_fire_orders(
                 continue
 
             dist = hex_distance(ship.pos, target.pos)
-            score = (
-                _expected_damage(ship, target, dist)
-                * _target_priority(target, profile)
-                + rng.gauss(0, profile.noise)
-            )
+            ev = _expected_damage(ship, target, dist)
+            if ev <= 0:
+                continue  # no weapon can reach — don't waste ammo
+            score = ev * _target_priority(target, profile) + rng.gauss(0, profile.noise)
             if score > best_score:
                 best_score = score
                 best_target = t_id
