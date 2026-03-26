@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Iterator
 
-from tactical.weapons import WeaponSpec, WeaponType
+from tactical.weapons import WEAPONS, WeaponSpec, WeaponType
 from tactical.ship_catalog import system_hull_spaces
 from tactical.arcs import mount_type, MountType
 
@@ -13,10 +13,15 @@ _WEAPON_TYPE_BASES: frozenset[str] = frozenset(wt.value for wt in WeaponType)
 
 
 # Default charges loaded into each system when parsed from compact notation.
+# Weapon entries are derived from WeaponSpec.default_charges so they stay in
+# sync when weapons are added or modified.  Non-weapon ammo-bearing systems
+# (e.g. Mg) are listed here directly since they have no WeaponSpec.
 _DEFAULT_CHARGES: dict[str, int] = {
-    "R":  10,   # Standard Missile launcher: 10 internal rounds
-    "Mg": 50,   # Magazine: 50 shared rounds
+    wt.value: spec.default_charges
+    for wt, spec in WEAPONS.items()
+    if spec.default_charges > 0
 }
+_DEFAULT_CHARGES["Mg"] = 50   # Magazine: 50 shared rounds (not a WeaponType)
 
 # Maps weapon base code → magazine token that feeds it.
 _WEAPON_MAGAZINE: dict[str, str] = {"R": "Mg"}

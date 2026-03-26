@@ -139,6 +139,11 @@ class WeaponSpec:
     ordnance_mp_penalty: int = 0
     ordnance_mvr_penalty_per_shot: int = 0
 
+    # Default charges loaded into each launcher when parsed from compact notation.
+    # Non-zero only for ammo-bearing weapons (currently R).  Magazine (Mg) charges
+    # are tracked separately in ship_systems since Mg is not a WeaponType.
+    default_charges: int = 0
+
     def damage_at(self, rng: int) -> int:
         v = self.damage.at(rng)
         assert v is not None
@@ -201,8 +206,9 @@ STANDARD_MISSILE = WeaponSpec(
     requires_ammo=True,
     can_target_fighters=False,
     # Ordnance penalties: a loaded missile slows and unmaneuverable fighters.
-    ordnance_mp_penalty=2,          # -2 MP flat while any R remains loaded
+    ordnance_mp_penalty=2,           # -2 MP flat while any R remains loaded
     ordnance_mvr_penalty_per_shot=1, # -1 MVR per R shot still carried
+    default_charges=10,              # 10 internal rounds per launcher
 )
 
 GUN = WeaponSpec(
