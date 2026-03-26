@@ -769,6 +769,7 @@ def _ships_json(session: GameSession, view: str = "master") -> str:
                 "mp": s.mp,
                 "turn_cost": s.turn_cost,
                 "turn_charge": s.turn_charge,
+                "systems_str": s.systems.render_compact() if s.systems else "",
             })
     return json.dumps(result)
 

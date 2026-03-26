@@ -32,6 +32,9 @@
     .btn-commit { background: #2a1a3a; border-color: #5a3a6a; color: #c8a8e8; font-weight: bold; }
     .btn-commit:hover { background: #3a2a5a; }
     .action-sep { color: #555; margin: 0 4px; }
+    .unit-info-id   { color: #a8d8ea; font-weight: bold; }
+    .unit-info-sys  { color: #c8f0c8; word-break: break-all; }
+    .unit-info-meta { color: #aaa; }
   </style>
 </head>
 <body>
@@ -67,13 +70,16 @@
   <div class="row">
     <div class="col-map">
       <h2>Map <span style="font-size:0.8em;font-weight:normal;color:#888">(drag to pan · scroll to zoom · left-click to select · right-click to command)</span></h2>
-      <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <div id="unit-info-panel" style="width:640px;min-height:48px;background:#0d0d1a;border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:0.82em;color:#888;font-family:inherit;box-sizing:border-box;">
+        <span style="color:#555;font-style:italic">No unit selected</span>
+      </div>
+      <canvas id="hexmap" width="640" height="640" style="cursor:grab"></canvas>
+      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
         <button id="btn-zoom-in"  onclick="adjustZoom(1.25)">＋</button>
         <button id="btn-zoom-out" onclick="adjustZoom(0.8)">－</button>
         <button onclick="resetView()">⌖ Reset</button>
         <span id="zoom-label" style="font-size:0.8em;color:#888;margin-left:4px">100%</span>
       </div>
-      <canvas id="hexmap" width="640" height="640" style="cursor:grab"></canvas>
 
       <h2>Units</h2>
       <pre class="ships-pre">{{ units_text }}</pre>
@@ -162,6 +168,36 @@
 
     // ---- Firepower heat map state (COMBAT_SUBMISSION) ----
     let firepowerMap = null;   // { hexes: [{q,r,ev}], maxEv: float } or null
+
+    function updateUnitInfoPanel() {
+      const panel = document.getElementById("unit-info-panel");
+      if (!selectedUnit) {
+        panel.innerHTML = '<span style="color:#555;font-style:italic">No unit selected</span>';
+        return;
+      }
+      const u = selectedUnit;
+      const FACING_NAMES = ["N","NE","SE","S","SW","NW"];
+      if (u.type === "ship") {
+        const facing = FACING_NAMES[u.facing] ?? "?";
+        const mp     = u.mp    != null ? `  MP ${u.mp}` : "";
+        const det    = u.detection ?? 3;
+        let sysLine  = "";
+        if (det >= 3 && u.systems_str != null) {
+          sysLine = `<div class="unit-info-sys">${u.systems_str}</div>`;
+        } else if (det === 2 && u.systems) {
+          sysLine = `<div class="unit-info-sys">${u.systems.join(" ")}</div>`;
+        }
+        panel.innerHTML =
+          `<span class="unit-info-id">${u.id}</span>`
+          + `<span class="unit-info-meta">  ${u.hull_class || ""}  (${u.q},${u.r})  face ${facing}${mp}</span>`
+          + sysLine;
+      } else {
+        // Squadron
+        panel.innerHTML =
+          `<span class="unit-info-id">${u.id}</span>`
+          + `<span class="unit-info-meta">  Squadron  (${u.q},${u.r})</span>`;
+      }
+    }
 
     function fetchFirepowerMap(shipId) {
       fetch(`/tactical/game/{{ game_id }}/firepower-map/${shipId}`)
@@ -364,13 +400,14 @@
         }
         moveDest = null;
         selectedUnit = null;
+        updateUnitInfoPanel();
         render();
         return;
       }
 
       const hitUnit = findUnitAt(wx, wy, computeJitter());
 
-      if (!hitUnit) { selectedUnit = null; firepowerMap = null; render(); return; }
+      if (!hitUnit) { selectedUnit = null; firepowerMap = null; updateUnitInfoPanel(); render(); return; }
 
       // On player views only own units are selectable; master can select any.
       const selectable = VIEW === "master" || hitUnit.owner === VIEW;
@@ -391,6 +428,7 @@
         }
       }
       _reachCache = null;  // invalidate BFS cache for new selection
+      updateUnitInfoPanel();
       render();
     }
 
@@ -433,7 +471,7 @@
         }
       }
 
-      if (cmd) { submitCmd(cmd); selectedUnit = null; moveDest = null; render(); }
+      if (cmd) { submitCmd(cmd); selectedUnit = null; moveDest = null; updateUnitInfoPanel(); render(); }
     }
 
     function submitCmd(cmd) {
@@ -1161,7 +1199,7 @@
     document.addEventListener("keydown", e => {
       if (e.key === "Escape") {
         if (moveDest)          { moveDest = null; render(); }
-        else if (selectedUnit) { selectedUnit = null; firepowerMap = null; render(); }
+        else if (selectedUnit) { selectedUnit = null; firepowerMap = null; updateUnitInfoPanel(); render(); }
       }
     });
 
