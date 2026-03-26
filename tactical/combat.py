@@ -9,7 +9,8 @@ from tactical.weapons import WEAPONS, WeaponType, WeaponSpec, WeaponArc
 from tactical.missile_volley import resolve_missile_volley
 from tactical.attack_context import AttackContext, TargetClass, ToHitMod
 from tactical.to_hit import combine_mods, resolve_to_hit, roll_hits_target
-from tactical.arcs import arc_of, relative_bearing, Arc, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, assert_can_fire
+from tactical.arcs import arc_of, relative_bearing, Arc, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, assert_can_fire, mount_type, bearing_blocked
+from tactical.ship_catalog import system_hull_spaces
 
 
 class RNG(Protocol):
@@ -61,12 +62,22 @@ def resolve_large_fire(
     dr = target.pos.r - attacker.pos.r
     rb_from_attacker = assert_can_fire(int(attacker.facing), attacker.pos, target.pos, attacker_id, target_id)
 
-    # Per-weapon arc restriction (e.g. FORWARD-only weapons).
+    # Per-weapon arc restriction: WeaponArc.FORWARD spec takes precedence,
+    # then mount-type arc derived from weapon HS / ship HS ratio.
     if spec.firing_arc == WeaponArc.FORWARD and rb_from_attacker != 0:
         raise ValueError(
             f"{weapon.value} weapon on {attacker_id} has FORWARD-only arc; "
             f"target is at relative bearing {rb_from_attacker}"
         )
+    if attacker.systems is not None:
+        ship_hs_single = sum(system_hull_spaces(s.token) for s in attacker.systems)
+        whs_single     = system_hull_spaces(weapon.value)
+        mt_single      = mount_type(whs_single, ship_hs_single)
+        if bearing_blocked(rb_from_attacker, mt_single):
+            raise ValueError(
+                f"{weapon.value} on {attacker_id} is {mt_single.value}-mounted; "
+                f"target is at relative bearing {rb_from_attacker}"
+            )
 
     # Arc modifiers: bonus to-hit when attacking from the target's blind spot.
     attacker_in_target_rear = arc_of(int(target.facing), -dq, -dr) == Arc.REAR
@@ -300,6 +311,8 @@ def resolve_fire_all(
     events: list[FireEvent] = []
     missile_fired = False
 
+    ship_hs = sum(system_hull_spaces(s.token) for s in attacker.systems)
+
     for system in attacker.systems:
         if not system.is_active():
             continue
@@ -307,10 +320,16 @@ def resolve_fire_all(
         if weapon_type is None:
             continue
 
-        # Per-weapon arc restriction (e.g. FORWARD-only weapons).
         spec = WEAPONS[weapon_type]
+
+        # Per-weapon arc restriction: WeaponArc.FORWARD takes precedence,
+        # then mount-type arc derived from weapon HS / ship HS ratio.
         if spec.firing_arc == WeaponArc.FORWARD and rb != 0:
-            continue  # this weapon cannot reach that bearing
+            continue
+        whs = system_hull_spaces(system.token)
+        mt  = mount_type(whs, ship_hs)
+        if bearing_blocked(rb, mt):
+            continue  # mount arc restricts this weapon from bearing rb
 
         if weapon_type == WeaponType.STANDARD_MISSILE:
             if missile_fired:

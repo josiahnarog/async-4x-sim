@@ -24,6 +24,55 @@ REAR_ARC_TO_HIT_BONUS: int = 2
 REAR_BEARINGS: frozenset[int] = frozenset({3})  # dead astern only (60° blind spot)
 
 
+class MountType(Enum):
+    """Firing-arc classification derived from weapon HS / ship HS ratio.
+
+    TURRET — can fire into all non-blind-spot bearings (0, 1, 2, 4, 5).
+    SIDE   — lateral only; bearings 1, 2, 4, 5 (not forward or astern).
+    SPINAL — forward only; bearing 0.
+    """
+    TURRET = "turret"
+    SIDE   = "side"
+    SPINAL = "spinal"
+
+
+_SPINAL_BEARINGS = frozenset({0})
+_SIDE_BEARINGS   = frozenset({1, 2, 4, 5})
+
+
+def mount_type(weapon_hs: int, ship_hs: int) -> MountType:
+    """Classify weapon mount by hull-space ratio.
+
+    > 1/2 ship HS → spinal (forward-only).
+    > 1/3 ship HS → side mount (lateral arcs only).
+    ≤ 1/3 ship HS → turret (all non-blind-spot arcs).
+    """
+    if ship_hs <= 0:
+        return MountType.TURRET
+    if weapon_hs * 2 > ship_hs:
+        return MountType.SPINAL
+    if weapon_hs * 3 > ship_hs:
+        return MountType.SIDE
+    return MountType.TURRET
+
+
+def bearing_blocked(rb: int, mt: MountType) -> bool:
+    """Return True if firing at relative bearing rb is blocked for mount type mt.
+
+    Always blocks the blind spot (bearing 3).  Additional restrictions:
+      SPINAL — only bearing 0 allowed.
+      SIDE   — bearings 1, 2, 4, 5 allowed (not 0 or 3).
+      TURRET — bearings 0, 1, 2, 4, 5 allowed (not 3).
+    """
+    if rb in REAR_BEARINGS:
+        return True
+    if mt == MountType.SPINAL:
+        return rb not in _SPINAL_BEARINGS
+    if mt == MountType.SIDE:
+        return rb not in _SIDE_BEARINGS
+    return False
+
+
 def _absolute_bearing(dq: int, dr: int) -> int:
     """Facing index (0-5) most closely aligned with vector (dq, dr).
 

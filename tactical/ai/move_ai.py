@@ -28,7 +28,8 @@ import math
 import random
 
 from sim.hexgrid import Hex, greedy_path, hex_distance
-from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS
+from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, mount_type, bearing_blocked
+from tactical.ship_catalog import system_hull_spaces
 from tactical.battle_state import BattleState, ShipID
 from tactical.facing import Facing
 from tactical.ship_state import ShipState
@@ -195,6 +196,7 @@ def _score_candidate(
 
     outgoing = 0.0
     if ship.systems is not None:
+        ship_hs = sum(system_hull_spaces(s.token) for s in ship.systems)
         for enemy in enemy_ships:
             dq = enemy.pos.q - dest.q
             dr = enemy.pos.r - dest.r
@@ -216,6 +218,9 @@ def _score_candidate(
                 try:
                     spec = WEAPONS[WeaponType(sys.base)]
                 except (KeyError, ValueError):
+                    continue
+                whs = system_hull_spaces(sys.token)
+                if bearing_blocked(rb, mount_type(whs, ship_hs)):
                     continue
                 to_hit = spec.to_hit_at(dist)
                 damage = spec.damage.at(dist)

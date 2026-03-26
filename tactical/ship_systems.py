@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Iterator
 
-from tactical.weapons import WeaponSpec
+from tactical.weapons import WeaponSpec, WeaponType
+from tactical.ship_catalog import system_hull_spaces
+from tactical.arcs import mount_type, MountType
+
+_WEAPON_TYPE_BASES: frozenset[str] = frozenset(wt.value for wt in WeaponType)
 
 
 # Default charges loaded into each system when parsed from compact notation.
@@ -163,7 +167,14 @@ class ShipSystems:
 
         Destroyed systems are prefixed with '!' so lowercase
         letters remain available for system modifiers.
+
+        Weapon systems are annotated with their mount type suffix:
+          '>' — spinal mount (forward-only; weapon HS > half ship HS)
+          '↕' — side mount  (lateral arcs;  weapon HS > one-third ship HS)
+          (no suffix) — turret mount (all non-blind-spot arcs)
         """
+        ship_hs = sum(system_hull_spaces(s.token) for s in self.systems)
+
         out: list[str] = []
         current_group: int | None = None
 
@@ -187,6 +198,14 @@ class ShipSystems:
             # Annotate hangar bays with occupant (- when empty).
             elif b.token == "Bh":
                 token_str += f"[{b.occupant if b.occupant is not None else '-'}]"
+            # Annotate weapons with mount-type suffix (spinal/side only).
+            if b.base in _WEAPON_TYPE_BASES:
+                whs = system_hull_spaces(b.token)
+                mt  = mount_type(whs, ship_hs)
+                if mt == MountType.SPINAL:
+                    token_str += ">"
+                elif mt == MountType.SIDE:
+                    token_str += "↕"
             out.append(token_str)
 
         close_group()

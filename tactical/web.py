@@ -1099,12 +1099,14 @@ async def firepower_map(game_id: str, ship_id: str):
         return {"hexes": [], "max_ev": 1.0}
 
     from sim.hexgrid import Hex, hex_distance
-    from tactical.arcs import relative_bearing, REAR_BEARINGS
+    from tactical.arcs import relative_bearing, REAR_BEARINGS, mount_type, bearing_blocked
     from tactical.weapons import WEAPONS, WeaponType
+    from tactical.ship_catalog import system_hull_spaces
 
     _WEAPON_BASES = frozenset(wt.value for wt in WeaponType)
     MAX_RANGE = 14
 
+    ship_hs = sum(system_hull_spaces(s.token) for s in ship.systems)
     hexes: list[dict] = []
 
     for dq in range(-MAX_RANGE, MAX_RANGE + 1):
@@ -1125,6 +1127,9 @@ async def firepower_map(game_id: str, ship_id: str):
                 try:
                     spec = WEAPONS[WeaponType(sys.base)]
                 except (KeyError, ValueError):
+                    continue
+                whs = system_hull_spaces(sys.token)
+                if bearing_blocked(rb, mount_type(whs, ship_hs)):
                     continue
                 to_hit = spec.to_hit_at(dist)
                 damage = spec.damage.at(dist)

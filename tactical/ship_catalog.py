@@ -51,6 +51,15 @@ SYSTEMS: list[SystemEntry] = [
 SYSTEMS_BY_CODE: dict[str, SystemEntry] = {s.code: s for s in SYSTEMS}
 
 
+def system_hull_spaces(token: str) -> int:
+    """Hull spaces occupied by one system with the given token (e.g. 'Bh', 'L', 'Mg').
+
+    Returns 0 for unknown tokens so callers can sum safely without special-casing.
+    """
+    entry = SYSTEMS_BY_CODE.get(token)
+    return entry.hull_spaces if entry is not None else 0
+
+
 # ---------------------------------------------------------------------------
 # Hull type catalog
 # ---------------------------------------------------------------------------

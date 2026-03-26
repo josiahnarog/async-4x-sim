@@ -18,7 +18,8 @@ names or hull designations.  New weapons and hull types extend automatically.
 from __future__ import annotations
 
 from sim.hexgrid import hex_distance
-from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS
+from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, mount_type, bearing_blocked
+from tactical.ship_catalog import system_hull_spaces
 from tactical.battle_state import BattleState
 from tactical.weapons import WEAPONS, WeaponType
 from tactical.ai.profile import AIProfile
@@ -134,6 +135,7 @@ def expected_firepower_at(
             continue
         pos     = from_hex    if from_hex    is not None else ship.pos
         facing  = from_facing if from_facing is not None else int(ship.facing)
+        ship_hs = sum(system_hull_spaces(s.token) for s in ship.systems)
 
         for enemy in enemy_ships:
             dq = enemy.pos.q - pos.q
@@ -156,6 +158,9 @@ def expected_firepower_at(
                 try:
                     spec = WEAPONS[WeaponType(sys.base)]
                 except (KeyError, ValueError):
+                    continue
+                whs = system_hull_spaces(sys.token)
+                if bearing_blocked(rb, mount_type(whs, ship_hs)):
                     continue
                 to_hit = spec.to_hit_at(dist)
                 damage = spec.damage.at(dist)

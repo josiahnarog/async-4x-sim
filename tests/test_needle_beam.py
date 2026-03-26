@@ -154,13 +154,13 @@ class TestDestroySystemAt:
 # ---------------------------------------------------------------------------
 
 class TestResolveLargeFireNeedle:
-    def _attacker(self, systems="N") -> ShipState:
+    def _attacker(self, systems="SSSSSSSSN") -> ShipState:
         return _ship("A1", "A", Hex(0, 0), systems)
 
     def _target(self, systems="SSSAAALL") -> ShipState:
         return _ship("B1", "B", Hex(2, 0), systems, facing=Facing.S)
 
-    def _battle(self, attacker_systems="N", target_systems="SSSAAALL") -> BattleState:
+    def _battle(self, attacker_systems="SSSSSSSSN", target_systems="SSSAAALL") -> BattleState:
         return BattleState(
             ships={
                 "A1": self._attacker(attacker_systems),
@@ -289,7 +289,7 @@ class TestNeedleBeamInEncounter:
 
     def test_needle_hit_bypasses_shields_in_encounter(self):
         """End-to-end: N beam at range 2 bypasses shields and destroys a deep system."""
-        enc = self._reach_combat_submission("N", "S" * 10 + "L")
+        enc = self._reach_combat_submission("SSSSSSSSN", "S" * 10 + "L")
         enc = enc.stage_fire("A", "a1", "b1")
 
         # Use RNG that: hits (roll 1 ≤ 8), needle_roll=1 → first eligible (L at idx 10)
@@ -304,11 +304,11 @@ class TestNeedleBeamInEncounter:
 
     def test_needle_hit_both_sides_simultaneous(self):
         """Both ships fire N beams; simultaneity maintained (each fires at snapshot)."""
-        enc = self._reach_combat_submission("N", "N")
+        enc = self._reach_combat_submission("SSSSSSSSN", "SSSSSSSSN")
         enc = enc.stage_fire("A", "a1", "b1")
         enc = enc.stage_fire("B", "b1", "a1")
         enc2, _ = enc.commit_fire("A", Sequence(1, 1))
         enc2, _ = enc2.commit_fire("B", Sequence(1, 1))
-        # Both ships have no S/A and no bays → no eligible → no damage
+        # Both N beams are turret-mounted (12 HS total) and fire at bearing 1 — valid.
         # (just ensuring no crash here — phase may be anything including COMPLETE)
         assert enc2.phase is not None

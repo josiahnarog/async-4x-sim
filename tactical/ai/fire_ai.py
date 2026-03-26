@@ -20,7 +20,8 @@ from __future__ import annotations
 import random
 
 from sim.hexgrid import hex_distance
-from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS
+from tactical.arcs import relative_bearing, REAR_BEARINGS, REAR_ARC_TO_HIT_BONUS, mount_type, bearing_blocked
+from tactical.ship_catalog import system_hull_spaces
 from tactical.battle_state import BattleState, ShipID
 from tactical.turn_orders import ShipFireOrder
 from tactical.weapons import WEAPONS, WeaponType
@@ -61,6 +62,13 @@ def _expected_damage(attacker, target, dist: int) -> float:
     e_rb = relative_bearing(int(target.facing), edq, edr)
     arc_bonus = REAR_ARC_TO_HIT_BONUS if e_rb in REAR_BEARINGS else 0
 
+    rb = relative_bearing(
+        int(attacker.facing),
+        target.pos.q - attacker.pos.q,
+        target.pos.r - attacker.pos.r,
+    )
+    ship_hs = sum(system_hull_spaces(s.token) for s in attacker.systems)
+
     total = 0.0
     for sys in attacker.systems:
         if not sys.is_active() or sys.base not in _WEAPON_BASES:
@@ -68,6 +76,9 @@ def _expected_damage(attacker, target, dist: int) -> float:
         try:
             spec = WEAPONS[WeaponType(sys.base)]
         except (KeyError, ValueError):
+            continue
+        whs = system_hull_spaces(sys.token)
+        if bearing_blocked(rb, mount_type(whs, ship_hs)):
             continue
         to_hit = spec.to_hit_at(dist)
         damage = spec.damage.at(dist)
