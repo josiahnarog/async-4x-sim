@@ -411,9 +411,8 @@
 
       if (!hitUnit) { selectedUnit = null; firepowerMap = null; updateUnitInfoPanel(); render(); return; }
 
-      // On player views only own units are selectable; master can select any.
-      const selectable = VIEW === "master" || hitUnit.owner === VIEW;
-      if (!selectable) return;
+      // Any visible unit is selectable (for info panel); commands are still own-only.
+      const isOwn = VIEW === "master" || hitUnit.owner === VIEW;
 
       if (selectedUnit && hitUnit.id === selectedUnit.id) {
         selectedUnit = null;   // re-click → deselect
@@ -441,8 +440,9 @@
 
       const { wx, wy } = canvasToWorld(canvasPx, canvasPy);
 
-      // ---- MOVE phase: right-click anchors destination hex ----
-      if (PHASE_NAME === "move_submission" && selectedUnit.type === "ship") {
+      // ---- MOVE phase: right-click anchors destination hex (own ships only) ----
+      const isOwnUnit = VIEW === "master" || selectedUnit.owner === VIEW;
+      if (PHASE_NAME === "move_submission" && selectedUnit.type === "ship" && isOwnUnit) {
         const fh = worldToHex(wx, wy);
         const h  = hexRound(fh.q, fh.r);
         const { reach } = computeReachability(selectedUnit);
@@ -455,12 +455,13 @@
 
       // ---- Other phases ----
       const hitUnit = findUnitAt(wx, wy, computeJitter());
-      const selOwner       = selectedUnit.owner;
+      const selOwner       = VIEW === "master" ? selectedUnit.owner : VIEW;
       const isEnemy        = hitUnit && hitUnit.owner !== selOwner;
       const isFriendlyShip = hitUnit && hitUnit.owner === selOwner && hitUnit.type === "ship";
 
       let cmd = null;
-      if (PHASE_NAME === "combat_submission" && selectedUnit.type === "ship") {
+      if (!isOwnUnit) { /* viewing enemy — no commands */ }
+      else if (PHASE_NAME === "combat_submission" && selectedUnit.type === "ship") {
         if (isEnemy) cmd = `fireall ${selectedUnit.id} ${hitUnit.id}`;
       } else if (PHASE_NAME === "combat_small" && selectedUnit.type === "squadron") {
         if (isEnemy) {
@@ -1165,8 +1166,9 @@
         drawFirepowerHeatmap(ctx, firepowerMap, 0, 0);
       }
 
-      // Movement overlay (reachable hexes + facing picker) — drawn before units.
-      if (PHASE_NAME === "move_submission" && selectedUnit && selectedUnit.type === "ship") {
+      // Movement overlay (reachable hexes + facing picker) — drawn before units (own ships only).
+      const isOwnSelected = selectedUnit && (VIEW === "master" || selectedUnit.owner === VIEW);
+      if (PHASE_NAME === "move_submission" && isOwnSelected && selectedUnit.type === "ship") {
         const { reach, costs } = computeReachability(selectedUnit);
         drawReachableOverlay(ctx, selectedUnit, reach, 0, 0);
         if (moveDest) {
