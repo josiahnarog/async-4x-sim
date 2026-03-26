@@ -31,7 +31,7 @@ The repository contains two engines. **Only the tactical engine is actively deve
 ## Development Roadmap
 
 1. **Tight combat loop** *(complete)* — Win/loss detection, endurance/fuel expiry, transit simultaneity, magazine ammo, carrier launch/recovery, turn-cost enforcement, fighter class/loadout system all done.
-2. **Combat features** *(in progress)* — Fog of war, sensor suites, carrier Bl enforcement done. **Next: carrier refuel/rearm** (landed squadrons restore endurance/ordnance). Then: AI opponents, expanded scenarios for playtesting.
+2. **Combat features** *(in progress)* — Fog of war, sensor suites, carrier Bl enforcement, AI opponents (move AI with approach-bonus scoring, squadron AI with greedy launch), mouse-driven UI (click-to-select, right-click commands, left→right→right move gesture with BFS reachability) all done. **Next: carrier refuel/rearm** (landed squadrons restore endurance/ordnance). Then: expanded scenarios for playtesting.
 3. **Persistence and multiplayer** *(largely complete)* — Per-game SQLite persistence, multi-game lobby, display ID alignment done. Remaining: async multiplayer turn submission.
 4. **Ship design interface** — Rules-enforced ship construction with systems validation, cost calculation, and construction-point budgets.
 5. **Strategic campaign** — System and interstellar maps, random map generation, economy, colonization, construction queues, technology trees.
@@ -173,5 +173,9 @@ Ordered left-to-right; **damage order matters**. Compact notation: `SSSAAALL(III
 
 ## Known Issues / Immediate Next Work
 
-- **Carrier refuel/rearm**: Landed squadrons should restore endurance and ordnance while docked. Currently recovery docks the squadron but no refit logic runs.
 - **Mid-turn movement damage** (lower priority): `ShipState.mp` reflects previous turn's capacity mid-turn. `next_turn()` recomputes correctly so this only affects the gap between damage application and turn end.
+
+## Weapon Technology Backlog
+
+- **Spinal and side-mounted weapons** — Restricted firing arcs based on the ratio of weapon hull-spaces to ship hull-spaces. Large weapons (e.g. spinal mounts) occupy a proportional footprint and can only fire in a narrow forward (or side) arc. Needs arc classification extension in `arcs.py` and weapon-spec arc field.
+- **Point defense revisit** — (a) PD to-hit difficulty as a function of incoming missile characteristics (advanced missiles harder to intercept). (b) Clarify multi-PD rules: does each active D system fire independently, do shots stack against the same target, and how does fire allocation work against mixed volleys?

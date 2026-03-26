@@ -543,7 +543,16 @@ class Encounter:
         turn_events: list = []
         for sqid, sq in self.battle.squadrons.items():
             if not sq.is_deployed:
-                new_squads[sqid] = sq  # docked squadrons are preserved as-is
+                # Refuel and rearm while docked.
+                refueled_loadout = dataclasses.replace(
+                    sq.loadout,
+                    external_shots_remaining=len(sq.loadout.external),
+                )
+                new_squads[sqid] = dataclasses.replace(
+                    sq,
+                    endurance=sq.max_endurance,
+                    loadout=refueled_loadout,
+                )
                 continue
             if sq.endurance == 1:
                 # Will reach 0 after this decrement — warn before destroying.
