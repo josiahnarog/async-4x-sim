@@ -1075,6 +1075,71 @@ async def scenario_launch(
 
 
 # ---------------------------------------------------------------------------
+# Routes — firepower heat map
+# ---------------------------------------------------------------------------
+
+@router.get("/game/{game_id}/firepower-map/{ship_id}")
+async def firepower_map(game_id: str, ship_id: str):
+    """Return per-hex expected damage for ship_id at its current position/facing.
+
+    For each hex H within weapon range, computes:
+        sum over active weapons of (to_hit/10) * damage * rate_of_fire
+    treating H as if a target were positioned there.  Blind-spot hexes
+    (rear bearing 3) are excluded.  Only hexes with ev > 0 are returned.
+
+    Used by the client to render a firepower heat map during COMBAT_SUBMISSION.
+    """
+    try:
+        session = _get_session(game_id)
+    except KeyError:
+        return {"hexes": [], "max_ev": 1.0}
+
+    ship = session.enc.battle.ships.get(ship_id)
+    if ship is None or ship.systems is None:
+        return {"hexes": [], "max_ev": 1.0}
+
+    from sim.hexgrid import Hex, hex_distance
+    from tactical.arcs import relative_bearing, REAR_BEARINGS
+    from tactical.weapons import WEAPONS, WeaponType
+
+    _WEAPON_BASES = frozenset(wt.value for wt in WeaponType)
+    MAX_RANGE = 14
+
+    hexes: list[dict] = []
+
+    for dq in range(-MAX_RANGE, MAX_RANGE + 1):
+        for dr in range(-MAX_RANGE, MAX_RANGE + 1):
+            h = Hex(ship.pos.q + dq, ship.pos.r + dr)
+            dist = hex_distance(ship.pos, h)
+            if dist == 0 or dist > MAX_RANGE:
+                continue
+
+            rb = relative_bearing(int(ship.facing), dq, dr)
+            if rb in REAR_BEARINGS:
+                continue
+
+            ev = 0.0
+            for sys in ship.systems:
+                if not sys.is_active() or sys.base not in _WEAPON_BASES:
+                    continue
+                try:
+                    spec = WEAPONS[WeaponType(sys.base)]
+                except (KeyError, ValueError):
+                    continue
+                to_hit = spec.to_hit_at(dist)
+                damage = spec.damage.at(dist)
+                if to_hit is None or damage is None:
+                    continue
+                ev += (to_hit / 10.0) * damage * spec.rate_of_fire
+
+            if ev > 0:
+                hexes.append({"q": h.q, "r": h.r, "ev": round(ev, 3)})
+
+    max_ev = max((x["ev"] for x in hexes), default=1.0)
+    return {"hexes": hexes, "max_ev": max_ev}
+
+
+# ---------------------------------------------------------------------------
 # Routes — per-game
 # ---------------------------------------------------------------------------
 

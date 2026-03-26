@@ -160,6 +160,18 @@
       render();
     }
 
+    // ---- Firepower heat map state (COMBAT_SUBMISSION) ----
+    let firepowerMap = null;   // { hexes: [{q,r,ev}], maxEv: float } or null
+
+    function fetchFirepowerMap(shipId) {
+      fetch(`/tactical/game/{{ game_id }}/firepower-map/${shipId}`)
+        .then(r => r.json())
+        .then(data => {
+          firepowerMap = { hexes: data.hexes, maxEv: data.max_ev };
+          render();
+        });
+    }
+
     // ---- Selection / movement state ----
     // { id, type, owner, q, r, facing, mp, turn_cost, turn_charge } or null
     let selectedUnit = null;
@@ -345,7 +357,7 @@
       const { wx, wy } = canvasToWorld(canvasPx, canvasPy);
       const hitUnit = findUnitAt(wx, wy, computeJitter());
 
-      if (!hitUnit) { selectedUnit = null; render(); return; }
+      if (!hitUnit) { selectedUnit = null; firepowerMap = null; render(); return; }
 
       // On player views only own units are selectable; master can select any.
       const selectable = VIEW === "master" || hitUnit.owner === VIEW;
@@ -353,10 +365,17 @@
 
       if (selectedUnit && hitUnit.id === selectedUnit.id) {
         selectedUnit = null;   // re-click → deselect
+        firepowerMap = null;
       } else {
         // Capture full ship data for movement calculations.
         const shipData = SHIPS.find(s => s.id === hitUnit.id);
         selectedUnit = shipData ? { ...hitUnit, ...shipData } : hitUnit;
+        firepowerMap = null;
+        // Fetch firepower heat map when a friendly ship is selected in combat phase.
+        if (PHASE_NAME === "combat_submission" && hitUnit.type === "ship") {
+          const isOwnShip = VIEW === "master" || hitUnit.owner === VIEW;
+          if (isOwnShip) fetchFirepowerMap(hitUnit.id);
+        }
       }
       _reachCache = null;  // invalidate BFS cache for new selection
       render();
@@ -1036,6 +1055,38 @@
       ctx.restore();
     }
 
+    // Heat-map colour: low EV → dim green, mid → yellow, high → red.
+    function heatColor(t) {
+      // t in [0, 1]
+      if (t < 0.5) {
+        const g = Math.round(128 + 127 * (t * 2));
+        return `rgba(0,${g},0,`;
+      } else {
+        const r = Math.round(128 + 127 * ((t - 0.5) * 2));
+        const g = Math.round(255 * (1 - (t - 0.5) * 2));
+        return `rgba(${r},${g},0,`;
+      }
+    }
+
+    function drawFirepowerHeatmap(ctx, map, cx, cy) {
+      if (!map || map.hexes.length === 0) return;
+      ctx.save();
+      for (const h of map.hexes) {
+        const t    = Math.min(1, h.ev / map.maxEv);
+        const { x, y } = hexToPixel(h.q, h.r, cx, cy);
+        ctx.globalAlpha = 0.12 + 0.28 * t;
+        ctx.fillStyle   = heatColor(t) + "1)";
+        drawHexPath(ctx, x, y);
+        ctx.fill();
+        ctx.globalAlpha = 0.25 + 0.35 * t;
+        ctx.strokeStyle = heatColor(t) + "1)";
+        ctx.lineWidth   = 0.8;
+        drawHexPath(ctx, x, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     function render() {
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1058,6 +1109,11 @@
       // Using the larger canvas dimension so both axes are covered.
       const drawR = Math.ceil(Math.max(canvas.width, canvas.height) / 2 / (SIZE * zoom * 1.3)) + 2;
       drawGrid(ctx, 0, 0, cq, cr, drawR);
+
+      // Firepower heat map — drawn before units, only during combat_submission.
+      if (PHASE_NAME === "combat_submission" && firepowerMap) {
+        drawFirepowerHeatmap(ctx, firepowerMap, 0, 0);
+      }
 
       // Movement overlay (reachable hexes + facing picker) — drawn before units.
       if (PHASE_NAME === "move_submission" && selectedUnit && selectedUnit.type === "ship") {
@@ -1095,8 +1151,8 @@
     // Escape: cancel anchor → deselect
     document.addEventListener("keydown", e => {
       if (e.key === "Escape") {
-        if (moveDest)      { moveDest = null; render(); }
-        else if (selectedUnit) { selectedUnit = null; render(); }
+        if (moveDest)          { moveDest = null; render(); }
+        else if (selectedUnit) { selectedUnit = null; firepowerMap = null; render(); }
       }
     });
 
