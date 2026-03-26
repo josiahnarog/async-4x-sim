@@ -47,6 +47,11 @@ class AIProfile:
     search_depth:  int   = 1
     carrier_value: float = 2.0
 
+    # Squadron endurance threshold at which the AI orders recovery.
+    # A squadron with endurance <= this value will be recalled if a carrier
+    # is reachable.  Higher = more conservative (recalls earlier).
+    squadron_recover_threshold: int = 3
+
 
 # Preset profiles ---------------------------------------------------------
 

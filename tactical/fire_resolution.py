@@ -89,11 +89,21 @@ def resolve_fire(
         new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
 
     # Apply ammo consumption to attackers.
+    # Cap consumed against the snapshot's available ammo: fire was resolved
+    # against the snapshot, so consumption cannot legitimately exceed what
+    # was available at that instant.  This prevents a bug elsewhere from
+    # silently consuming ammo that didn't exist.
     for attacker_id, consumed in ammo_by_attacker.items():
         if attacker_id not in new_battle.ships:
             continue
         ship = new_battle.ships[attacker_id]
-        if ship.systems is not None:
+        if ship.systems is None:
+            continue
+        snap_ship = snapshot.ships.get(attacker_id)
+        if snap_ship is not None and snap_ship.systems is not None:
+            available = snap_ship.systems.ammo_count_for("R")
+            consumed = min(consumed, available)
+        if consumed > 0:
             new_systems = ship.systems.consume_ammo_for("R", consumed)
             new_battle = new_battle.with_ship(dataclasses.replace(ship, systems=new_systems))
 

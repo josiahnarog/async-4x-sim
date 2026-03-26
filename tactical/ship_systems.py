@@ -105,6 +105,28 @@ class ShipSystems:
         if not self.systems:
             raise ValueError("ShipSystems cannot be empty")
 
+        # Charges must be non-negative.
+        for s in self.systems:
+            if s.charges < 0:
+                raise ValueError(
+                    f"System {s.token!r} has negative charges: {s.charges}"
+                )
+
+        # Groups must contain only engine (I) systems.  Mixed groups (e.g. an
+        # engine room that also contains a laser) would break the room-damage
+        # rule in _active_engine_count().
+        groups: dict[int, list[System]] = {}
+        for s in self.systems:
+            if s.group is not None:
+                groups.setdefault(s.group, []).append(s)
+        for group_id, members in groups.items():
+            non_engine = [s.token for s in members if s.base != "I"]
+            if non_engine:
+                raise ValueError(
+                    f"Group {group_id} contains non-engine systems: {non_engine}. "
+                    f"Only engine (I) systems may be grouped."
+                )
+
     @staticmethod
     def parse(compact: str) -> ShipSystems:
         """Parse a compact system-track string.

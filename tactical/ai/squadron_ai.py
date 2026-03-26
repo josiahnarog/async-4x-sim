@@ -28,9 +28,6 @@ from tactical.turn_orders import InterceptOrder, RecoverOrder, StrikeOrder, Squa
 from tactical.ai.profile import AIProfile
 
 
-# Recover if endurance drops to this threshold (turns remaining).
-_RECOVER_THRESHOLD = 3
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -171,7 +168,7 @@ def choose_squadron_orders(
             continue
 
         # --- Priority 1: recover if critically low on endurance ----------
-        if sq.endurance <= _RECOVER_THRESHOLD:
+        if sq.endurance <= profile.squadron_recover_threshold:
             carrier_id = _best_recovery_carrier(sq_id, battle, owner_id, recoveries_planned)
             if carrier_id is not None:
                 orders[sq_id] = RecoverOrder(carrier_id=carrier_id)
