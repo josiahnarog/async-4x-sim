@@ -9,6 +9,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from typing import Optional
@@ -31,6 +32,8 @@ from campaign.models import (
     SystemNode,
     WPVisibility,
 )
+from campaign.hex_utils import axial_to_screen, hex_dist
+from campaign.tables import classify_orbit
 
 router = APIRouter(prefix="/campaign")
 templates = Jinja2Templates(directory="templates")
@@ -158,40 +161,47 @@ async def api_galaxy():
 
 
 # ---------------------------------------------------------------------------
-# Polar SVG helpers for system view
+# Hex grid SVG helpers for system view  (1 hex = 1 sH, flat-top)
 # ---------------------------------------------------------------------------
 
-_SVG_CX  = 480
-_SVG_CY  = 480
-_SVG_W   = 960
-_SVG_H   = 960
+_HEX_SIZE  = 9     # pixels: centre-to-corner (= 1 sH in display)
+_DISPLAY_R = 33    # sH radius of hex disk to render
+
+_SVG_W  = 1000
+_SVG_H  = 1150
+_SVG_CX = 500
+_SVG_CY = 575
+
+_ZONE_COLOURS: dict[str, str] = {
+    "hot":        "#2a1208",
+    "lwz":        "#0f2010",
+    "cold_rocky": "#0c1218",
+    "gas":        "#0a1020",
+    "ice":        "#080e22",
+    "beyond":     "#060812",
+}
 
 
-def _sqrt_r(dist_sh: float, scale: float = 90.0) -> float:
-    """Convert sH distance to SVG radius using sqrt scale."""
-    return scale * math.sqrt(max(dist_sh, 0.1))
+def _axial_to_pixel(q: int | float, r: int | float) -> tuple[float, float]:
+    """Flat-top hex axial coords → pixel offset from grid centre."""
+    sx, sy = axial_to_screen(q, r)
+    return _HEX_SIZE * sx, _HEX_SIZE * sy
 
 
-def _bearing_to_xy(bearing: int, r_px: float) -> tuple[float, float]:
-    """Convert 1-12 bearing sector + radius to SVG (x, y)."""
-    # Sector 1 = north (up), clockwise. SVG 0° = east, 90° = south.
-    angle_deg = (bearing - 1) * 30 - 90
-    rad = math.radians(angle_deg)
-    return (_SVG_CX + r_px * math.cos(rad), _SVG_CY + r_px * math.sin(rad))
+def _hex_poly(cx: float, cy: float) -> str:
+    """SVG polygon points string for flat-top hex centred at (cx, cy)."""
+    pts = []
+    for i in range(6):
+        a = math.radians(60 * i)
+        pts.append(f"{cx + _HEX_SIZE * math.cos(a):.1f},{cy + _HEX_SIZE * math.sin(a):.1f}")
+    return " ".join(pts)
 
 
-_GOLDEN_ANGLE = 137.508  # degrees
-
-
-def _orbit_angle(orbit_slot: int) -> float:
-    """Assign a visually spread angle to a planet by orbit slot."""
-    return math.radians(_GOLDEN_ANGLE * orbit_slot - 90)
-
-
-def _planet_xy(distance_sh: int, orbit_slot: int) -> tuple[float, float]:
-    r = _sqrt_r(distance_sh)
-    a = _orbit_angle(orbit_slot)
-    return (_SVG_CX + r * math.cos(a), _SVG_CY + r * math.sin(a))
+def _zone_colour_for_dist(dist_sh: int, spectral_class) -> str:
+    if spectral_class is None or dist_sh == 0:
+        return "#0a0a1a"
+    zone = classify_orbit(spectral_class, dist_sh)
+    return _ZONE_COLOURS.get(zone, "#060812")
 
 
 def _escape(s: str) -> str:
@@ -201,53 +211,70 @@ def _escape(s: str) -> str:
 def _render_system_svg(node: SystemNode) -> str:
     parts: list[str] = []
 
-    def e(tag: str, **attrs) -> str:
-        attr_str = " ".join(
-            f'{k.replace("_", "-")}="{v}"' for k, v in attrs.items() if v is not None
-        )
-        return f"<{tag} {attr_str}/>"
-
-    def g(inner: str, **attrs) -> str:
-        attr_str = " ".join(
-            f'{k.replace("_", "-")}="{v}"' for k, v in attrs.items()
-        )
-        return f"<g {attr_str}>{inner}</g>"
+    primary = node.primary
+    sc = primary.spectral_class if (primary and primary.anomaly_type is None) else None
 
     # Background
     parts.append(f'<rect width="{_SVG_W}" height="{_SVG_H}" fill="#060612"/>')
 
-    # Orbit rings for each planet distance
-    primary = node.primary
-    if primary and primary.spectral_class:
-        # Draw thin orbit rings for each planet in the primary star's system
-        for star in node.stars:
-            for p in star.planets:
-                r = _sqrt_r(p.distance_sh)
-                parts.append(
-                    f'<circle cx="{_SVG_CX}" cy="{_SVG_CY}" r="{r:.1f}" '
-                    f'fill="none" stroke="#1a2040" stroke-width="1"/>'
-                )
+    # --- Hex tile grid (zone-coloured) ---
+    for q in range(-_DISPLAY_R, _DISPLAY_R + 1):
+        for r in range(-_DISPLAY_R, _DISPLAY_R + 1):
+            if hex_dist(q, r) > _DISPLAY_R:
+                continue
+            dx, dy = _axial_to_pixel(q, r)
+            cx, cy = _SVG_CX + dx, _SVG_CY + dy
+            col = _zone_colour_for_dist(hex_dist(q, r), sc)
+            pts = _hex_poly(cx, cy)
+            parts.append(
+                f'<polygon points="{pts}" fill="{col}" stroke="#111128" stroke-width="0.4"/>'
+            )
 
-    # WP lines from center
+    # --- WP dashed lines from centre (use stored canonical coords) ---
     for wp in node.warp_points:
-        r = _sqrt_r(wp.distance_sh)
-        x, y = _bearing_to_xy(wp.bearing, r)
+        dx, dy = _axial_to_pixel(wp.q_sh, wp.r_sh)
         col = _WP_VIS_COLOURS.get(wp.visibility.value, "#44ddff")
         parts.append(
-            f'<line x1="{_SVG_CX}" y1="{_SVG_CY}" x2="{x:.1f}" y2="{y:.1f}" '
-            f'stroke="{col}" stroke-width="0.5" stroke-dasharray="4,4" opacity="0.5"/>'
+            f'<line x1="{_SVG_CX}" y1="{_SVG_CY}" '
+            f'x2="{_SVG_CX + dx:.1f}" y2="{_SVG_CY + dy:.1f}" '
+            f'stroke="{col}" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.5"/>'
         )
 
-    # Stars
-    for star in node.stars:
-        if star.component == "A":
-            cx, cy = _SVG_CX, _SVG_CY
-        elif star.bearing is not None:
-            r = _sqrt_r(star.distance_sh)
-            cx, cy = _bearing_to_xy(star.bearing, r)
-        else:
-            continue
+    # --- Warp points (diamonds, use stored canonical coords) ---
+    for wp in node.warp_points:
+        dx, dy = _axial_to_pixel(wp.q_sh, wp.r_sh)
+        wx, wy = _SVG_CX + dx, _SVG_CY + dy
+        col = _WP_VIS_COLOURS.get(wp.visibility.value, "#44ddff")
+        s = 6
+        pts = (f"{wx:.1f},{wy - s:.1f} {wx + s:.1f},{wy:.1f} "
+               f"{wx:.1f},{wy + s:.1f} {wx - s:.1f},{wy:.1f}")
+        parts.append(
+            f'<polygon points="{pts}" fill="{col}" stroke="#ffffff" '
+            f'stroke-width="0.5" opacity="0.85"/>'
+        )
+        link_label = f"→{wp.linked_to[0]}" if wp.linked_to else "?"
+        parts.append(
+            f'<text x="{wx:.1f}" y="{wy + s + 10:.1f}" text-anchor="middle" '
+            f'fill="{col}" font-size="8" font-family="monospace">{_escape(link_label)}</text>'
+        )
 
+    # Scale note
+    parts.append(
+        f'<text x="8" y="{_SVG_H - 8}" fill="#223344" font-size="8" '
+        f'font-family="monospace">1 hex = 1 sH</text>'
+    )
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Orbital data builder (consumed by JS time scrubber)
+# ---------------------------------------------------------------------------
+
+def _build_orbital_data(node: SystemNode) -> dict:
+    """Return a JSON-serialisable dict of orbital parameters for all moving objects."""
+    stars_out = []
+    for star in node.stars:
         if star.anomaly_type is not None:
             col = "#aa44ff"
             lbl = star.anomaly_type.value[:3].upper()
@@ -258,89 +285,55 @@ def _render_system_svg(node: SystemNode) -> str:
             col = "#888888"
             lbl = star.component
 
-        radius = 18 if star.component == "A" else 12
-        parts.append(
-            f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{radius}" fill="{col}" '
-            f'stroke="#ffffff" stroke-width="1" opacity="0.9"/>'
-        )
-        parts.append(
-            f'<text x="{cx:.1f}" y="{cy + radius + 13:.1f}" '
-            f'text-anchor="middle" fill="#cccccc" font-size="11" font-family="monospace">'
-            f'{_escape(lbl)}</text>'
-        )
-
-    # Planets
-    for star in node.stars:
+        planets_out = []
         for p in star.planets:
-            x, y = _planet_xy(p.distance_sh, p.orbit_slot)
-            col = _PLANET_COLOURS.get(p.planet_type.value, "#888888")
-
-            if p.planet_type == PlanetType.AST:
-                # Asteroid belt: small dots around the ring position
-                parts.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="none" '
-                    f'stroke="{col}" stroke-width="2"/>'
-                )
-            else:
+            col_p = _PLANET_COLOURS.get(p.planet_type.value, "#888888")
+            pr = 4
+            if p.planet_type != PlanetType.AST:
                 pr = 6 if p.mass == 3 else (5 if p.mass == 2 else 4)
-                parts.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{pr}" fill="{col}" '
-                    f'stroke="#ffffff" stroke-width="0.5"/>'
-                )
 
-            # Planet label
-            label = p.planet_type.value
+            label_p = p.planet_type.value
             if p.hi is not None:
-                label += f" HI{p.hi}"
-            parts.append(
-                f'<text x="{x:.1f}" y="{y - 8:.1f}" text-anchor="middle" '
-                f'fill="#aaaaaa" font-size="9" font-family="monospace">{_escape(label)}</text>'
-            )
+                label_p += f" HI{p.hi}"
 
-            # Moon count indicator
-            if p.moons:
-                parts.append(
-                    f'<text x="{x + 8:.1f}" y="{y + 4:.1f}" '
-                    f'fill="#778899" font-size="8" font-family="monospace">'
-                    f'×{len(p.moons)}</text>'
-                )
+            moons_out = []
+            for m in p.moons:
+                moons_out.append({
+                    "orbit_th":            m.orbit_th,
+                    "orbital_angle_0":     m.orbital_angle_0,
+                    "orbital_period_days": m.orbital_period_days,
+                    "is_big":              m.is_big,
+                })
 
-    # Warp points
-    for wp in node.warp_points:
-        r = _sqrt_r(wp.distance_sh)
-        x, y = _bearing_to_xy(wp.bearing, r)
-        col = _WP_VIS_COLOURS.get(wp.visibility.value, "#44ddff")
-        # Diamond shape
-        s = 7
-        pts = f"{x:.1f},{y - s:.1f} {x + s:.1f},{y:.1f} {x:.1f},{y + s:.1f} {x - s:.1f},{y:.1f}"
-        parts.append(f'<polygon points="{pts}" fill="{col}" stroke="#ffffff" stroke-width="0.5" opacity="0.85"/>')
-        link_label = f"→{wp.linked_to[0]}" if wp.linked_to else "?"
-        parts.append(
-            f'<text x="{x:.1f}" y="{y + s + 12:.1f}" text-anchor="middle" '
-            f'fill="{col}" font-size="9" font-family="monospace">{_escape(link_label)}</text>'
-        )
+            planets_out.append({
+                "distance_sh":          p.distance_sh,
+                "orbital_angle_0":      p.orbital_angle_0,
+                "orbital_period_years": p.orbital_period_years,
+                "planet_type":          p.planet_type.value,
+                "colour":               col_p,
+                "label":                label_p,
+                "radius_px":            pr,
+                "is_ast":               p.planet_type == PlanetType.AST,
+                "moons":                moons_out,
+            })
 
-    # Bearing compass (light ring)
-    parts.append(
-        f'<circle cx="{_SVG_CX}" cy="{_SVG_CY}" r="440" fill="none" '
-        f'stroke="#1a2040" stroke-width="1"/>'
-    )
-    for sector in range(1, 13):
-        angle_deg = (sector - 1) * 30 - 90
-        rad = math.radians(angle_deg)
-        x1 = _SVG_CX + 435 * math.cos(rad)
-        y1 = _SVG_CY + 435 * math.sin(rad)
-        x2 = _SVG_CX + 448 * math.cos(rad)
-        y2 = _SVG_CY + 448 * math.sin(rad)
-        xl = _SVG_CX + 460 * math.cos(rad)
-        yl = _SVG_CY + 460 * math.sin(rad)
-        parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#334" stroke-width="1"/>')
-        parts.append(
-            f'<text x="{xl:.1f}" y="{yl + 4:.1f}" text-anchor="middle" '
-            f'fill="#334466" font-size="9" font-family="monospace">{sector}</text>'
-        )
+        stars_out.append({
+            "component":             star.component,
+            "distance_sh":           star.distance_sh,
+            "orbital_angle_0":       star.orbital_angle_0,
+            "orbital_period_years":  star.orbital_period_years,
+            "colour":                col,
+            "label":                 lbl,
+            "radius_px":             14 if star.component == "A" else 9,
+            "planets":               planets_out,
+        })
 
-    return "\n".join(parts)
+    return {
+        "hex_size":  _HEX_SIZE,
+        "svg_cx":    _SVG_CX,
+        "svg_cy":    _SVG_CY,
+        "stars":     stars_out,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -389,17 +382,29 @@ async def system_view(request: Request, node_id: str):
         star_info.append(label)
 
     planet_info = []
+    seen_ast_rings: set[tuple[str, int, int]] = set()   # (component, orbit_slot, distance_sh)
     for star in node.stars:
         for p in star.planets:
-            hi_str = f" HI={p.hi}" if p.hi is not None else ""
-            tl_str = " [tidelock]" if p.tidelock else ""
-            atm_str = " [atm]" if p.has_atmosphere else ""
-            moon_str = f" {len(p.moons)}☽" if p.moons else ""
-            planet_info.append(
-                f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
-                f"{p.planet_type.value:3s}  M{p.mass or '-'}"
-                f"{hi_str}{tl_str}{atm_str}{moon_str}  [{star.component}]"
-            )
+            if p.planet_type == PlanetType.AST:
+                key = (star.component, p.orbit_slot, p.distance_sh)
+                if key in seen_ast_rings:
+                    continue
+                seen_ast_rings.add(key)
+                belt_size = 6 * p.distance_sh
+                planet_info.append(
+                    f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
+                    f"AST belt  ({belt_size} hexes)  [{star.component}]"
+                )
+            else:
+                hi_str = f" HI={p.hi}" if p.hi is not None else ""
+                tl_str = " [tidelock]" if p.tidelock else ""
+                atm_str = " [atm]" if p.has_atmosphere else ""
+                moon_str = f" {len(p.moons)}☽" if p.moons else ""
+                planet_info.append(
+                    f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
+                    f"{p.planet_type.value:3s}  M{p.mass or '-'}"
+                    f"{hi_str}{tl_str}{atm_str}{moon_str}  [{star.component}]"
+                )
 
     wp_info = []
     for wp in node.warp_points:
@@ -409,16 +414,19 @@ async def system_view(request: Request, node_id: str):
             f"{wp.visibility.value:10s}  → {dest}"
         )
 
+    orbital_json = json.dumps(_build_orbital_data(node))
+
     return templates.TemplateResponse(
         "campaign_system.html",
         {
-            "request":    request,
-            "node_id":    node_id,
-            "svg":        svg_content,
-            "star_info":  star_info,
-            "planet_info": planet_info,
-            "wp_info":    wp_info,
-            "svg_w":      _SVG_W,
-            "svg_h":      _SVG_H,
+            "request":      request,
+            "node_id":      node_id,
+            "svg":          svg_content,
+            "star_info":    star_info,
+            "planet_info":  planet_info,
+            "wp_info":      wp_info,
+            "svg_w":        _SVG_W,
+            "svg_h":        _SVG_H,
+            "orbital_json": orbital_json,
         },
     )

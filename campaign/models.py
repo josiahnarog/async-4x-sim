@@ -87,6 +87,12 @@ class Moon:
     orbit_th:  int        # distance from planet centre in tactical hexes
     is_big:    bool = False
     hi:        Optional[int] = None  # 1–10; revealed after survey; big moons only
+    # Tactical hex position (relative to parent planet at TH (0,0))
+    q_th:      int   = 0
+    r_th:      int   = 0
+    # Orbital mechanics
+    orbital_angle_0:    float = 0.0   # compass degrees at t=0
+    orbital_period_days: float = 0.0  # orbital period in Earth days
 
 
 @dataclass
@@ -100,6 +106,15 @@ class Planet:
     hi:             Optional[int] = None  # 1–10; revealed after survey; T/ST only
     moons:          list[Moon] = field(default_factory=list)
     parent_star:    str = "A"             # "A" or "B"
+    # Strategic hex position (absolute, relative to system primary at sH (0,0))
+    q_sh:           int   = 0
+    r_sh:           int   = 0
+    # Tactical hex position within the planet's sH hex (planet always at TH centre)
+    q_th:           int   = 0
+    r_th:           int   = 0
+    # Orbital mechanics (orbit around parent star)
+    orbital_angle_0:    float = 0.0   # compass degrees at t=0
+    orbital_period_years: float = 0.0 # orbital period in Earth years
 
 
 @dataclass
@@ -109,6 +124,9 @@ class WarpPoint:
     distance_sh: int           # from primary star in sH
     visibility:  WPVisibility
     linked_to:   Optional[tuple[str, str]] = None  # (system_id, wp_id)
+    # Strategic hex position (fixed relative to primary; WPs do not orbit)
+    q_sh:        int = 0
+    r_sh:        int = 0
 
 
 @dataclass
@@ -119,6 +137,12 @@ class Star:
     bearing:       Optional[int]           = None  # 1–12; None for primary A
     distance_sh:   int                     = 0     # 0 for primary A
     planets:       list[Planet]            = field(default_factory=list)
+    # Strategic hex position (A is always (0,0); B/C computed from bearing+distance)
+    q_sh:          int   = 0
+    r_sh:          int   = 0
+    # Orbital mechanics (B/C orbit around A; A is stationary)
+    orbital_angle_0:     float = 0.0   # compass degrees at t=0
+    orbital_period_years: float = 0.0  # orbital period in Earth years
 
     @property
     def has_planets_possible(self) -> bool:

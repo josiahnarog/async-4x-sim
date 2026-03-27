@@ -19,9 +19,16 @@ Generation order (from Starfire rules):
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Optional
 
+from campaign.hex_utils import (
+    axial_to_angle,
+    bearing_dist_to_axial,
+    hex_ring,
+    nearest_ring_hex,
+)
 from campaign.models import (
     AnomalyType,
     Galaxy,
@@ -83,6 +90,221 @@ def _moon_type_for(planet_type: PlanetType) -> MoonType:
 def _has_atmosphere(planet_type: PlanetType, mass: int | None) -> bool:
     """Mass 2+ B and H worlds have atmospheres for weapons-fire purposes."""
     return planet_type in {PlanetType.B, PlanetType.H} and mass is not None and mass >= 2
+
+
+# ---------------------------------------------------------------------------
+# Orbital / hex-coord helpers
+# ---------------------------------------------------------------------------
+
+# Approximate stellar masses in solar units, used for Keplerian period calc.
+_STAR_MASS_SOLAR: dict[SpectralClass, float] = {
+    SpectralClass.WHITE:        2.0,
+    SpectralClass.YELLOW_WHITE: 1.5,
+    SpectralClass.YELLOW:       1.0,
+    SpectralClass.ORANGE:       0.7,
+    SpectralClass.RED:          0.4,
+    SpectralClass.RED_DWARF:    0.2,
+    SpectralClass.BLUE_GIANT:  10.0,
+    SpectralClass.WHITE_DWARF:  0.6,
+    SpectralClass.RED_GIANT:    1.2,
+}
+
+# 1 sH = 12 LM ≈ 1.443 AU  (1 AU ≈ 8.317 LM)
+_SH_TO_AU: float = 12.0 / 8.317
+
+# 1 TH = 1/2880 sH = 12/2880 LM.  Earth's Moon ≈ 384 400 km = 0.4444 LM ≈ 5.16 TH.
+_TH_TO_KM: float = (12.0 / 2880.0) * 17_987_547.5  # 1 LM ≈ 17.988 M km
+
+
+def _orbital_period_years(distance_sh: int, star_mass_solar: float) -> float:
+    """Keplerian period (years): T = (a_AU)^1.5 / sqrt(M_solar)."""
+    if star_mass_solar <= 0 or distance_sh <= 0:
+        return 0.0
+    a_au = distance_sh * _SH_TO_AU
+    return (a_au ** 1.5) / math.sqrt(star_mass_solar)
+
+
+def _moon_period_days(orbit_th: int) -> float:
+    """Approximate moon orbital period (Earth days) via Earth-Moon scaling."""
+    if orbit_th <= 0:
+        return 0.0
+    a_km = orbit_th * _TH_TO_KM
+    return 27.3 * (a_km / 384_400.0) ** 1.5
+
+
+_GOLDEN_ANGLE_DEG: float = 137.508   # degrees; evenly spreads orbit slots angularly
+
+
+def _assign_planet_coords(
+    planets: list[Planet],
+    star_q: int,
+    star_r: int,
+    star_mass_solar: float,
+) -> None:
+    """Set q_sh, r_sh, orbital_angle_0, orbital_period_years on each planet.
+
+    Planets are placed on the hex ring at hex_dist == distance_sh from their
+    parent star using a golden-angle spread, with collision resolution along
+    the ring.  Coordinates are absolute (relative to system primary at (0,0)).
+    """
+    occupied: dict[int, set[tuple[int, int]]] = {}  # ring_radius → set of (q,r)
+
+    for p in planets:
+        radius = p.distance_sh
+        if radius not in occupied:
+            occupied[radius] = set()
+
+        # Golden-angle initial direction for this orbit slot
+        angle = (_GOLDEN_ANGLE_DEG * p.orbit_slot) % 360.0
+
+        # Find the nearest ring hex to that angle; resolve collisions
+        ring = hex_ring(0, 0, radius)  # relative to (0,0) origin
+        if not ring:
+            # radius == 0 edge-case (shouldn't happen for real orbits)
+            p.q_sh, p.r_sh = star_q, star_r
+            p.orbital_angle_0 = 0.0
+            p.orbital_period_years = _orbital_period_years(radius, star_mass_solar)
+            continue
+
+        # Sort ring by angular distance from target angle, preserving ring order
+        def _ang_diff(pos: tuple[int, int]) -> float:
+            a = axial_to_angle(pos[0], pos[1])
+            d = abs(a - angle) % 360.0
+            return min(d, 360.0 - d)
+
+        sorted_ring = sorted(range(len(ring)), key=lambda i: _ang_diff(ring[i]))
+
+        chosen: tuple[int, int] | None = None
+        for idx in sorted_ring:
+            candidate = ring[idx]
+            if candidate not in occupied[radius]:
+                chosen = candidate
+                break
+
+        if chosen is None:
+            # Ring fully occupied (extremely rare; fall back to first hex)
+            chosen = ring[0]
+
+        occupied[radius].add(chosen)
+
+        abs_q = star_q + chosen[0]
+        abs_r = star_r + chosen[1]
+        p.q_sh = abs_q
+        p.r_sh = abs_r
+        p.orbital_angle_0 = axial_to_angle(chosen[0], chosen[1])
+        p.orbital_period_years = _orbital_period_years(radius, star_mass_solar)
+
+
+def _assign_moon_coords(moons: list[Moon]) -> None:
+    """Set q_th, r_th, orbital_angle_0, orbital_period_days on each moon.
+
+    Moons are placed in tactical-hex space relative to their parent planet
+    (which is always at TH (0,0)).  Sequential compass bearings spread moons
+    evenly around the planet.
+    """
+    n = len(moons)
+    for i, moon in enumerate(moons):
+        # Spread n moons evenly; first moon at north (0°)
+        angle = (360.0 * i / n) if n > 1 else 0.0
+        q_th, r_th = nearest_ring_hex(angle, moon.orbit_th)
+        moon.q_th = q_th
+        moon.r_th = r_th
+        moon.orbital_angle_0 = axial_to_angle(q_th, r_th) if moon.orbit_th > 0 else 0.0
+        moon.orbital_period_days = _moon_period_days(moon.orbit_th)
+
+
+def _star_mass(star: Star) -> float:
+    """Return solar mass for a star; 1.0 if spectral class is unknown."""
+    if star.spectral_class is not None:
+        return _STAR_MASS_SOLAR.get(star.spectral_class, 1.0)
+    return 1.0
+
+
+def _expand_ast_belt(
+    planet: Planet,
+    star_q: int,
+    star_r: int,
+    star_mass_solar: float,
+) -> list[Planet]:
+    """Expand a single AST Planet into one Planet per hex on its orbital ring.
+
+    Each belt hex has its own orbital_angle_0 derived from its ring position.
+    All hexes share the same orbital_period_years, so the belt rotates as a
+    rigid ring — individual positions are preserved relative to each other.
+    """
+    ring = hex_ring(0, 0, planet.distance_sh)   # relative to star at (0, 0)
+    period = _orbital_period_years(planet.distance_sh, star_mass_solar)
+    belt_hexes: list[Planet] = []
+    for (q_rel, r_rel) in ring:
+        angle = axial_to_angle(q_rel, r_rel)
+        belt_hexes.append(Planet(
+            orbit_slot=planet.orbit_slot,
+            distance_sh=planet.distance_sh,
+            planet_type=PlanetType.AST,
+            mass=None,
+            parent_star=planet.parent_star,
+            q_sh=star_q + q_rel,
+            r_sh=star_r + r_rel,
+            orbital_angle_0=angle,
+            orbital_period_years=period,
+        ))
+    return belt_hexes
+
+
+def _finalize_coords(node: "SystemNode") -> None:
+    """Assign canonical hex coordinates to all objects in a system node.
+
+    Called at the end of generation (after all disruption passes) so that
+    only surviving objects receive coordinates.  Safe to call multiple times
+    (idempotent — overwrites previous values).
+    """
+    primary = node.primary  # Star A, always at (0, 0)
+    primary_mass = _star_mass(primary) if primary else 1.0
+
+    for star in node.stars:
+        if star.component == "A":
+            star.q_sh, star.r_sh = 0, 0
+            # A does not orbit
+        elif star.bearing is not None:
+            star.q_sh, star.r_sh = bearing_dist_to_axial(star.bearing, star.distance_sh)
+            star.orbital_angle_0 = (star.bearing - 1) * 30.0
+            star.orbital_period_years = _orbital_period_years(
+                star.distance_sh, primary_mass
+            )
+
+        # Assign planet coords relative to this star's position
+        mass = _star_mass(star)
+        _assign_planet_coords(
+            star.planets,
+            star_q=star.q_sh,
+            star_r=star.r_sh,
+            star_mass_solar=mass,
+        )
+        for p in star.planets:
+            _assign_moon_coords(p.moons)
+
+    # WPs are fixed relative to primary (no orbital motion)
+    for wp in node.warp_points:
+        wp.q_sh, wp.r_sh = bearing_dist_to_axial(wp.bearing, wp.distance_sh)
+
+
+def _expand_all_ast_belts(node: "SystemNode") -> None:
+    """Expand every single-hex AST planet into a full ring of belt hexes.
+
+    Called once, after the final _finalize_coords pass, so coords are already
+    authoritative and disruption passes are complete.  Must NOT be called
+    inside _finalize_coords (which may be invoked multiple times during
+    companion generation).
+    """
+    for star in node.stars:
+        mass = _star_mass(star)
+        expanded: list[Planet] = []
+        for p in star.planets:
+            if p.planet_type == PlanetType.AST:
+                expanded.extend(_expand_ast_belt(p, star.q_sh, star.r_sh, mass))
+            else:
+                expanded.append(p)
+        star.planets = expanded
 
 
 # ---------------------------------------------------------------------------
@@ -346,29 +568,18 @@ def _generate_star(
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry points
 # ---------------------------------------------------------------------------
 
-def generate_system(
+def _build_system_node(
     rng: random.Random,
     node_id: str,
     category: SystemCategory = SystemCategory.NORMAL,
 ) -> SystemNode:
-    """Generate a complete system node.
+    """Core generation — star, planets, WPs, moons, coords.
 
-    Steps:
-      1. Generate primary star (Component A), unless starless.
-      2. Optionally generate binary (B) and trinary (C) companions.
-      3. Generate planets for A (and B if binary).
-      4. Apply binary AST disruption.
-      5. Generate warp points.
-      6. Apply Gas Giant AST conversion.
-      7. Apply WP–planet collision.
-      8. Generate moons.
-
-    The caller is responsible for deciding the category and whether to
-    add binary/trinary companions.  Use generate_system_full() for an
-    all-in-one roll including binary/trinary probability.
+    AST planets are left as single-hex placeholders here.  Callers must
+    invoke _expand_all_ast_belts() after all disruption passes are done.
     """
     node = SystemNode(node_id=node_id)
 
@@ -383,26 +594,37 @@ def generate_system(
     # -- Planets for A ------------------------------------------------
     star_a.planets = _generate_planets(rng, star_a, "A")
 
-    # -- Determine WP category before binary changes planet list -------
-    # (We need to know has_planets for the WP table; check now)
+    # -- Determine WP category before disruption changes planet list ---
     has_any_planets = bool(star_a.planets)
-
-    # -- WP generation (Step 6) ---------------------------------------
     wp_cat = "without_planets" if not has_any_planets else "with_planets"
     if not star_a.has_planets_possible:
         wp_cat = "without_planets"
     node.warp_points = _generate_warp_points(rng, node_id, wp_cat)
 
-    # -- Gas Giant AST conversion (Step 7) ----------------------------
+    # -- Gas Giant AST conversion -------------------------------------
     star_a.planets = _apply_gas_giant_disruption(star_a.planets, rng)
 
-    # -- WP–planet collision (Step 8) ---------------------------------
+    # -- WP–planet collision ------------------------------------------
     star_a.planets = _apply_wp_collision(star_a.planets, node.warp_points)
 
-    # -- Moons (Step 9) -----------------------------------------------
+    # -- Moons --------------------------------------------------------
     for p in star_a.planets:
         p.moons = _generate_moons(rng, p)
 
+    # -- Coords (single-hex AST; expansion happens after this) --------
+    _finalize_coords(node)
+
+    return node
+
+
+def generate_system(
+    rng: random.Random,
+    node_id: str,
+    category: SystemCategory = SystemCategory.NORMAL,
+) -> SystemNode:
+    """Generate a complete system node with fully expanded asteroid belts."""
+    node = _build_system_node(rng, node_id, category)
+    _expand_all_ast_belts(node)
     return node
 
 
@@ -416,13 +638,17 @@ def generate_system_with_companions(
 
     add_binary  — if True, generate Component B star + planets.
     add_trinary — if True (requires add_binary), generate Component C star.
+
+    AST belt expansion happens exactly once, after all disruption passes.
     """
-    node = generate_system(rng, node_id)
+    node = _build_system_node(rng, node_id)
     if not node.stars:
+        _expand_all_ast_belts(node)
         return node
 
     star_a = node.primary
     if star_a is None:
+        _expand_all_ast_belts(node)
         return node
 
     if add_binary:
@@ -453,5 +679,10 @@ def generate_system_with_companions(
             star_c.distance_sh = (_roll(rng, 4) + 1) * 30  # (1d4+1) StMPs × 30 sH
             # Component C gets no planets
             node.stars.append(star_c)
+
+    # Re-run coord assignment now that all disruption passes are complete,
+    # then expand AST belts exactly once.
+    _finalize_coords(node)
+    _expand_all_ast_belts(node)
 
     return node

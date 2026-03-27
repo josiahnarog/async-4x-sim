@@ -7,20 +7,54 @@
   <style>
     * { box-sizing: border-box; }
     body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
-           margin: 0; background: #060612; color: #c0c0d8; display: flex; flex-direction: column; height: 100vh; }
+           margin: 0; background: #060612; color: #c0c0d8;
+           display: flex; flex-direction: column; height: 100vh; }
+
+    /* ---- Header ---- */
     header { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
              border-bottom: 1px solid #1a1a3a; flex-shrink: 0; }
     header h1 { margin: 0; color: #a8d8ea; font-size: 1.05em; letter-spacing: 0.06em; }
     .nav-link { color: #5588aa; text-decoration: none; font-size: 0.85em; }
     .nav-link:hover { color: #a8d8ea; }
+
+    /* ---- Main layout ---- */
     .main { display: flex; flex: 1; overflow: hidden; }
-    /* SVG map */
+
+    /* ---- Map area ---- */
+    #map-col { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     #map-wrap { flex: 1; overflow: hidden; position: relative; cursor: grab; }
     #map-wrap:active { cursor: grabbing; }
-    #system-svg { display: block; }
-    /* Side panel */
-    .panel { width: 320px; flex-shrink: 0; overflow-y: auto; border-left: 1px solid #1a1a3a;
-             padding: 12px 14px; font-size: 0.8em; }
+    #system-svg { display: block; overflow: visible; }
+
+    /* ---- Time scrubber bar ---- */
+    #scrubber-bar {
+      flex-shrink: 0;
+      background: #0d0d20;
+      border-top: 1px solid #1a1a3a;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.78em;
+      color: #8898b8;
+    }
+    #scrubber-bar button {
+      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+      border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 0.9em;
+      font-family: inherit;
+    }
+    #scrubber-bar button:hover { background: #22224a; }
+    #time-slider { flex: 1; accent-color: #44aadd; cursor: pointer; min-width: 0; }
+    #time-label { min-width: 120px; color: #aaccee; text-align: right; }
+    #speed-select {
+      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+      border-radius: 4px; padding: 3px 6px; font-size: 0.9em; font-family: inherit;
+      cursor: pointer;
+    }
+
+    /* ---- Side panel ---- */
+    .panel { width: 320px; flex-shrink: 0; overflow-y: auto;
+             border-left: 1px solid #1a1a3a; padding: 12px 14px; font-size: 0.8em; }
     .panel h2 { color: #a8d8ea; font-size: 0.85em; letter-spacing: 0.08em;
                 text-transform: uppercase; margin: 14px 0 6px; }
     .panel h2:first-child { margin-top: 0; }
@@ -43,13 +77,36 @@
 </header>
 
 <div class="main">
-  <div id="map-wrap">
-    <svg id="system-svg"
-         width="{{ svg_w }}" height="{{ svg_h }}"
-         viewBox="0 0 {{ svg_w }} {{ svg_h }}"
-         xmlns="http://www.w3.org/2000/svg">
-      {{ svg | safe }}
-    </svg>
+  <div id="map-col">
+    <div id="map-wrap">
+      <svg id="system-svg"
+           width="{{ svg_w }}" height="{{ svg_h }}"
+           viewBox="0 0 {{ svg_w }} {{ svg_h }}"
+           xmlns="http://www.w3.org/2000/svg">
+        <!-- Static layer: hex grid, WP dashes, WP diamonds -->
+        <g id="static-layer">{{ svg | safe }}</g>
+        <!-- Orbital ring guides (faint circles) -->
+        <g id="ring-layer"></g>
+        <!-- Dynamic objects: stars, planets, moons -->
+        <g id="obj-layer"></g>
+      </svg>
+    </div>
+
+    <!-- Time scrubber -->
+    <div id="scrubber-bar">
+      <button id="btn-play">▶ Play</button>
+      <input type="range" id="time-slider" min="0" max="36500" step="30" value="0"/>
+      <span id="time-label">Year 0, Day 0</span>
+      <label style="white-space:nowrap">Speed:
+        <select id="speed-select">
+          <option value="1" selected>1 d/frame</option>
+          <option value="30">30 d/frame</option>
+          <option value="365">1 yr/frame</option>
+          <option value="3650">10 yr/frame</option>
+        </select>
+      </label>
+      <button id="btn-reset">Reset</button>
+    </div>
   </div>
 
   <div class="panel">
@@ -97,10 +154,313 @@
 </div>
 
 <script>
+// ============================================================
+// Orbital data (injected by server)
+// ============================================================
+const ORBITAL = {{ orbital_json | safe }};
+const HEX_SIZE = ORBITAL.hex_size;
+const SVG_CX   = ORBITAL.svg_cx;
+const SVG_CY   = ORBITAL.svg_cy;
+const SQ3      = Math.sqrt(3);
+
+// ============================================================
+// Hex math (mirrors campaign/hex_utils.py)
+// ============================================================
+
+function axialToPixel(q, r) {
+  return [HEX_SIZE * 1.5 * q, HEX_SIZE * SQ3 * (r + q * 0.5)];
+}
+
+function screenToAxialFrac(x, y) {
+  return [(2 / 3) * x, y / SQ3 - x / 3];
+}
+
+function cubeRound(qf, rf) {
+  const sf = -qf - rf;
+  let q = Math.round(qf), r = Math.round(rf), s = Math.round(sf);
+  const dq = Math.abs(q - qf), dr = Math.abs(r - rf), ds = Math.abs(s - sf);
+  if (dq > dr && dq > ds)      q = -r - s;
+  else if (dr > ds)             r = -q - s;
+  return [q, r];
+}
+
+function axialToAngle(q, r) {
+  const x = 1.5 * q;
+  const y = SQ3 * (r + q * 0.5);
+  if (x === 0 && y === 0) return 0;
+  return (Math.atan2(x, -y) * 180 / Math.PI + 360) % 360;
+}
+
+function hexRing(radius) {
+  if (radius === 0) return [[0, 0]];
+  const dirs = [[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]];
+  const out = [];
+  let q = dirs[4][0] * radius, r = dirs[4][1] * radius;
+  for (let i = 0; i < 6; i++) {
+    const [dq, dr] = dirs[i];
+    for (let j = 0; j < radius; j++) {
+      out.push([q, r]);
+      q += dq; r += dr;
+    }
+  }
+  return out;
+}
+
+function nearestRingHex(angleDeg, radius) {
+  if (radius === 0) return [0, 0];
+  const ring = hexRing(radius);
+  let best = ring[0], bestDiff = Infinity;
+  for (const [q, r] of ring) {
+    const a = axialToAngle(q, r);
+    let d = Math.abs(a - angleDeg) % 360;
+    if (d > 180) d = 360 - d;
+    if (d < bestDiff) { bestDiff = d; best = [q, r]; }
+  }
+  return best;
+}
+
+// ============================================================
+// Orbital mechanics
+// ============================================================
+
+/** Compass angle of orbiting body at t days. period = 0 → fixed. */
+function orbAngle(angle0, periodDays, tDays) {
+  if (periodDays <= 0) return ((angle0 % 360) + 360) % 360;
+  return ((angle0 + 360 * tDays / periodDays) % 360 + 360) % 360;
+}
+
+/** Hex position of body orbiting at distance distSH with periodYears. */
+function hexPosYears(angle0, periodYears, distSH, tDays) {
+  const angle = orbAngle(angle0, periodYears * 365.25, tDays);
+  return nearestRingHex(angle, distSH);
+}
+
+/** Pixel position of a moon in visual space (fixed visual orbit radius). */
+function moonPixelPos(starPx, starPy, planetPx, planetPy, angle0, periodDays, visualOrbitPx, tDays) {
+  const angle = orbAngle(angle0, periodDays, tDays);
+  const rad = angle * Math.PI / 180;
+  return [planetPx + visualOrbitPx * Math.sin(rad),
+          planetPy - visualOrbitPx * Math.cos(rad)];
+}
+
+// ============================================================
+// SVG helpers
+// ============================================================
+const NS = 'http://www.w3.org/2000/svg';
+
+function mkEl(tag, attrs) {
+  const el = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function mkText(x, y, content, attrs) {
+  const el = mkEl('text', Object.assign({ x: x.toFixed(1), y: y.toFixed(1) }, attrs));
+  el.textContent = content;
+  return el;
+}
+
+// ============================================================
+// Render at time t (in days)
+// ============================================================
+
+function render(tDays) {
+  const objLayer  = document.getElementById('obj-layer');
+  const ringLayer = document.getElementById('ring-layer');
+  objLayer.innerHTML  = '';
+  ringLayer.innerHTML = '';
+
+  for (const star of ORBITAL.stars) {
+    // ---- Star position ----
+    let sx, sy;
+    if (star.component === 'A') {
+      sx = SVG_CX; sy = SVG_CY;
+    } else {
+      const [q, r] = hexPosYears(star.orbital_angle_0, star.orbital_period_years, star.distance_sh, tDays);
+      const [dx, dy] = axialToPixel(q, r);
+      sx = SVG_CX + dx; sy = SVG_CY + dy;
+    }
+
+    // ---- Draw star ----
+    objLayer.appendChild(mkEl('circle', {
+      cx: sx.toFixed(1), cy: sy.toFixed(1), r: star.radius_px,
+      fill: star.colour, stroke: '#ffffff', 'stroke-width': '1', opacity: '0.9'
+    }));
+    objLayer.appendChild(mkText(sx, sy + star.radius_px + 11, star.label, {
+      'text-anchor': 'middle', fill: '#cccccc', 'font-size': '9', 'font-family': 'monospace'
+    }));
+
+    // ---- Planets ----
+    const drawnRings = new Set();  // track orbit rings already drawn (deduplicate AST belts)
+
+    for (const p of star.planets) {
+      // Faint orbital ring — draw once per unique distance_sh (AST belts share a ring)
+      const ringKey = `${p.distance_sh}`;
+      if (!drawnRings.has(ringKey)) {
+        drawnRings.add(ringKey);
+        const ringPx = HEX_SIZE * SQ3 * p.distance_sh;
+        ringLayer.appendChild(mkEl('circle', {
+          cx: sx.toFixed(1), cy: sy.toFixed(1), r: ringPx.toFixed(1),
+          fill: 'none', stroke: '#ffffff', 'stroke-width': '0.4', opacity: '0.12'
+        }));
+      }
+
+      // Planet/belt-hex position
+      const [pq, pr] = hexPosYears(p.orbital_angle_0, p.orbital_period_years, p.distance_sh, tDays);
+      const [pdx, pdy] = axialToPixel(pq, pr);
+      const ppx = sx + pdx, ppy = sy + pdy;
+
+      // Draw planet or asteroid belt hex
+      if (p.is_ast) {
+        // Dashed hex outline at this belt-hex position
+        const hexPts = [];
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI / 3 * i;   // flat-top: 0° points right
+          hexPts.push(`${(ppx + HEX_SIZE * Math.cos(a)).toFixed(1)},${(ppy + HEX_SIZE * Math.sin(a)).toFixed(1)}`);
+        }
+        objLayer.appendChild(mkEl('polygon', {
+          points: hexPts.join(' '),
+          fill: 'none',
+          stroke: p.colour,
+          'stroke-width': '0.5',
+          'stroke-dasharray': '2,2',
+          opacity: '0.45'
+        }));
+
+        // Debris field: scattered tiny shapes, rotated by the hex's initial angle
+        // so each belt hex has a distinct but stable visual pattern
+        const rot = p.orbital_angle_0 * Math.PI / 180;
+        const cr = Math.cos(rot), sr = Math.sin(rot);
+        // [dx, dy, shape] where shape 0=circle, 1=diamond, 2=triangle
+        const debris = [
+          [-3.2,  1.0, 0], [ 2.8, -2.0, 1], [ 0.5,  3.2, 0],
+          [-1.8, -2.8, 2], [ 3.4,  2.2, 0], [-3.0, -0.8, 1],
+          [ 1.2,  1.8, 2], [ 0.0, -3.5, 0],
+        ];
+        for (const [dx, dy, shape] of debris) {
+          const rx = ppx + dx * cr - dy * sr;
+          const ry = ppy + dx * sr + dy * cr;
+          if (shape === 0) {
+            // Tiny circle
+            objLayer.appendChild(mkEl('circle', {
+              cx: rx.toFixed(1), cy: ry.toFixed(1), r: '0.9',
+              fill: p.colour, opacity: '0.85'
+            }));
+          } else if (shape === 1) {
+            // Tiny diamond (2px half-diagonal)
+            const d = 1.4;
+            objLayer.appendChild(mkEl('polygon', {
+              points: `${rx.toFixed(1)},${(ry-d).toFixed(1)} ${(rx+d).toFixed(1)},${ry.toFixed(1)} ${rx.toFixed(1)},${(ry+d).toFixed(1)} ${(rx-d).toFixed(1)},${ry.toFixed(1)}`,
+              fill: p.colour, opacity: '0.80'
+            }));
+          } else {
+            // Tiny triangle (pointing up, 2px)
+            const th = 1.6;
+            objLayer.appendChild(mkEl('polygon', {
+              points: `${rx.toFixed(1)},${(ry-th).toFixed(1)} ${(rx+th).toFixed(1)},${(ry+th).toFixed(1)} ${(rx-th).toFixed(1)},${(ry+th).toFixed(1)}`,
+              fill: p.colour, opacity: '0.80'
+            }));
+          }
+        }
+        // No per-hex label — belt is labelled as a whole in the side panel
+      } else {
+        objLayer.appendChild(mkEl('circle', {
+          cx: ppx.toFixed(1), cy: ppy.toFixed(1), r: p.radius_px,
+          fill: p.colour, stroke: '#ffffff', 'stroke-width': '0.5'
+        }));
+      }
+
+      // Label — only for non-AST planets
+      if (!p.is_ast) {
+        objLayer.appendChild(mkText(ppx, ppy - 7, p.label, {
+          'text-anchor': 'middle', fill: '#aaaaaa', 'font-size': '8', 'font-family': 'monospace'
+        }));
+      }
+
+      // Moons (visual only — pixel scale, not TH scale)
+      for (let mi = 0; mi < p.moons.length; mi++) {
+        const m = p.moons[mi];
+        const visualR = 10 + mi * 6;  // px from planet centre
+        const mAngle  = orbAngle(m.orbital_angle_0, m.orbital_period_days, tDays);
+        const mRad    = mAngle * Math.PI / 180;
+        const mmx = ppx + visualR * Math.sin(mRad);
+        const mmy = ppy - visualR * Math.cos(mRad);
+        objLayer.appendChild(mkEl('circle', {
+          cx: mmx.toFixed(1), cy: mmy.toFixed(1), r: m.is_big ? '3' : '2',
+          fill: '#778899', opacity: '0.9'
+        }));
+      }
+    }
+  }
+}
+
+// ============================================================
+// Time label formatting
+// ============================================================
+
+function formatTime(tDays) {
+  const year = Math.floor(tDays / 365.25);
+  const day  = Math.round(tDays % 365.25);
+  return `Year ${year}, Day ${day}`;
+}
+
+// ============================================================
+// Scrubber controls
+// ============================================================
+
+const slider    = document.getElementById('time-slider');
+const timeLabel = document.getElementById('time-label');
+const btnPlay   = document.getElementById('btn-play');
+const btnReset  = document.getElementById('btn-reset');
+const speedSel  = document.getElementById('speed-select');
+
+let tDays   = 0;
+let playing = false;
+let animId  = null;
+
+function setTime(t) {
+  tDays = Math.max(0, Math.min(36500, t));
+  slider.value = tDays;
+  timeLabel.textContent = formatTime(tDays);
+  render(tDays);
+}
+
+slider.addEventListener('input', () => {
+  setTime(parseFloat(slider.value));
+});
+
+btnPlay.addEventListener('click', () => {
+  playing = !playing;
+  btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
+  if (playing) step();
+  else if (animId) { cancelAnimationFrame(animId); animId = null; }
+});
+
+btnReset.addEventListener('click', () => {
+  playing = false;
+  btnPlay.textContent = '▶ Play';
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+  setTime(0);
+});
+
+function step() {
+  if (!playing) return;
+  const speed = parseFloat(speedSel.value);
+  setTime(tDays + speed);
+  if (tDays >= 36500) {
+    playing = false;
+    btnPlay.textContent = '▶ Play';
+    return;
+  }
+  animId = requestAnimationFrame(step);
+}
+
+// ============================================================
+// Pan / zoom
+// ============================================================
 (function() {
   const wrap = document.getElementById('map-wrap');
   const svg  = document.getElementById('system-svg');
-
   let ox = 0, oy = 0, sc = 1;
   let drag = false, dx0 = 0, dy0 = 0;
 
@@ -127,21 +487,22 @@
     ox = ev.clientX - dx0; oy = ev.clientY - dy0; apply();
   });
   window.addEventListener('mouseup', () => { drag = false; });
-
   wrap.addEventListener('wheel', ev => {
     ev.preventDefault();
     const f = ev.deltaY < 0 ? 1.12 : 0.89;
     const rect = wrap.getBoundingClientRect();
     const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
-    ox = mx - f * (mx - ox);
-    oy = my - f * (my - oy);
-    sc *= f;
-    apply();
+    ox = mx - f * (mx - ox); oy = my - f * (my - oy); sc *= f; apply();
   }, { passive: false });
 
   fit();
   window.addEventListener('resize', fit);
 })();
+
+// ============================================================
+// Initial render at t=0
+// ============================================================
+setTime(0);
 </script>
 </body>
 </html>
