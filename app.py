@@ -21,7 +21,9 @@ app = FastAPI(title="Async 4X Sim (MVP)")
 templates = Jinja2Templates(directory="templates")
 
 from tactical.web import router as tactical_router
+from campaign.web import router as campaign_router
 app.include_router(tactical_router)
+app.include_router(campaign_router)
 
 
 @app.get("/", include_in_schema=False)

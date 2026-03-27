@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>System — {{ node_id }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+           margin: 0; background: #060612; color: #c0c0d8; display: flex; flex-direction: column; height: 100vh; }
+    header { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+             border-bottom: 1px solid #1a1a3a; flex-shrink: 0; }
+    header h1 { margin: 0; color: #a8d8ea; font-size: 1.05em; letter-spacing: 0.06em; }
+    .nav-link { color: #5588aa; text-decoration: none; font-size: 0.85em; }
+    .nav-link:hover { color: #a8d8ea; }
+    .main { display: flex; flex: 1; overflow: hidden; }
+    /* SVG map */
+    #map-wrap { flex: 1; overflow: hidden; position: relative; cursor: grab; }
+    #map-wrap:active { cursor: grabbing; }
+    #system-svg { display: block; }
+    /* Side panel */
+    .panel { width: 320px; flex-shrink: 0; overflow-y: auto; border-left: 1px solid #1a1a3a;
+             padding: 12px 14px; font-size: 0.8em; }
+    .panel h2 { color: #a8d8ea; font-size: 0.85em; letter-spacing: 0.08em;
+                text-transform: uppercase; margin: 14px 0 6px; }
+    .panel h2:first-child { margin-top: 0; }
+    pre { background: #0d0d1a; padding: 8px 10px; border-radius: 5px;
+          color: #c8f0c8; font-size: 0.88em; margin: 0; white-space: pre-wrap; word-break: break-all; }
+    .star-pre  { color: #ffffaa; }
+    .wp-pre    { color: #44ddff; }
+    /* Legend */
+    .legend { margin-top: 12px; }
+    .legend-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .legend-diamond { width: 9px; height: 9px; flex-shrink: 0;
+                      transform: rotate(45deg); border: 1px solid #666; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>{{ node_id }}</h1>
+  <a href="/campaign/" class="nav-link">← Galaxy Map</a>
+</header>
+
+<div class="main">
+  <div id="map-wrap">
+    <svg id="system-svg"
+         width="{{ svg_w }}" height="{{ svg_h }}"
+         viewBox="0 0 {{ svg_w }} {{ svg_h }}"
+         xmlns="http://www.w3.org/2000/svg">
+      {{ svg | safe }}
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h2>Stars</h2>
+    {% for line in star_info %}
+    <pre class="star-pre">{{ line }}</pre>
+    {% else %}
+    <pre class="star-pre">Starless node</pre>
+    {% endfor %}
+
+    <h2>Planets</h2>
+    {% if planet_info %}
+    <pre>{% for line in planet_info %}{{ line }}
+{% endfor %}</pre>
+    {% else %}
+    <pre style="color:#555">No planets</pre>
+    {% endif %}
+
+    <h2>Warp Points</h2>
+    {% if wp_info %}
+    <pre class="wp-pre">{% for line in wp_info %}{{ line }}
+{% endfor %}</pre>
+    {% else %}
+    <pre class="wp-pre" style="color:#555">No warp points</pre>
+    {% endif %}
+
+    <div class="legend">
+      <h2>Legend</h2>
+      <div class="legend-row"><div class="legend-dot" style="background:#44bb44"></div>T — Terran (habitable)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#338833"></div>ST — Sub-Terran</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#888888"></div>B — Barren</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ff5500"></div>H — Hot</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ffaa00"></div>V — Venus-like</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#aaccff"></div>F — Frozen</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ddaa44"></div>G — Gas Giant</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#88aacc"></div>I — Ice Giant</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#555555"></div>AST — Asteroid Belt</div>
+      <div style="margin-top:8px;color:#888">◆ WP (diamonds by visibility)</div>
+      <div class="legend-row"><div class="legend-diamond" style="background:#44ddff"></div>Open</div>
+      <div class="legend-row"><div class="legend-diamond" style="background:#ffaa44"></div>Concealed</div>
+      <div class="legend-row"><div class="legend-diamond" style="background:#ff4444"></div>Hidden</div>
+      <div class="legend-row"><div class="legend-diamond" style="background:#aa44ff"></div>Secret</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const wrap = document.getElementById('map-wrap');
+  const svg  = document.getElementById('system-svg');
+
+  let ox = 0, oy = 0, sc = 1;
+  let drag = false, dx0 = 0, dy0 = 0;
+
+  function fit() {
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    const svgW = {{ svg_w }}, svgH = {{ svg_h }};
+    sc = Math.min(W / svgW, H / svgH) * 0.92;
+    ox = (W - svgW * sc) / 2;
+    oy = (H - svgH * sc) / 2;
+    apply();
+  }
+
+  function apply() {
+    svg.style.transform = `translate(${ox}px,${oy}px) scale(${sc})`;
+    svg.style.transformOrigin = '0 0';
+  }
+
+  wrap.addEventListener('mousedown', ev => {
+    if (ev.button !== 0) return;
+    drag = true; dx0 = ev.clientX - ox; dy0 = ev.clientY - oy;
+  });
+  window.addEventListener('mousemove', ev => {
+    if (!drag) return;
+    ox = ev.clientX - dx0; oy = ev.clientY - dy0; apply();
+  });
+  window.addEventListener('mouseup', () => { drag = false; });
+
+  wrap.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    const f = ev.deltaY < 0 ? 1.12 : 0.89;
+    const rect = wrap.getBoundingClientRect();
+    const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    ox = mx - f * (mx - ox);
+    oy = my - f * (my - oy);
+    sc *= f;
+    apply();
+  }, { passive: false });
+
+  fit();
+  window.addEventListener('resize', fit);
+})();
+</script>
+</body>
+</html>

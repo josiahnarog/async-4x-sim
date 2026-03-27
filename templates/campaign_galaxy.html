@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Campaign — Galaxy Map</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+           margin: 0; background: #060612; color: #c0c0d8; }
+    header { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+             border-bottom: 1px solid #1a1a3a; }
+    header h1 { margin: 0; color: #a8d8ea; font-size: 1.1em; letter-spacing: 0.06em; }
+    .nav-link { color: #5588aa; text-decoration: none; font-size: 0.85em; }
+    .nav-link:hover { color: #a8d8ea; }
+    .btn { padding: 6px 14px; border-radius: 5px; border: 1px solid #334;
+           background: #1a1a3a; color: #c0c0d8; cursor: pointer;
+           font-family: inherit; font-size: 0.85em; text-decoration: none; }
+    .btn:hover { background: #2a2a5a; border-color: #445; }
+    #canvas-wrap { position: relative; width: 100%; height: calc(100vh - 52px); overflow: hidden; }
+    #galaxy-svg { width: 100%; height: 100%; display: block; cursor: grab; }
+    #galaxy-svg:active { cursor: grabbing; }
+    #tooltip {
+      position: absolute; pointer-events: none; background: #0d0d1f; border: 1px solid #334;
+      border-radius: 6px; padding: 8px 12px; font-size: 0.78em; color: #c0c0d8;
+      display: none; max-width: 220px; line-height: 1.7;
+    }
+    .legend { position: absolute; bottom: 12px; left: 12px; background: #0d0d1f;
+              border: 1px solid #222; border-radius: 6px; padding: 8px 12px; font-size: 0.75em; }
+    .legend-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .seed-badge { color: #444; font-size: 0.78em; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Galaxy Map</h1>
+  <a href="/tactical/" class="nav-link">← Tactical</a>
+  <a href="/campaign/new" class="btn">New Galaxy</a>
+  <span class="seed-badge">seed={{ seed }}</span>
+</header>
+
+<div id="canvas-wrap">
+  <svg id="galaxy-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="tooltip"></div>
+  <div class="legend">
+    <div style="color:#a8d8ea;margin-bottom:4px;font-size:0.8em">STAR TYPE</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffffff"></div>White</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffffaa"></div>Yellow-White</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffff44"></div>Yellow</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff9900"></div>Orange</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff4422"></div>Red</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#cc1100"></div>Red Dwarf</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#4488ff"></div>Blue Giant</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#aa44ff"></div>Anomaly</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#555555"></div>Starless</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const svg = document.getElementById('galaxy-svg');
+  const wrap = document.getElementById('canvas-wrap');
+  const tip  = document.getElementById('tooltip');
+
+  // Pan/zoom state
+  let vx = 0, vy = 0, scale = 1;
+  let dragging = false, dragX = 0, dragY = 0;
+
+  function applyTransform() {
+    mainG.setAttribute('transform', `translate(${vx},${vy}) scale(${scale})`);
+  }
+
+  // SVG groups
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  const mainG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const edgeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const nodeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const labelG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  mainG.appendChild(edgeG);
+  mainG.appendChild(nodeG);
+  mainG.appendChild(labelG);
+  svg.appendChild(defs);
+  svg.appendChild(mainG);
+
+  // Glow filter
+  defs.innerHTML = `
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>`;
+
+  // Force layout
+  function forceLayout(nodes, edges, W, H) {
+    const k = Math.sqrt(W * H / Math.max(nodes.length, 1)) * 0.9;
+    // Circular seed positions
+    nodes.forEach((n, i) => {
+      const a = (i / nodes.length) * 2 * Math.PI;
+      n.x = W / 2 + (W * 0.38) * Math.cos(a);
+      n.y = H / 2 + (H * 0.38) * Math.sin(a);
+      n.dx = 0; n.dy = 0;
+    });
+    const iters = 180;
+    for (let t = 0; t < iters; t++) {
+      const cool = W * 0.012 * (1 - t / iters);
+      nodes.forEach(n => { n.dx = 0; n.dy = 0; });
+      // Repulsion
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const dx = nodes[i].x - nodes[j].x;
+          const dy = nodes[i].y - nodes[j].y;
+          const d  = Math.sqrt(dx*dx + dy*dy) || 0.01;
+          const f  = k * k / d;
+          nodes[i].dx += dx / d * f;
+          nodes[i].dy += dy / d * f;
+          nodes[j].dx -= dx / d * f;
+          nodes[j].dy -= dy / d * f;
+        }
+      }
+      // Attraction along edges
+      edges.forEach(e => {
+        const a = nodes[e.a], b = nodes[e.b];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+        const f = d * d / k;
+        a.dx -= dx / d * f; a.dy -= dy / d * f;
+        b.dx += dx / d * f; b.dy += dy / d * f;
+      });
+      // Centre gravity (weak)
+      nodes.forEach(n => {
+        n.dx += (W/2 - n.x) * 0.005;
+        n.dy += (H/2 - n.y) * 0.005;
+      });
+      // Apply
+      nodes.forEach(n => {
+        const len = Math.sqrt(n.dx*n.dx + n.dy*n.dy) || 0.01;
+        const move = Math.min(len, cool);
+        n.x = Math.max(40, Math.min(W - 40, n.x + (n.dx / len) * move));
+        n.y = Math.max(40, Math.min(H - 40, n.y + (n.dy / len) * move));
+      });
+    }
+  }
+
+  function mkEl(tag, attrs = {}) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    return el;
+  }
+
+  function render(data) {
+    const W = wrap.clientWidth  || 900;
+    const H = wrap.clientHeight || 700;
+
+    forceLayout(data.nodes, data.edges, W, H);
+
+    // Edges
+    edgeG.innerHTML = '';
+    data.edges.forEach(e => {
+      const a = data.nodes[e.a], b = data.nodes[e.b];
+      const line = mkEl('line', {
+        x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+        stroke: '#2244aa', 'stroke-width': 1.5, opacity: 0.5,
+      });
+      edgeG.appendChild(line);
+    });
+
+    // Nodes
+    nodeG.innerHTML  = '';
+    labelG.innerHTML = '';
+    data.nodes.forEach((n, i) => {
+      // Size: larger for nexus nodes (many WPs)
+      const r = 8 + Math.min(n.wps, 6) * 1.5;
+
+      // Outer glow ring for nexus
+      if (n.wps >= 5) {
+        nodeG.appendChild(mkEl('circle', {
+          cx: n.x, cy: n.y, r: r + 5,
+          fill: 'none', stroke: n.colour, 'stroke-width': 1,
+          opacity: 0.3, filter: 'url(#glow)',
+        }));
+      }
+
+      const circle = mkEl('circle', {
+        cx: n.x, cy: n.y, r,
+        fill: n.colour, stroke: '#ffffff', 'stroke-width': 0.5,
+        style: 'cursor:pointer',
+        'data-id':      n.id,
+        'data-type':    n.type,
+        'data-planets': n.planets,
+        'data-wps':     n.wps,
+        'data-stars':   n.stars,
+      });
+
+      circle.addEventListener('mouseenter', ev => {
+        tip.style.display  = 'block';
+        tip.innerHTML =
+          `<b style="color:#a8d8ea">${n.id}</b><br>` +
+          `${n.type}<br>` +
+          `Stars: ${n.stars}  Planets: ${n.planets}  WPs: ${n.wps}`;
+      });
+      circle.addEventListener('mousemove', ev => {
+        tip.style.left = (ev.clientX + 14) + 'px';
+        tip.style.top  = (ev.clientY - 10) + 'px';
+      });
+      circle.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+      circle.addEventListener('click', () => {
+        window.location.href = `/campaign/system/${n.id}`;
+      });
+
+      nodeG.appendChild(circle);
+
+      // Label
+      const text = mkEl('text', {
+        x: n.x, y: n.y + r + 13,
+        'text-anchor': 'middle',
+        fill: '#778899', 'font-size': 9,
+        'font-family': 'monospace',
+        style: 'pointer-events:none',
+      });
+      text.textContent = n.id;
+      labelG.appendChild(text);
+    });
+
+    // Centre viewport
+    vx = 0; vy = 0; scale = 1;
+    applyTransform();
+  }
+
+  // Pan
+  svg.addEventListener('mousedown', ev => {
+    if (ev.button !== 0) return;
+    dragging = true; dragX = ev.clientX; dragY = ev.clientY;
+  });
+  window.addEventListener('mousemove', ev => {
+    if (!dragging) return;
+    vx += ev.clientX - dragX; vy += ev.clientY - dragY;
+    dragX = ev.clientX; dragY = ev.clientY;
+    applyTransform();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; });
+
+  // Zoom
+  svg.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    const factor = ev.deltaY < 0 ? 1.12 : 0.89;
+    const rect = svg.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const my = ev.clientY - rect.top;
+    vx = mx - factor * (mx - vx);
+    vy = my - factor * (my - vy);
+    scale *= factor;
+    applyTransform();
+  }, { passive: false });
+
+  // Fetch data and render
+  fetch('/campaign/api/galaxy')
+    .then(r => r.json())
+    .then(data => render(data))
+    .catch(err => {
+      svg.innerHTML = `<text x="50%" y="50%" fill="red" text-anchor="middle">${err}</text>`;
+    });
+})();
+</script>
+</body>
+</html>
