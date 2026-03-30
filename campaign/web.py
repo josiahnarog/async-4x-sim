@@ -23,7 +23,10 @@ from campaign.generator import generate_system_with_companions
 from campaign.linker import build_galaxy
 from campaign.models import (
     AnomalyType,
+    CampaignShip,
     Galaxy,
+    LM_PER_SH,
+    LM_PER_SPEED_PER_DAY,
     MoonType,
     Planet,
     PlanetType,
@@ -32,7 +35,7 @@ from campaign.models import (
     SystemNode,
     WPVisibility,
 )
-from campaign.hex_utils import axial_to_screen, hex_dist
+from campaign.hex_utils import axial_to_screen, cube_round, hex_dist
 from campaign.tables import classify_orbit, get_zone_bounds
 
 router = APIRouter(prefix="/campaign")
@@ -58,7 +61,18 @@ def _make_galaxy(seed: int, n_systems: int = 24) -> Galaxy:
             rng, node_id, add_binary=add_bin, add_trinary=add_tri
         )
         systems[node_id] = node
-    return build_galaxy(systems, rng)
+    g = build_galaxy(systems, rng)
+    # Spawn the U.N.S. Broadside (DD, speed 5) in the first system
+    first_id = next(iter(g.systems))
+    g.systems[first_id].ships.append(CampaignShip(
+        ship_id="broadside-1",
+        name="U.N.S. Broadside",
+        hull_type="DD",
+        speed=5,
+        system_id=first_id,
+        q_sh=0, r_sh=0,
+    ))
+    return g
 
 
 def _get_galaxy() -> Galaxy:
@@ -144,6 +158,7 @@ async def api_galaxy():
             "planets":  total_planets,
             "wps":      len(node.warp_points),
             "stars":    len(node.stars),
+            "ships":    len(node.ships),
         })
 
     edges = []
@@ -371,12 +386,34 @@ def _build_orbital_data(node: SystemNode) -> dict:
             "label":  f"\u2192{dest}",
         })
 
+    ships_out = []
+    for ship in node.ships:
+        dx, dy = _axial_to_pixel(ship.q_sh, ship.r_sh)
+        dest_x, dest_y = None, None
+        if ship.dest_q is not None:
+            ddx, ddy = _axial_to_pixel(ship.dest_q, ship.dest_r)
+            dest_x, dest_y = _SVG_CX + ddx, _SVG_CY + ddy
+        ships_out.append({
+            "ship_id":   ship.ship_id,
+            "name":      ship.name,
+            "hull_type": ship.hull_type,
+            "sH_per_day": ship.sH_per_day,
+            "q_sh":      ship.q_sh,
+            "r_sh":      ship.r_sh,
+            "order_day": ship.order_day,
+            "dest_q":    ship.dest_q,
+            "dest_r":    ship.dest_r,
+            "dest_x":    dest_x,
+            "dest_y":    dest_y,
+        })
+
     return {
-        "hex_size":  _HEX_SIZE,
-        "svg_cx":    _SVG_CX,
-        "svg_cy":    _SVG_CY,
-        "stars":     stars_out,
+        "hex_size":    _HEX_SIZE,
+        "svg_cx":      _SVG_CX,
+        "svg_cy":      _SVG_CY,
+        "stars":       stars_out,
         "warp_points": wps_out,
+        "ships":       ships_out,
     }
 
 
@@ -474,3 +511,48 @@ async def system_view(request: Request, node_id: str):
             "orbital_json": orbital_json,
         },
     )
+
+
+@router.post("/system/{node_id}/ship/{ship_id}/move", response_class=JSONResponse)
+async def ship_move(node_id: str, ship_id: str,
+                    dest_q: int, dest_r: int, t_days: float) -> JSONResponse:
+    """Issue a movement order.  Advances the ship's position to t_days first,
+    then sets the new destination.  Returns updated orbital JSON."""
+    g = _get_galaxy()
+    node = g.systems.get(node_id)
+    if node is None:
+        return JSONResponse({"error": "system not found"}, status_code=404)
+
+    ship = next((s for s in node.ships if s.ship_id == ship_id), None)
+    if ship is None:
+        return JSONResponse({"error": "ship not found"}, status_code=404)
+
+    # Advance position to current game time before issuing new order
+    cur_q, cur_r = _ship_pos_at(ship, t_days)
+    idx = node.ships.index(ship)
+    node.ships[idx] = CampaignShip(
+        ship_id=ship.ship_id,
+        name=ship.name,
+        hull_type=ship.hull_type,
+        speed=ship.speed,
+        system_id=ship.system_id,
+        q_sh=cur_q,
+        r_sh=cur_r,
+        order_day=t_days,
+        dest_q=dest_q,
+        dest_r=dest_r,
+    )
+    return JSONResponse(_build_orbital_data(node))
+
+
+def _ship_pos_at(ship: CampaignShip, t_days: float) -> tuple[int, int]:
+    """Return the ship's hex position at t_days."""
+    if ship.dest_q is None:
+        return ship.q_sh, ship.r_sh
+    dist = hex_dist(ship.q_sh, ship.r_sh, ship.dest_q, ship.dest_r)
+    if dist == 0:
+        return ship.q_sh, ship.r_sh
+    sh_elapsed = ship.sH_per_day * (t_days - ship.order_day)
+    t = min(1.0, sh_elapsed / dist)
+    return cube_round(ship.q_sh + (ship.dest_q - ship.q_sh) * t,
+                      ship.r_sh + (ship.dest_r - ship.r_sh) * t)

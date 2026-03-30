@@ -11,9 +11,11 @@ from typing import Optional
 # Unit constants
 # ---------------------------------------------------------------------------
 
-TH_PER_SH:  int = 2_880   # tactical hexes per strategic hex
-LM_PER_SH:  int = 6       # light-minutes per strategic hex
-SH_PER_STMP: int = 30     # strategic hexes per strategic movement point
+TH_PER_SH:           int = 2_880  # tactical hexes per strategic hex
+LM_PER_SH:           int = 6      # light-minutes per strategic hex
+SH_PER_STMP:         int = 30     # strategic hexes per strategic movement point
+LM_PER_SPEED_PER_DAY: int = 12    # LM a speed-1 ship travels in one day
+                                   # sH/day = speed * LM_PER_SPEED_PER_DAY / LM_PER_SH
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +157,9 @@ class Star:
 @dataclass
 class SystemNode:
     node_id:     str
-    stars:       list[Star]       = field(default_factory=list)
-    warp_points: list[WarpPoint]  = field(default_factory=list)
+    stars:       list[Star]         = field(default_factory=list)
+    warp_points: list[WarpPoint]    = field(default_factory=list)
+    ships:       list[CampaignShip] = field(default_factory=list)
 
     @property
     def primary(self) -> Optional[Star]:
@@ -181,6 +184,25 @@ class SystemNode:
         if self.has_planets:
             return "with_planets"
         return "without_planets"
+
+
+@dataclass
+class CampaignShip:
+    ship_id:   str
+    name:      str
+    hull_type: str            # "DD", "FG", etc.
+    speed:     int            # tactical speed rating
+    system_id: str            # node_id of the system the ship is currently in
+    q_sh:      int            # position when order_day was set
+    r_sh:      int
+    order_day: float = 0.0    # tDays at which the current move order was issued
+    dest_q:    Optional[int] = None
+    dest_r:    Optional[int] = None
+
+    @property
+    def sH_per_day(self) -> float:
+        """Movement rate in sH/day derived from speed rating and current scale."""
+        return self.speed * LM_PER_SPEED_PER_DAY / LM_PER_SH
 
 
 @dataclass

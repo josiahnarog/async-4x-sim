@@ -180,6 +180,20 @@
         }));
       }
 
+      // Ships-present indicator: gold ring + small chevron
+      if (n.ships > 0) {
+        nodeG.appendChild(mkEl('circle', {
+          cx: n.x, cy: n.y, r: r + 7,
+          fill: 'none', stroke: '#ffcc00', 'stroke-width': 1.5,
+          opacity: 0.9,
+        }));
+        const sy = n.y - r - 12, sx = n.x, sh = 5, sw = 4;
+        nodeG.appendChild(mkEl('polygon', {
+          points: `${sx},${sy - sh} ${sx + sw},${sy + sh} ${sx},${sy} ${sx - sw},${sy + sh}`,
+          fill: '#ffcc00', opacity: 0.95,
+        }));
+      }
+
       const circle = mkEl('circle', {
         cx: n.x, cy: n.y, r,
         fill: n.colour, stroke: '#ffffff', 'stroke-width': 0.5,
@@ -196,7 +210,8 @@
         tip.innerHTML =
           `<b style="color:#a8d8ea">${n.id}</b><br>` +
           `${n.type}<br>` +
-          `Stars: ${n.stars}  Planets: ${n.planets}  WPs: ${n.wps}`;
+          `Stars: ${n.stars}  Planets: ${n.planets}  WPs: ${n.wps}` +
+          (n.ships > 0 ? `<br><span style="color:#ffcc00">&#9650; ${n.ships} ship${n.ships > 1 ? 's' : ''}</span>` : '');
       });
       circle.addEventListener('mousemove', ev => {
         tip.style.left = (ev.clientX + 14) + 'px';

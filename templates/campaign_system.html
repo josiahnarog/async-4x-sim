@@ -188,6 +188,31 @@ function cubeRound(qf, rf) {
   return [q, r];
 }
 
+function hexDist(q1, r1, q2, r2) {
+  const dq = q2 - q1, dr = r2 - r1;
+  return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
+}
+
+/** Pixel position [dx, dy from SVG origin] of a ship at tDays. */
+function shipPixelPos(ship, tDays) {
+  if (ship.dest_q === null) {
+    const [dx, dy] = axialToPixel(ship.q_sh, ship.r_sh);
+    return [SVG_CX + dx, SVG_CY + dy];
+  }
+  const dist = hexDist(ship.q_sh, ship.r_sh, ship.dest_q, ship.dest_r);
+  if (dist === 0) {
+    const [dx, dy] = axialToPixel(ship.q_sh, ship.r_sh);
+    return [SVG_CX + dx, SVG_CY + dy];
+  }
+  const shElapsed = ship.sH_per_day * (tDays - ship.order_day);
+  const t = Math.min(1, shElapsed / dist);
+  const qf = ship.q_sh + (ship.dest_q - ship.q_sh) * t;
+  const rf = ship.r_sh + (ship.dest_r - ship.r_sh) * t;
+  const [q, r] = cubeRound(qf, rf);
+  const [dx, dy] = axialToPixel(q, r);
+  return [SVG_CX + dx, SVG_CY + dy];
+}
+
 // ============================================================
 // Orbital mechanics
 // ============================================================
@@ -366,6 +391,35 @@ function render(tDays) {
     }
   }
 
+  // ---- Ships (zoom-invariant) ----
+  for (const ship of ORBITAL.ships) {
+    const [spx, spy] = shipPixelPos(ship, tDays);
+    const s = 6 * sz;
+    const col = selectedShipId === ship.ship_id ? '#ffffff' : '#ffcc00';
+    // Arrowhead pointing north (forward)
+    objLayer.appendChild(mkEl('polygon', {
+      points: `${spx.toFixed(1)},${(spy - s * 1.6).toFixed(1)} ${(spx + s).toFixed(1)},${(spy + s).toFixed(1)} ${spx.toFixed(1)},${(spy + s * 0.4).toFixed(1)} ${(spx - s).toFixed(1)},${(spy + s).toFixed(1)}`,
+      fill: col, stroke: '#000000', 'stroke-width': (0.5 * sz).toFixed(2), opacity: '0.95'
+    }));
+    objLayer.appendChild(mkText(spx, spy + s * 2 + 9 * sz, ship.name, {
+      'text-anchor': 'middle', fill: col, 'font-size': (8 * sz).toFixed(2), 'font-family': 'monospace'
+    }));
+    // Destination marker + line when under orders
+    if (ship.dest_q !== null && ship.dest_x !== null) {
+      objLayer.appendChild(mkEl('line', {
+        x1: spx.toFixed(1), y1: spy.toFixed(1),
+        x2: ship.dest_x.toFixed(1), y2: ship.dest_y.toFixed(1),
+        stroke: '#ffcc00', 'stroke-width': (0.5 * sz).toFixed(2),
+        'stroke-dasharray': `${3*sz},${3*sz}`, opacity: '0.5'
+      }));
+      const ds = 4 * sz;
+      objLayer.appendChild(mkEl('polygon', {
+        points: `${ship.dest_x.toFixed(1)},${(ship.dest_y - ds).toFixed(1)} ${(ship.dest_x + ds).toFixed(1)},${ship.dest_y.toFixed(1)} ${ship.dest_x.toFixed(1)},${(ship.dest_y + ds).toFixed(1)} ${(ship.dest_x - ds).toFixed(1)},${ship.dest_y.toFixed(1)}`,
+        fill: 'none', stroke: '#ffcc00', 'stroke-width': (0.8 * sz).toFixed(2), opacity: '0.7'
+      }));
+    }
+  }
+
   // ---- Warp point diamonds (zoom-invariant) ----
   for (const wp of ORBITAL.warp_points) {
     const s = 5 * sz;
@@ -400,10 +454,11 @@ const btnPlay   = document.getElementById('btn-play');
 const btnReset  = document.getElementById('btn-reset');
 const speedSel  = document.getElementById('speed-select');
 
-let tDays    = 0;
-let playing  = false;
-let animId   = null;
-let lastTime = null;
+let tDays          = 0;
+let playing        = false;
+let animId         = null;
+let lastTime       = null;
+let selectedShipId = ORBITAL.ships.length > 0 ? ORBITAL.ships[0].ship_id : null;
 
 function setTime(t) {
   tDays = Math.max(0, Math.min(36500, t));
@@ -490,6 +545,51 @@ function step(timestamp) {
 
   fit();
   window.addEventListener('resize', fit);
+})();
+
+// ============================================================
+// Ship selection and movement orders
+// Left-click: select ship    Right-click: move selected ship
+// ============================================================
+(function() {
+  const wrap = document.getElementById('map-wrap');
+  const svg  = document.getElementById('system-svg');
+
+  function evToHex(ev) {
+    const rect = svg.getBoundingClientRect();
+    const svgX = (ev.clientX - rect.left) / currentScale;
+    const svgY = (ev.clientY - rect.top)  / currentScale;
+    const cx = svgX - SVG_CX, cy = svgY - SVG_CY;
+    return cubeRound(...screenToAxialFrac(cx / HEX_SIZE, cy / HEX_SIZE));
+  }
+
+  // Left-click: select a ship whose current hex matches the clicked hex
+  wrap.addEventListener('click', (ev) => {
+    const [q, r] = evToHex(ev);
+    const hit = ORBITAL.ships.find(ship => {
+      const [spx, spy] = shipPixelPos(ship, tDays);
+      const [sq, sr] = cubeRound(...screenToAxialFrac((spx - SVG_CX) / HEX_SIZE, (spy - SVG_CY) / HEX_SIZE));
+      return sq === q && sr === r;
+    });
+    selectedShipId = hit ? hit.ship_id : null;
+    render(tDays);
+  });
+
+  // Right-click: issue move order for selected ship
+  wrap.addEventListener('contextmenu', async (ev) => {
+    ev.preventDefault();
+    if (!selectedShipId) return;
+    const [q, r] = evToHex(ev);
+    const nodeId = '{{ node_id }}';
+    const resp = await fetch(
+      `/campaign/system/${nodeId}/ship/${selectedShipId}/move?dest_q=${q}&dest_r=${r}&t_days=${tDays}`,
+      { method: 'POST' }
+    );
+    if (!resp.ok) return;
+    const data = await resp.json();
+    Object.assign(ORBITAL, data);
+    render(tDays);
+  });
 })();
 
 // ============================================================
