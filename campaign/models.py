@@ -12,7 +12,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 TH_PER_SH:  int = 2_880   # tactical hexes per strategic hex
-LM_PER_SH:  int = 12      # light-minutes per strategic hex
+LM_PER_SH:  int = 6       # light-minutes per strategic hex
 SH_PER_STMP: int = 30     # strategic hexes per strategic movement point
 
 
@@ -63,10 +63,8 @@ class MoonType(str, Enum):
 
 
 class WPVisibility(str, Enum):
-    OPEN      = "Open"
-    CONCEALED = "Concealed"
-    HIDDEN    = "Hidden"
-    SECRET    = "Secret"
+    OPEN   = "Open"
+    CLOSED = "Closed"
 
 
 class SystemCategory(str, Enum):

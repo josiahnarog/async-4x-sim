@@ -33,7 +33,7 @@ from campaign.models import (
     WPVisibility,
 )
 from campaign.hex_utils import axial_to_screen, hex_dist
-from campaign.tables import classify_orbit
+from campaign.tables import classify_orbit, get_zone_bounds
 
 router = APIRouter(prefix="/campaign")
 templates = Jinja2Templates(directory="templates")
@@ -97,10 +97,8 @@ _PLANET_COLOURS: dict[str, str] = {
 }
 
 _WP_VIS_COLOURS: dict[str, str] = {
-    WPVisibility.OPEN.value:      "#44ddff",
-    WPVisibility.CONCEALED.value: "#ffaa44",
-    WPVisibility.HIDDEN.value:    "#ff4444",
-    WPVisibility.SECRET.value:    "#aa44ff",
+    WPVisibility.OPEN.value:   "#44ddff",
+    WPVisibility.CLOSED.value: "#ff4444",
 }
 
 
@@ -165,7 +163,7 @@ async def api_galaxy():
 # ---------------------------------------------------------------------------
 
 _HEX_SIZE  = 9     # pixels: centre-to-corner (= 1 sH in display)
-_DISPLAY_R = 33    # sH radius of hex disk to render
+_DISPLAY_R = 50    # sH radius of hex disk to render (50 LM ≈ 6 AU inner-system background)
 
 _SVG_W  = 1000
 _SVG_H  = 1150
@@ -197,11 +195,57 @@ def _hex_poly(cx: float, cy: float) -> str:
     return " ".join(pts)
 
 
-def _zone_colour_for_dist(dist_sh: int, spectral_class) -> str:
-    if spectral_class is None or dist_sh == 0:
-        return "#0a0a1a"
-    zone = classify_orbit(spectral_class, dist_sh)
-    return _ZONE_COLOURS.get(zone, "#060812")
+_SQ3 = math.sqrt(3)
+
+
+def _zone_bands(sc: SpectralClass | None, display_r: int) -> list[tuple[float, str]]:
+    """Return list of (outer_radius_px, colour) from outermost to innermost.
+
+    Used to paint circular zone rings via painter's algorithm.
+    """
+    # Always start with a full background circle
+    display_px = _HEX_SIZE * _SQ3 * display_r
+
+    if sc is None:
+        return [(display_px, _ZONE_COLOURS["beyond"])]
+
+    bounds = get_zone_bounds(sc)
+    if bounds is None:
+        return [(display_px, _ZONE_COLOURS["beyond"])]
+
+    tl_lo, tl_hi = bounds["tidelock"]
+    rk_lo, rk_hi = bounds["rocky"]
+    gs_lo, gs_hi = bounds["gas"]
+    ic_lo, ic_hi = bounds["ice"]
+    bio = bounds["biosphere"]
+
+    # Collect all meaningful zone boundaries within display_r, sorted ascending
+    breakpoints = sorted(set(
+        v for v in [
+            0, rk_lo, tl_hi, rk_hi,
+            bio[0] if bio else None, bio[1] if bio else None,
+            gs_lo, gs_hi, ic_lo, ic_hi, display_r,
+        ]
+        if v is not None and v <= display_r
+    ))
+    if not breakpoints or breakpoints[-1] < display_r:
+        breakpoints.append(display_r)
+
+    # Build (inner, outer, zone) bands, then reverse for painter's algorithm
+    bands: list[tuple[float, str]] = []
+    for i in range(len(breakpoints) - 1):
+        inner_sh = breakpoints[i]
+        outer_sh = breakpoints[i + 1]
+        mid_sh = (inner_sh + outer_sh) / 2
+        if mid_sh <= 0:
+            zone = "beyond"
+        else:
+            zone = classify_orbit(sc, round(mid_sh))
+        outer_px = _HEX_SIZE * _SQ3 * outer_sh
+        bands.append((outer_px, _ZONE_COLOURS.get(zone, _ZONE_COLOURS["beyond"])))
+
+    # Painter's algorithm: draw outermost band first
+    return list(reversed(bands))
 
 
 def _escape(s: str) -> str:
@@ -217,17 +261,22 @@ def _render_system_svg(node: SystemNode) -> str:
     # Background
     parts.append(f'<rect width="{_SVG_W}" height="{_SVG_H}" fill="#060612"/>')
 
-    # --- Hex tile grid (zone-coloured) ---
+    # --- Circular zone bands (painter's algorithm: outermost first) ---
+    for outer_px, col in _zone_bands(sc, _DISPLAY_R):
+        parts.append(
+            f'<circle cx="{_SVG_CX}" cy="{_SVG_CY}" r="{outer_px:.1f}" fill="{col}"/>'
+        )
+
+    # --- Hex grid overlay (outline only, no fill) ---
     for q in range(-_DISPLAY_R, _DISPLAY_R + 1):
         for r in range(-_DISPLAY_R, _DISPLAY_R + 1):
             if hex_dist(q, r) > _DISPLAY_R:
                 continue
             dx, dy = _axial_to_pixel(q, r)
             cx, cy = _SVG_CX + dx, _SVG_CY + dy
-            col = _zone_colour_for_dist(hex_dist(q, r), sc)
             pts = _hex_poly(cx, cy)
             parts.append(
-                f'<polygon points="{pts}" fill="{col}" stroke="#111128" stroke-width="0.4"/>'
+                f'<polygon points="{pts}" fill="none" stroke="#111128" stroke-width="0.4"/>'
             )
 
     # --- WP dashed lines from centre (use stored canonical coords) ---
@@ -238,24 +287,6 @@ def _render_system_svg(node: SystemNode) -> str:
             f'<line x1="{_SVG_CX}" y1="{_SVG_CY}" '
             f'x2="{_SVG_CX + dx:.1f}" y2="{_SVG_CY + dy:.1f}" '
             f'stroke="{col}" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.5"/>'
-        )
-
-    # --- Warp points (diamonds, use stored canonical coords) ---
-    for wp in node.warp_points:
-        dx, dy = _axial_to_pixel(wp.q_sh, wp.r_sh)
-        wx, wy = _SVG_CX + dx, _SVG_CY + dy
-        col = _WP_VIS_COLOURS.get(wp.visibility.value, "#44ddff")
-        s = 6
-        pts = (f"{wx:.1f},{wy - s:.1f} {wx + s:.1f},{wy:.1f} "
-               f"{wx:.1f},{wy + s:.1f} {wx - s:.1f},{wy:.1f}")
-        parts.append(
-            f'<polygon points="{pts}" fill="{col}" stroke="#ffffff" '
-            f'stroke-width="0.5" opacity="0.85"/>'
-        )
-        link_label = f"→{wp.linked_to[0]}" if wp.linked_to else "?"
-        parts.append(
-            f'<text x="{wx:.1f}" y="{wy + s + 10:.1f}" text-anchor="middle" '
-            f'fill="{col}" font-size="8" font-family="monospace">{_escape(link_label)}</text>'
         )
 
     # Scale note
@@ -288,7 +319,7 @@ def _build_orbital_data(node: SystemNode) -> dict:
         planets_out = []
         for p in star.planets:
             col_p = _PLANET_COLOURS.get(p.planet_type.value, "#888888")
-            pr = 4
+            pr = 3
             if p.planet_type != PlanetType.AST:
                 pr = 6 if p.mass == 3 else (5 if p.mass == 2 else 4)
 
@@ -324,8 +355,20 @@ def _build_orbital_data(node: SystemNode) -> dict:
             "orbital_period_years":  star.orbital_period_years,
             "colour":                col,
             "label":                 lbl,
-            "radius_px":             14 if star.component == "A" else 9,
+            "radius_px":             20 if star.component == "A" else 14,
             "planets":               planets_out,
+        })
+
+    wps_out = []
+    for wp in node.warp_points:
+        dx, dy = _axial_to_pixel(wp.q_sh, wp.r_sh)
+        col = _WP_VIS_COLOURS.get(wp.visibility.value, "#44ddff")
+        dest = wp.linked_to[0] if wp.linked_to else "?"
+        wps_out.append({
+            "x":     _SVG_CX + dx,
+            "y":     _SVG_CY + dy,
+            "colour": col,
+            "label":  f"\u2192{dest}",
         })
 
     return {
@@ -333,6 +376,7 @@ def _build_orbital_data(node: SystemNode) -> dict:
         "svg_cx":    _SVG_CX,
         "svg_cy":    _SVG_CY,
         "stars":     stars_out,
+        "warp_points": wps_out,
     }
 
 

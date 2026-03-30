@@ -15,6 +15,7 @@ from campaign.generator import (
 )
 from campaign.linker import build_galaxy, link_galaxy
 from campaign.models import (
+    LM_PER_SH,
     Planet,
     PlanetType,
     SpectralClass,
@@ -24,6 +25,11 @@ from campaign.models import (
     WarpPoint,
     WPVisibility,
 )
+
+
+def _lm(lm: int) -> int:
+    """Convert a canonical LM distance to sH using the current scale constant."""
+    return max(1, round(lm / LM_PER_SH))
 from campaign.tables import (
     classify_orbit,
     moon_count_modifier,
@@ -87,8 +93,8 @@ class TestOrbitDistances:
     def test_valid_pair(self):
         result = roll_orbit_distances(1, 3)
         assert result is not None
-        assert result[0] == 1
-        assert result[1] == 3
+        assert result[0] == _lm(12)
+        assert result[1] == _lm(36)
 
     def test_gap_too_small_returns_none(self):
         assert roll_orbit_distances(5, 6) is None
@@ -100,8 +106,8 @@ class TestOrbitDistances:
     def test_max_pair(self):
         result = roll_orbit_distances(8, 10)
         assert result is not None
-        assert result[0] == 8
-        assert result[1] == 10
+        assert result[0] == _lm(96)
+        assert result[1] == _lm(120)
 
     def test_none_slots_present(self):
         result = roll_orbit_distances(1, 6)
@@ -111,32 +117,32 @@ class TestOrbitDistances:
 
 class TestClassifyOrbit:
     def test_tidelock(self):
-        # Yellow: tidelock 1-3
-        assert classify_orbit(SpectralClass.YELLOW, 2) == "hot"
+        # Yellow: tidelock 12-36 LM; 24 LM is hot
+        assert classify_orbit(SpectralClass.YELLOW, _lm(24)) == "hot"
 
     def test_lwz(self):
-        # Yellow: biosphere 6-12
-        assert classify_orbit(SpectralClass.YELLOW, 9) == "lwz"
+        # Yellow: biosphere 72-144 LM; 108 LM is lwz
+        assert classify_orbit(SpectralClass.YELLOW, _lm(108)) == "lwz"
 
     def test_cold_rocky(self):
-        # Yellow: rocky 1-16, bio 6-12, tidelock 1-3; 4-5 and 13-16 are cold rocky
-        assert classify_orbit(SpectralClass.YELLOW, 14) == "cold_rocky"
+        # Yellow: rocky 12-192 LM, bio 72-144, tidelock 12-36; 168 LM is cold_rocky
+        assert classify_orbit(SpectralClass.YELLOW, _lm(168)) == "cold_rocky"
 
     def test_gas(self):
-        # Yellow: gas 17-83
-        assert classify_orbit(SpectralClass.YELLOW, 50) == "gas"
+        # Yellow: gas 204-996 LM; 600 LM is gas
+        assert classify_orbit(SpectralClass.YELLOW, _lm(600)) == "gas"
 
     def test_ice(self):
-        # Yellow: ice 84-300
-        assert classify_orbit(SpectralClass.YELLOW, 100) == "ice"
+        # Yellow: ice 1008-3600 LM; 1200 LM is ice
+        assert classify_orbit(SpectralClass.YELLOW, _lm(1200)) == "ice"
 
     def test_beyond(self):
         assert classify_orbit(SpectralClass.YELLOW, 9999) == "beyond"
 
     def test_red_dwarf_no_biosphere(self):
-        # Red Dwarf has no biosphere — orbits 1-3 are rocky; only 1 is tidelock
-        assert classify_orbit(SpectralClass.RED_DWARF, 1) == "hot"
-        assert classify_orbit(SpectralClass.RED_DWARF, 2) == "cold_rocky"
+        # Red Dwarf: tidelock 12 LM, rocky 12-36 LM; 12 LM is hot, 24 LM is cold_rocky
+        assert classify_orbit(SpectralClass.RED_DWARF, _lm(12)) == "hot"
+        assert classify_orbit(SpectralClass.RED_DWARF, _lm(24)) == "cold_rocky"
 
 
 class TestRollPlanet:
@@ -190,27 +196,27 @@ class TestWPCount:
 
 class TestWPDistance:
     def test_min(self):
-        assert roll_wp_distance(1) == 1
+        assert roll_wp_distance(1) == _lm(12)
 
     def test_max(self):
-        assert roll_wp_distance(100) == 30
+        assert roll_wp_distance(100) == _lm(360)
 
     def test_mid(self):
-        assert roll_wp_distance(50) == 20
+        assert roll_wp_distance(50) == _lm(240)
 
 
 class TestWPVisibility:
     def test_open(self):
         assert roll_wp_visibility(4) == WPVisibility.OPEN
 
-    def test_concealed(self):
-        assert roll_wp_visibility(7) == WPVisibility.CONCEALED
+    def test_closed_low(self):
+        assert roll_wp_visibility(7) == WPVisibility.CLOSED
 
-    def test_hidden(self):
-        assert roll_wp_visibility(9) == WPVisibility.HIDDEN
+    def test_closed_mid(self):
+        assert roll_wp_visibility(9) == WPVisibility.CLOSED
 
-    def test_secret(self):
-        assert roll_wp_visibility(10) == WPVisibility.SECRET
+    def test_closed_high(self):
+        assert roll_wp_visibility(10) == WPVisibility.CLOSED
 
 
 class TestMoonCount:

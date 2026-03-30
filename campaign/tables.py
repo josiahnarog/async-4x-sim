@@ -1,11 +1,13 @@
 """All lookup tables for the campaign system generator.
 
-All distance values are in sH (strategic hexes) unless noted otherwise.
+Table distance values are stored in light-minutes (LM), the physical unit.
+Functions that return or compare distances convert to/from sH using LM_PER_SH
+at the boundary, so callers always work in sH.
 """
 
 from __future__ import annotations
 
-from campaign.models import AnomalyType, PlanetType, SpectralClass, WPVisibility
+from campaign.models import AnomalyType, LM_PER_SH, PlanetType, SpectralClass, WPVisibility
 
 
 # ---------------------------------------------------------------------------
@@ -66,60 +68,75 @@ def roll_anomaly_type(roll: int) -> AnomalyType:
 
 
 # ---------------------------------------------------------------------------
-# 3. Zone boundaries by spectral class (distances in sH)
+# 3. Zone boundaries by spectral class (distances in LM)
 # ---------------------------------------------------------------------------
 # Each entry: {"rocky": (lo, hi), "gas": (lo, hi), "ice": (lo, hi),
 #              "biosphere": (lo, hi) | None, "tidelock": (lo, hi)}
 
 _ZONE_BOUNDS: dict[SpectralClass, dict] = {
     SpectralClass.WHITE: {
-        "rocky":     (1,   50),
-        "gas":       (51,  280),
-        "ice":       (281, 350),
-        "biosphere": (20,  40),
-        "tidelock":  (1,   5),
+        "rocky":     (12,   600),
+        "gas":       (612,  3360),
+        "ice":       (3372, 4200),
+        "biosphere": (240,  480),
+        "tidelock":  (12,   60),
     },
     SpectralClass.YELLOW_WHITE: {
-        "rocky":     (1,   25),
-        "gas":       (26,  130),
-        "ice":       (131, 300),
-        "biosphere": (10,  18),
-        "tidelock":  (1,   4),
+        "rocky":     (12,   300),
+        "gas":       (312,  1560),
+        "ice":       (1572, 3600),
+        "biosphere": (120,  216),
+        "tidelock":  (12,   48),
     },
     SpectralClass.YELLOW: {
-        "rocky":     (1,   16),
-        "gas":       (17,  83),
-        "ice":       (84,  300),
-        "biosphere": (6,   12),
-        "tidelock":  (1,   3),
+        "rocky":     (12,   192),
+        "gas":       (204,  996),
+        "ice":       (1008, 3600),
+        "biosphere": (72,   144),
+        "tidelock":  (12,   36),
     },
     SpectralClass.ORANGE: {
-        "rocky":     (1,   9),
-        "gas":       (10,  38),
-        "ice":       (39,  250),
-        "biosphere": (3,   5),
-        "tidelock":  (1,   2),
+        "rocky":     (12,   108),
+        "gas":       (120,  456),
+        "ice":       (468,  3000),
+        "biosphere": (36,   60),
+        "tidelock":  (12,   24),
     },
     SpectralClass.RED: {
-        "rocky":     (1,   5),
-        "gas":       (6,   18),
-        "ice":       (19,  200),
-        "biosphere": (3,   4),
-        "tidelock":  (1,   2),
+        "rocky":     (12,   60),
+        "gas":       (72,   216),
+        "ice":       (228,  2400),
+        "biosphere": (36,   48),
+        "tidelock":  (12,   24),
     },
     SpectralClass.RED_DWARF: {
-        "rocky":     (1,   3),
-        "gas":       (4,   11),
-        "ice":       (12,  200),
+        "rocky":     (12,   36),
+        "gas":       (48,   132),
+        "ice":       (144,  2400),
         "biosphere": None,
-        "tidelock":  (1,   1),
+        "tidelock":  (12,   12),
     },
 }
 
 
 def get_zone_bounds(spectral_class: SpectralClass) -> dict | None:
-    """Return zone boundary dict for a spectral class, or None if not applicable."""
-    return _ZONE_BOUNDS.get(spectral_class)
+    """Return zone boundary dict for a spectral class with distances in sH.
+
+    Converts the stored LM values to sH using LM_PER_SH so callers always
+    work in the same unit as Planet.distance_sh.
+    """
+    raw = _ZONE_BOUNDS.get(spectral_class)
+    if raw is None:
+        return None
+    result: dict = {}
+    for key, val in raw.items():
+        if val is None:
+            result[key] = None
+        else:
+            lo_lm, hi_lm = val
+            result[key] = (max(1, round(lo_lm / LM_PER_SH)),
+                           round(hi_lm / LM_PER_SH))
+    return result
 
 
 def classify_orbit(spectral_class: SpectralClass, distance_sh: int) -> str:
@@ -127,7 +144,7 @@ def classify_orbit(spectral_class: SpectralClass, distance_sh: int) -> str:
 
     Returns one of: "hot", "lwz", "cold_rocky", "gas", "ice", "beyond"
     """
-    bounds = _ZONE_BOUNDS.get(spectral_class)
+    bounds = get_zone_bounds(spectral_class)   # already in sH
     if bounds is None:
         return "beyond"
 
@@ -151,61 +168,69 @@ def classify_orbit(spectral_class: SpectralClass, distance_sh: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 4. Orbit distance table  (A, B) → tuple of up to 9 sH distances
+# 4. Orbit distance table  (A, B) → tuple of up to 9 LM distances
 # ---------------------------------------------------------------------------
 # Key: (A, B) where A = lowest 1d10 result, B = highest, B >= A+2.
-# Value: tuple of orbit distances I–IX in sH; None marks absent orbits.
+# Value: tuple of orbit distances I–IX in LM; None marks absent orbits.
+# roll_orbit_distances() converts to sH before returning.
 
 _ORBIT_TABLE: dict[tuple[int, int], tuple[int | None, ...]] = {
-    (1, 3):  (1,  3,   5,   9,  17,  33,  65, 129, 257),
-    (1, 4):  (1,  4,   7,  13,  25,  49,  97, 193, None),
-    (1, 5):  (1,  5,   9,  17,  33,  65, 129, 257, None),
-    (1, 6):  (1,  6,  11,  21,  41,  81, 161, None, None),
-    (1, 7):  (1,  7,  13,  25,  49,  97, 193, None, None),
-    (1, 8):  (1,  8,  15,  29,  57, 113, 225, None, None),
-    (1, 9):  (1,  9,  17,  33,  65, 129, 257, None, None),
-    (1, 10): (1, 10,  19,  37,  73, 145, 289, None, None),
-    (2, 4):  (2,  4,   6,  10,  18,  34,  66, 130, 258),
-    (2, 5):  (2,  5,   8,  14,  26,  50,  98, 194, None),
-    (2, 6):  (2,  6,  10,  18,  34,  66, 130, 258, None),
-    (2, 7):  (2,  7,  12,  22,  42,  82, 162, None, None),
-    (2, 8):  (2,  8,  14,  26,  50,  98, 194, None, None),
-    (2, 9):  (2,  9,  16,  30,  58, 114, 226, None, None),
-    (2, 10): (2, 10,  18,  34,  66, 130, 258, None, None),
-    (3, 5):  (3,  5,   7,  11,  19,  35,  67, 131, 259),
-    (3, 6):  (3,  6,   9,  15,  27,  51,  99, 195, None),
-    (3, 7):  (3,  7,  11,  19,  35,  67, 131, 259, None),
-    (3, 8):  (3,  8,  13,  23,  43,  83, 163, None, None),
-    (3, 9):  (3,  9,  15,  27,  51,  99, 195, None, None),
-    (3, 10): (3, 10,  17,  31,  59, 115, 227, None, None),
-    (4, 6):  (4,  6,   8,  12,  20,  36,  68, 132, 260),
-    (4, 7):  (4,  7,  10,  16,  28,  52, 100, 196, None),
-    (4, 8):  (4,  8,  12,  20,  36,  68, 132, 260, None),
-    (4, 9):  (4,  9,  14,  24,  44,  84, 164, None, None),
-    (4, 10): (4, 10,  16,  28,  52, 100, 196, None, None),
-    (5, 7):  (5,  7,   9,  13,  21,  37,  69, 133, 261),
-    (5, 8):  (5,  8,  11,  17,  29,  53, 101, 197, None),
-    (5, 9):  (5,  9,  13,  21,  37,  69, 133, 261, None),
-    (5, 10): (5, 10,  15,  25,  45,  85, 165, None, None),
-    (6, 8):  (6,  8,  10,  14,  22,  38,  70, 134, 262),
-    (6, 9):  (6,  9,  12,  18,  30,  54, 102, 198, None),
-    (6, 10): (6, 10,  14,  22,  38,  70, 134, 262, None),
-    (7, 9):  (7,  9,  11,  15,  23,  39,  71, 135, 263),
-    (7, 10): (7, 10,  13,  19,  31,  55, 103, 199, None),
-    (8, 10): (8, 10,  12,  16,  24,  40,  72, 136, 264),
+    (1, 3):  (12,   36,   60,  108,  204,   396,   780,  1548,  3084),
+    (1, 4):  (12,   48,   84,  156,  300,   588,  1164,  2316,  None),
+    (1, 5):  (12,   60,  108,  204,  396,   780,  1548,  3084,  None),
+    (1, 6):  (12,   72,  132,  252,  492,   972,  1932,  None,  None),
+    (1, 7):  (12,   84,  156,  300,  588,  1164,  2316,  None,  None),
+    (1, 8):  (12,   96,  180,  348,  684,  1356,  2700,  None,  None),
+    (1, 9):  (12,  108,  204,  396,  780,  1548,  3084,  None,  None),
+    (1, 10): (12,  120,  228,  444,  876,  1740,  3468,  None,  None),
+    (2, 4):  (24,   48,   72,  120,  216,   408,   792,  1560,  3096),
+    (2, 5):  (24,   60,   96,  168,  312,   600,  1176,  2328,  None),
+    (2, 6):  (24,   72,  120,  216,  408,   792,  1560,  3096,  None),
+    (2, 7):  (24,   84,  144,  264,  504,   984,  1944,  None,  None),
+    (2, 8):  (24,   96,  168,  312,  600,  1176,  2328,  None,  None),
+    (2, 9):  (24,  108,  192,  360,  696,  1368,  2712,  None,  None),
+    (2, 10): (24,  120,  216,  408,  792,  1560,  3096,  None,  None),
+    (3, 5):  (36,   60,   84,  132,  228,   420,   804,  1572,  3108),
+    (3, 6):  (36,   72,  108,  180,  324,   612,  1188,  2340,  None),
+    (3, 7):  (36,   84,  132,  228,  420,   804,  1572,  3108,  None),
+    (3, 8):  (36,   96,  156,  276,  516,   996,  1956,  None,  None),
+    (3, 9):  (36,  108,  180,  324,  612,  1188,  2340,  None,  None),
+    (3, 10): (36,  120,  204,  372,  708,  1380,  2724,  None,  None),
+    (4, 6):  (48,   72,   96,  144,  240,   432,   816,  1584,  3120),
+    (4, 7):  (48,   84,  120,  192,  336,   624,  1200,  2352,  None),
+    (4, 8):  (48,   96,  144,  240,  432,   816,  1584,  3120,  None),
+    (4, 9):  (48,  108,  168,  288,  528,  1008,  1968,  None,  None),
+    (4, 10): (48,  120,  192,  336,  624,  1200,  2352,  None,  None),
+    (5, 7):  (60,   84,  108,  156,  252,   444,   828,  1596,  3132),
+    (5, 8):  (60,   96,  132,  204,  348,   636,  1212,  2364,  None),
+    (5, 9):  (60,  108,  156,  252,  444,   828,  1596,  3132,  None),
+    (5, 10): (60,  120,  180,  300,  540,  1020,  1980,  None,  None),
+    (6, 8):  (72,   96,  120,  168,  264,   456,   840,  1608,  3144),
+    (6, 9):  (72,  108,  144,  216,  360,   648,  1224,  2376,  None),
+    (6, 10): (72,  120,  168,  264,  456,   840,  1608,  3144,  None),
+    (7, 9):  (84,  108,  132,  180,  276,   468,   852,  1620,  3156),
+    (7, 10): (84,  120,  156,  228,  372,   660,  1236,  2388,  None),
+    (8, 10): (96,  120,  144,  192,  288,   480,   864,  1632,  3168),
 }
 
 
 def roll_orbit_distances(d1: int, d2: int) -> tuple[int | None, ...] | None:
-    """Return orbit distance tuple for a pair of 1d10 results.
+    """Return orbit distance tuple (in sH) for a pair of 1d10 results.
 
     Automatically orders d1/d2 as (lo, hi).  Returns None if the gap is < 2
-    (caller should re-roll).
+    (caller should re-roll).  LM values from the table are divided by
+    LM_PER_SH and rounded to the nearest integer sH.
     """
     a, b = min(d1, d2), max(d1, d2)
     if b - a < 2:
         return None
-    return _ORBIT_TABLE.get((a, b))
+    lm_tuple = _ORBIT_TABLE.get((a, b))
+    if lm_tuple is None:
+        return None
+    return tuple(
+        max(1, round(v / LM_PER_SH)) if v is not None else None
+        for v in lm_tuple
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,25 +337,25 @@ def roll_wp_count(roll100: int, category: str, roll10: int = 0) -> int:
 # 7. WP distance (1d100 → sH)
 # ---------------------------------------------------------------------------
 
-# (max_roll_inclusive, distance_sH)
+# (max_roll_inclusive, distance_LM) — converted to sH by roll_wp_distance
 _WP_DISTANCE_ROWS: list[tuple[int, int]] = [
-    (1,  1),  (2,  2),  (3,  3),  (4,  4),  (5,  5),
-    (7,  6),  (9,  7),  (11, 8),  (13, 9),  (15, 10),
-    (18, 11), (21, 12), (24, 13), (27, 14), (30, 15),
-    (34, 16), (38, 17), (42, 18), (46, 19), (50, 20),
-    (55, 21), (60, 22), (65, 23), (70, 24), (75, 25),
-    (80, 26), (85, 27), (90, 28), (95, 29), (100, 30),
+    (1,   12), (2,   24), (3,   36), (4,   48), (5,   60),
+    (7,   72), (9,   84), (11,  96), (13, 108), (15, 120),
+    (18, 132), (21, 144), (24, 156), (27, 168), (30, 180),
+    (34, 192), (38, 204), (42, 216), (46, 228), (50, 240),
+    (55, 252), (60, 264), (65, 276), (70, 288), (75, 300),
+    (80, 312), (85, 324), (90, 336), (95, 348), (100, 360),
 ]
 
 
 def roll_wp_distance(roll: int) -> int:
-    """Map a 1d100 roll to a WP distance in sH."""
+    """Map a 1d100 roll to a WP distance in sH (converted from stored LM value)."""
     if roll <= 0:
         roll = 100
-    for threshold, dist in _WP_DISTANCE_ROWS:
+    for threshold, dist_lm in _WP_DISTANCE_ROWS:
         if roll <= threshold:
-            return dist
-    return 30
+            return max(1, round(dist_lm / LM_PER_SH))
+    return max(1, round(360 / LM_PER_SH))
 
 
 # ---------------------------------------------------------------------------
@@ -340,11 +365,7 @@ def roll_wp_distance(roll: int) -> int:
 def roll_wp_visibility(roll: int) -> WPVisibility:
     if roll <= 6:
         return WPVisibility.OPEN
-    if roll <= 8:
-        return WPVisibility.CONCEALED
-    if roll == 9:
-        return WPVisibility.HIDDEN
-    return WPVisibility.SECRET
+    return WPVisibility.CLOSED
 
 
 # ---------------------------------------------------------------------------

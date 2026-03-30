@@ -24,15 +24,16 @@ import random
 from typing import Optional
 
 from campaign.hex_utils import (
-    axial_to_angle,
     bearing_dist_to_axial,
-    hex_ring,
-    nearest_ring_hex,
+    cube_round,
+    orbit_screen_pos,
+    screen_to_axial_frac,
 )
 from campaign.models import (
     AnomalyType,
     Galaxy,
     GalaxyEdge,
+    LM_PER_SH,
     Moon,
     MoonType,
     Planet,
@@ -75,8 +76,10 @@ def _roll_orbit_pair(rng: random.Random) -> tuple[int | None, ...]:
         result = roll_orbit_distances(d1, d2)
         if result is not None:
             return result
-    # Fallback: minimum valid pair
-    return roll_orbit_distances(1, 3) or (1, 3, 5, 9, 17, 33, 65, 129, 257)
+    # Fallback: minimum valid pair (roll_orbit_distances converts LM→sH)
+    return roll_orbit_distances(1, 3) or tuple(
+        max(1, round(v / LM_PER_SH)) for v in (12, 36, 60, 108, 204, 396, 780, 1548, 3084)
+    )
 
 
 def _moon_type_for(planet_type: PlanetType) -> MoonType:
@@ -109,11 +112,13 @@ _STAR_MASS_SOLAR: dict[SpectralClass, float] = {
     SpectralClass.RED_GIANT:    1.2,
 }
 
-# 1 sH = 12 LM ≈ 1.443 AU  (1 AU ≈ 8.317 LM)
-_SH_TO_AU: float = 12.0 / 8.317
+# 1 sH = LM_PER_SH LM;  1 AU ≈ 8.317 LM
+_SH_TO_AU: float = LM_PER_SH / 8.317
 
-# 1 TH = 1/2880 sH = 12/2880 LM.  Earth's Moon ≈ 384 400 km = 0.4444 LM ≈ 5.16 TH.
-_TH_TO_KM: float = (12.0 / 2880.0) * 17_987_547.5  # 1 LM ≈ 17.988 M km
+# 1 TH = 1/2880 sH.  TH physical size is fixed at the LM_PER_SH=12 reference scale
+# so moon orbital periods are independent of the strategic-hex scale setting.
+# At that reference: 1 TH = 12/2880 LM ≈ 74,948 km  (Earth-Moon ≈ 5.1 TH → ~27 day period)
+_TH_TO_KM: float = (12 / 2880.0) * 17_987_547.5
 
 
 def _orbital_period_years(distance_sh: int, star_mass_solar: float) -> float:
@@ -143,73 +148,33 @@ def _assign_planet_coords(
 ) -> None:
     """Set q_sh, r_sh, orbital_angle_0, orbital_period_years on each planet.
 
-    Planets are placed on the hex ring at hex_dist == distance_sh from their
-    parent star using a golden-angle spread, with collision resolution along
-    the ring.  Coordinates are absolute (relative to system primary at (0,0)).
+    Each planet's orbital_angle_0 is set to a golden-angle spread over orbit
+    slots.  q_sh/r_sh are the nearest axial hex to the true circular orbit
+    position at that angle (not constrained to the hex ring).  Coordinates are
+    absolute (relative to system primary at (0,0)).
     """
-    occupied: dict[int, set[tuple[int, int]]] = {}  # ring_radius → set of (q,r)
-
     for p in planets:
-        radius = p.distance_sh
-        if radius not in occupied:
-            occupied[radius] = set()
-
-        # Golden-angle initial direction for this orbit slot
         angle = (_GOLDEN_ANGLE_DEG * p.orbit_slot) % 360.0
-
-        # Find the nearest ring hex to that angle; resolve collisions
-        ring = hex_ring(0, 0, radius)  # relative to (0,0) origin
-        if not ring:
-            # radius == 0 edge-case (shouldn't happen for real orbits)
-            p.q_sh, p.r_sh = star_q, star_r
-            p.orbital_angle_0 = 0.0
-            p.orbital_period_years = _orbital_period_years(radius, star_mass_solar)
-            continue
-
-        # Sort ring by angular distance from target angle, preserving ring order
-        def _ang_diff(pos: tuple[int, int]) -> float:
-            a = axial_to_angle(pos[0], pos[1])
-            d = abs(a - angle) % 360.0
-            return min(d, 360.0 - d)
-
-        sorted_ring = sorted(range(len(ring)), key=lambda i: _ang_diff(ring[i]))
-
-        chosen: tuple[int, int] | None = None
-        for idx in sorted_ring:
-            candidate = ring[idx]
-            if candidate not in occupied[radius]:
-                chosen = candidate
-                break
-
-        if chosen is None:
-            # Ring fully occupied (extremely rare; fall back to first hex)
-            chosen = ring[0]
-
-        occupied[radius].add(chosen)
-
-        abs_q = star_q + chosen[0]
-        abs_r = star_r + chosen[1]
-        p.q_sh = abs_q
-        p.r_sh = abs_r
-        p.orbital_angle_0 = axial_to_angle(chosen[0], chosen[1])
-        p.orbital_period_years = _orbital_period_years(radius, star_mass_solar)
+        x, y = orbit_screen_pos(angle, p.distance_sh)
+        q_rel, r_rel = cube_round(*screen_to_axial_frac(x, y))
+        p.q_sh = star_q + q_rel
+        p.r_sh = star_r + r_rel
+        p.orbital_angle_0 = angle
+        p.orbital_period_years = _orbital_period_years(p.distance_sh, star_mass_solar)
 
 
 def _assign_moon_coords(moons: list[Moon]) -> None:
     """Set q_th, r_th, orbital_angle_0, orbital_period_days on each moon.
 
-    Moons are placed in tactical-hex space relative to their parent planet
-    (which is always at TH (0,0)).  Sequential compass bearings spread moons
-    evenly around the planet.
+    Moons are spread evenly in angle around the planet (TH space).  q_th/r_th
+    are the nearest axial hex to the circular orbit position at that angle.
     """
     n = len(moons)
     for i, moon in enumerate(moons):
-        # Spread n moons evenly; first moon at north (0°)
         angle = (360.0 * i / n) if n > 1 else 0.0
-        q_th, r_th = nearest_ring_hex(angle, moon.orbit_th)
-        moon.q_th = q_th
-        moon.r_th = r_th
-        moon.orbital_angle_0 = axial_to_angle(q_th, r_th) if moon.orbit_th > 0 else 0.0
+        x, y = orbit_screen_pos(angle, moon.orbit_th)
+        moon.q_th, moon.r_th = cube_round(*screen_to_axial_frac(x, y))
+        moon.orbital_angle_0 = angle
         moon.orbital_period_days = _moon_period_days(moon.orbit_th)
 
 
@@ -226,17 +191,20 @@ def _expand_ast_belt(
     star_r: int,
     star_mass_solar: float,
 ) -> list[Planet]:
-    """Expand a single AST Planet into one Planet per hex on its orbital ring.
+    """Expand a single AST Planet into evenly-spaced segments around a circular orbit.
 
-    Each belt hex has its own orbital_angle_0 derived from its ring position.
-    All hexes share the same orbital_period_years, so the belt rotates as a
-    rigid ring — individual positions are preserved relative to each other.
+    Uses the same segment count as the hex ring (6 × distance_sh) so belt
+    density is preserved.  Angles are uniformly distributed; q_sh/r_sh snap to
+    the nearest axial hex of the circular position.  All segments share the
+    same orbital_period_years so the belt rotates as a rigid ring.
     """
-    ring = hex_ring(0, 0, planet.distance_sh)   # relative to star at (0, 0)
+    n_segments = 6 * planet.distance_sh
     period = _orbital_period_years(planet.distance_sh, star_mass_solar)
     belt_hexes: list[Planet] = []
-    for (q_rel, r_rel) in ring:
-        angle = axial_to_angle(q_rel, r_rel)
+    for i in range(n_segments):
+        angle = 360.0 * i / n_segments
+        x, y = orbit_screen_pos(angle, planet.distance_sh)
+        q_rel, r_rel = cube_round(*screen_to_axial_frac(x, y))
         belt_hexes.append(Planet(
             orbit_slot=planet.orbit_slot,
             distance_sh=planet.distance_sh,
@@ -654,7 +622,7 @@ def generate_system_with_companions(
     if add_binary:
         star_b = _generate_star(rng, "B")
         star_b.bearing     = _roll(rng, 12)
-        star_b.distance_sh = _roll(rng, 12) + _roll(rng, 12) + 5  # 2d12 + 5
+        star_b.distance_sh = max(1, round((_roll(rng, 12) + _roll(rng, 12) + 5) * 12 / LM_PER_SH))
 
         # Planets for B
         star_b.planets = _generate_planets(rng, star_b, "B")
@@ -676,7 +644,7 @@ def generate_system_with_companions(
         if add_trinary:
             star_c = _generate_star(rng, "C")
             star_c.bearing     = _roll(rng, 12)
-            star_c.distance_sh = (_roll(rng, 4) + 1) * 30  # (1d4+1) StMPs × 30 sH
+            star_c.distance_sh = max(1, round((_roll(rng, 4) + 1) * 360 / LM_PER_SH))
             # Component C gets no planets
             node.stars.append(star_c)
 

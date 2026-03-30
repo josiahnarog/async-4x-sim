@@ -99,10 +99,12 @@
       <span id="time-label">Year 0, Day 0</span>
       <label style="white-space:nowrap">Speed:
         <select id="speed-select">
-          <option value="1" selected>1 d/frame</option>
-          <option value="30">30 d/frame</option>
+          <option value="0.04167" selected>1 hr/frame</option>
+          <option value="0.25">6 hr/frame</option>
+          <option value="1">1 d/frame</option>
+          <option value="7">1 wk/frame</option>
+          <option value="30">1 mo/frame</option>
           <option value="365">1 yr/frame</option>
-          <option value="3650">10 yr/frame</option>
         </select>
       </label>
       <button id="btn-reset">Reset</button>
@@ -146,9 +148,7 @@
       <div class="legend-row"><div class="legend-dot" style="background:#555555"></div>AST — Asteroid Belt</div>
       <div style="margin-top:8px;color:#888">◆ WP (diamonds by visibility)</div>
       <div class="legend-row"><div class="legend-diamond" style="background:#44ddff"></div>Open</div>
-      <div class="legend-row"><div class="legend-diamond" style="background:#ffaa44"></div>Concealed</div>
-      <div class="legend-row"><div class="legend-diamond" style="background:#ff4444"></div>Hidden</div>
-      <div class="legend-row"><div class="legend-diamond" style="background:#aa44ff"></div>Secret</div>
+      <div class="legend-row"><div class="legend-diamond" style="background:#ff4444"></div>Closed</div>
     </div>
   </div>
 </div>
@@ -158,6 +158,10 @@
 // Orbital data (injected by server)
 // ============================================================
 const ORBITAL = {{ orbital_json | safe }};
+
+// Current CSS zoom scale — updated by the pan/zoom handler so render()
+// can draw zoom-invariant markers (size_svg = base_px / currentScale).
+let currentScale = 1;
 const HEX_SIZE = ORBITAL.hex_size;
 const SVG_CX   = ORBITAL.svg_cx;
 const SVG_CY   = ORBITAL.svg_cy;
@@ -184,41 +188,6 @@ function cubeRound(qf, rf) {
   return [q, r];
 }
 
-function axialToAngle(q, r) {
-  const x = 1.5 * q;
-  const y = SQ3 * (r + q * 0.5);
-  if (x === 0 && y === 0) return 0;
-  return (Math.atan2(x, -y) * 180 / Math.PI + 360) % 360;
-}
-
-function hexRing(radius) {
-  if (radius === 0) return [[0, 0]];
-  const dirs = [[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]];
-  const out = [];
-  let q = dirs[4][0] * radius, r = dirs[4][1] * radius;
-  for (let i = 0; i < 6; i++) {
-    const [dq, dr] = dirs[i];
-    for (let j = 0; j < radius; j++) {
-      out.push([q, r]);
-      q += dq; r += dr;
-    }
-  }
-  return out;
-}
-
-function nearestRingHex(angleDeg, radius) {
-  if (radius === 0) return [0, 0];
-  const ring = hexRing(radius);
-  let best = ring[0], bestDiff = Infinity;
-  for (const [q, r] of ring) {
-    const a = axialToAngle(q, r);
-    let d = Math.abs(a - angleDeg) % 360;
-    if (d > 180) d = 360 - d;
-    if (d < bestDiff) { bestDiff = d; best = [q, r]; }
-  }
-  return best;
-}
-
 // ============================================================
 // Orbital mechanics
 // ============================================================
@@ -229,18 +198,23 @@ function orbAngle(angle0, periodDays, tDays) {
   return ((angle0 + 360 * tDays / periodDays) % 360 + 360) % 360;
 }
 
-/** Hex position of body orbiting at distance distSH with periodYears. */
-function hexPosYears(angle0, periodYears, distSH, tDays) {
+/**
+ * Pixel offset [dx, dy] from star centre for a body on a circular orbit,
+ * snapped to the nearest hex centre.
+ *
+ * The true circular position (radius = sqrt(3) * distSH in screen-units) is
+ * computed first, then rounded to the nearest axial hex, then converted back
+ * to pixels.  This produces a more-circular orbit path than hex-ring snapping
+ * while keeping every object visually centred on a hex.
+ */
+function hexSnapOrbitPx(angle0, periodYears, distSH, tDays) {
   const angle = orbAngle(angle0, periodYears * 365.25, tDays);
-  return nearestRingHex(angle, distSH);
-}
-
-/** Pixel position of a moon in visual space (fixed visual orbit radius). */
-function moonPixelPos(starPx, starPy, planetPx, planetPy, angle0, periodDays, visualOrbitPx, tDays) {
-  const angle = orbAngle(angle0, periodDays, tDays);
-  const rad = angle * Math.PI / 180;
-  return [planetPx + visualOrbitPx * Math.sin(rad),
-          planetPy - visualOrbitPx * Math.cos(rad)];
+  const rad   = angle * Math.PI / 180;
+  const r     = SQ3 * distSH;                       // screen-units (pre-HEX_SIZE)
+  const x     = r * Math.sin(rad);
+  const y     = -r * Math.cos(rad);
+  const [q, ax_r] = cubeRound(...screenToAxialFrac(x, y));
+  return axialToPixel(q, ax_r);
 }
 
 // ============================================================
@@ -270,21 +244,24 @@ function render(tDays) {
   objLayer.innerHTML  = '';
   ringLayer.innerHTML = '';
 
+  // sz converts base pixel sizes to SVG units so every marker appears at a
+  // fixed screen size regardless of zoom level.
+  const sz = 1.0 / currentScale;
+
   for (const star of ORBITAL.stars) {
     // ---- Star position ----
     let sx, sy;
     if (star.component === 'A') {
       sx = SVG_CX; sy = SVG_CY;
     } else {
-      const [q, r] = hexPosYears(star.orbital_angle_0, star.orbital_period_years, star.distance_sh, tDays);
-      const [dx, dy] = axialToPixel(q, r);
+      const [dx, dy] = hexSnapOrbitPx(star.orbital_angle_0, star.orbital_period_years, star.distance_sh, tDays);
       sx = SVG_CX + dx; sy = SVG_CY + dy;
     }
 
     // ---- Draw star ----
     objLayer.appendChild(mkEl('circle', {
-      cx: sx.toFixed(1), cy: sy.toFixed(1), r: star.radius_px,
-      fill: star.colour, stroke: '#ffffff', 'stroke-width': '1', opacity: '0.9'
+      cx: sx.toFixed(1), cy: sy.toFixed(1), r: (star.radius_px * sz).toFixed(2),
+      fill: star.colour, stroke: '#ffffff', 'stroke-width': (sz).toFixed(2), opacity: '0.9'
     }));
     objLayer.appendChild(mkText(sx, sy + star.radius_px + 11, star.label, {
       'text-anchor': 'middle', fill: '#cccccc', 'font-size': '9', 'font-family': 'monospace'
@@ -305,9 +282,8 @@ function render(tDays) {
         }));
       }
 
-      // Planet/belt-hex position
-      const [pq, pr] = hexPosYears(p.orbital_angle_0, p.orbital_period_years, p.distance_sh, tDays);
-      const [pdx, pdy] = axialToPixel(pq, pr);
+      // Planet/belt-hex position — circular orbit snapped to nearest hex
+      const [pdx, pdy] = hexSnapOrbitPx(p.orbital_angle_0, p.orbital_period_years, p.distance_sh, tDays);
       const ppx = sx + pdx, ppy = sy + pdy;
 
       // Draw planet or asteroid belt hex
@@ -341,21 +317,18 @@ function render(tDays) {
           const rx = ppx + dx * cr - dy * sr;
           const ry = ppy + dx * sr + dy * cr;
           if (shape === 0) {
-            // Tiny circle
             objLayer.appendChild(mkEl('circle', {
-              cx: rx.toFixed(1), cy: ry.toFixed(1), r: '0.9',
+              cx: rx.toFixed(1), cy: ry.toFixed(1), r: (2 * sz).toFixed(2),
               fill: p.colour, opacity: '0.85'
             }));
           } else if (shape === 1) {
-            // Tiny diamond (2px half-diagonal)
-            const d = 1.4;
+            const d = 3 * sz;
             objLayer.appendChild(mkEl('polygon', {
               points: `${rx.toFixed(1)},${(ry-d).toFixed(1)} ${(rx+d).toFixed(1)},${ry.toFixed(1)} ${rx.toFixed(1)},${(ry+d).toFixed(1)} ${(rx-d).toFixed(1)},${ry.toFixed(1)}`,
               fill: p.colour, opacity: '0.80'
             }));
           } else {
-            // Tiny triangle (pointing up, 2px)
-            const th = 1.6;
+            const th = 3 * sz;
             objLayer.appendChild(mkEl('polygon', {
               points: `${rx.toFixed(1)},${(ry-th).toFixed(1)} ${(rx+th).toFixed(1)},${(ry+th).toFixed(1)} ${(rx-th).toFixed(1)},${(ry+th).toFixed(1)}`,
               fill: p.colour, opacity: '0.80'
@@ -365,8 +338,8 @@ function render(tDays) {
         // No per-hex label — belt is labelled as a whole in the side panel
       } else {
         objLayer.appendChild(mkEl('circle', {
-          cx: ppx.toFixed(1), cy: ppy.toFixed(1), r: p.radius_px,
-          fill: p.colour, stroke: '#ffffff', 'stroke-width': '0.5'
+          cx: ppx.toFixed(1), cy: ppy.toFixed(1), r: (p.radius_px * sz).toFixed(2),
+          fill: p.colour, stroke: '#ffffff', 'stroke-width': (0.5 * sz).toFixed(2)
         }));
       }
 
@@ -380,17 +353,30 @@ function render(tDays) {
       // Moons (visual only — pixel scale, not TH scale)
       for (let mi = 0; mi < p.moons.length; mi++) {
         const m = p.moons[mi];
-        const visualR = 10 + mi * 6;  // px from planet centre
+        const visualR = (10 + mi * 6) * sz;  // orbit radius scales with zoom
         const mAngle  = orbAngle(m.orbital_angle_0, m.orbital_period_days, tDays);
         const mRad    = mAngle * Math.PI / 180;
         const mmx = ppx + visualR * Math.sin(mRad);
         const mmy = ppy - visualR * Math.cos(mRad);
         objLayer.appendChild(mkEl('circle', {
-          cx: mmx.toFixed(1), cy: mmy.toFixed(1), r: m.is_big ? '3' : '2',
+          cx: mmx.toFixed(1), cy: mmy.toFixed(1), r: ((m.is_big ? 3 : 2) * sz).toFixed(2),
           fill: '#778899', opacity: '0.9'
         }));
       }
     }
+  }
+
+  // ---- Warp point diamonds (zoom-invariant) ----
+  for (const wp of ORBITAL.warp_points) {
+    const s = 5 * sz;
+    const wx = wp.x, wy = wp.y;
+    objLayer.appendChild(mkEl('polygon', {
+      points: `${wx.toFixed(1)},${(wy-s).toFixed(1)} ${(wx+s).toFixed(1)},${wy.toFixed(1)} ${wx.toFixed(1)},${(wy+s).toFixed(1)} ${(wx-s).toFixed(1)},${wy.toFixed(1)}`,
+      fill: wp.colour, stroke: '#ffffff', 'stroke-width': (0.5 * sz).toFixed(2), opacity: '0.9'
+    }));
+    objLayer.appendChild(mkText(wx, wy + s + 9 * sz, wp.label, {
+      'text-anchor': 'middle', fill: wp.colour, 'font-size': (8 * sz).toFixed(2), 'font-family': 'monospace'
+    }));
   }
 }
 
@@ -414,9 +400,10 @@ const btnPlay   = document.getElementById('btn-play');
 const btnReset  = document.getElementById('btn-reset');
 const speedSel  = document.getElementById('speed-select');
 
-let tDays   = 0;
-let playing = false;
-let animId  = null;
+let tDays    = 0;
+let playing  = false;
+let animId   = null;
+let lastTime = null;
 
 function setTime(t) {
   tDays = Math.max(0, Math.min(36500, t));
@@ -432,7 +419,7 @@ slider.addEventListener('input', () => {
 btnPlay.addEventListener('click', () => {
   playing = !playing;
   btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
-  if (playing) step();
+  if (playing) { lastTime = null; requestAnimationFrame(step); }
   else if (animId) { cancelAnimationFrame(animId); animId = null; }
 });
 
@@ -440,16 +427,20 @@ btnReset.addEventListener('click', () => {
   playing = false;
   btnPlay.textContent = '▶ Play';
   if (animId) { cancelAnimationFrame(animId); animId = null; }
+  lastTime = null;
   setTime(0);
 });
 
-function step() {
+function step(timestamp) {
   if (!playing) return;
+  const wallMs = lastTime !== null ? timestamp - lastTime : 0;
+  lastTime = timestamp;
   const speed = parseFloat(speedSel.value);
-  setTime(tDays + speed);
+  setTime(tDays + speed * wallMs / (1000 / 60));
   if (tDays >= 36500) {
     playing = false;
     btnPlay.textContent = '▶ Play';
+    lastTime = null;
     return;
   }
   animId = requestAnimationFrame(step);
@@ -474,8 +465,10 @@ function step() {
   }
 
   function apply() {
+    currentScale = sc;
     svg.style.transform = `translate(${ox}px,${oy}px) scale(${sc})`;
     svg.style.transformOrigin = '0 0';
+    render(tDays);
   }
 
   wrap.addEventListener('mousedown', ev => {

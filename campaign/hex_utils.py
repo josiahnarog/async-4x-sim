@@ -180,10 +180,26 @@ def orbital_angle_at(angle_0: float, period: float, t: float) -> float:
     return (angle_0 + 360.0 * t / period) % 360.0
 
 
+def orbit_screen_pos(angle_deg: float, distance: float) -> tuple[float, float]:
+    """True Euclidean position on a circular orbit (screen-units, before ×HEX_SIZE).
+
+    Returns (x, y) in the same screen-unit space as axial_to_screen.  The
+    orbit radius is sqrt(3) × distance so the circle passes through the six
+    'corner' hexes of the hex ring at that distance — matching the visual
+    orbit guide circles drawn by the renderer.
+
+    Compass convention: 0° = north = negative-y; clockwise.
+    """
+    rad = math.radians(angle_deg)
+    r = math.sqrt(3) * distance
+    return r * math.sin(rad), -r * math.cos(rad)
+
+
 def hex_position_at(angle_0: float, period: float, distance: int, t: float) -> tuple[int, int]:
     """Axial hex of an orbiting body at time t.
 
-    Snaps to the nearest ring hex for the body's orbital radius.
+    Snaps to the nearest hex to the true circular orbit position.
     """
     angle = orbital_angle_at(angle_0, period, t)
-    return nearest_ring_hex(angle, distance)
+    x, y = orbit_screen_pos(angle, distance)
+    return cube_round(*screen_to_axial_frac(x, y))
