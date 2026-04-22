@@ -26,9 +26,9 @@ app.include_router(tactical_router)
 app.include_router(campaign_router)
 
 
-@app.get("/", include_in_schema=False)
-async def root_redirect():
-    return RedirectResponse(url="/tactical/")
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def home(request: Request):
+    return templates.TemplateResponse("home.html", {"request": request})
 
 
 def _load_game(game_id: str):
@@ -227,7 +227,7 @@ def _ui_state(game_id: str, viewer: str) -> dict[str, Any]:
     }
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/strategy/", response_class=HTMLResponse)
 def index(request: Request, game_id: Optional[str] = None, viewer: str = "A"):
     # If no game_id is provided:
     # - Prefer the most recently updated existing game (so restarts feel persistent)
@@ -235,12 +235,12 @@ def index(request: Request, game_id: Optional[str] = None, viewer: str = "A"):
     if game_id is None:
         existing = db.list_game_ids()
         if existing:
-            return RedirectResponse(url=f"/?game_id={existing[0]}&viewer={viewer}", status_code=302)
+            return RedirectResponse(url=f"/strategy/?game_id={existing[0]}&viewer={viewer}", status_code=302)
         else:
             new_id = str(uuid.uuid4())
             g = build_game()
             db.create_game(new_id, game_to_json(g))
-            return RedirectResponse(url=f"/?game_id={new_id}&viewer={viewer}", status_code=302)
+            return RedirectResponse(url=f"/strategy/?game_id={new_id}&viewer={viewer}", status_code=302)
 
     state = _ui_state(game_id, viewer)
     return templates.TemplateResponse(

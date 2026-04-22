@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Async 4X Sim</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+           margin: 0; background: #060612; color: #c0c0d8;
+           display: flex; flex-direction: column; align-items: center;
+           justify-content: center; height: 100vh; gap: 0; }
+    h1 { margin: 0 0 8px; color: #a8d8ea; font-size: 1.4em; letter-spacing: 0.1em; }
+    .subtitle { color: #445566; font-size: 0.78em; margin: 0 0 48px; letter-spacing: 0.08em; }
+    .menu { display: flex; flex-direction: column; gap: 14px; width: 280px; }
+    .menu-btn {
+      display: block; padding: 14px 20px;
+      background: #0d0d20; border: 1px solid #1a1a3a;
+      border-radius: 6px; color: #c0c0d8; text-decoration: none;
+      font-family: inherit; font-size: 0.9em; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .menu-btn:hover { background: #14142e; border-color: #334488; }
+    .menu-btn .title { color: #a8d8ea; font-size: 1.05em; display: block; margin-bottom: 4px; }
+    .menu-btn .desc { color: #556677; font-size: 0.8em; }
+  </style>
+</head>
+<body>
+  <h1>ASYNC 4X SIM</h1>
+  <p class="subtitle">development build</p>
+  <nav class="menu">
+    <a href="/campaign/" class="menu-btn">
+      <span class="title">Galaxy Simulation</span>
+      <span class="desc">Campaign layer — star systems, orbital mechanics, fleet movement</span>
+    </a>
+    <a href="/tactical/" class="menu-btn">
+      <span class="title">Tactical Combat</span>
+      <span class="desc">Ship-level hex combat — weapons, fighters, carriers</span>
+    </a>
+  </nav>
+</body>
+</html>

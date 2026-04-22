@@ -194,24 +194,29 @@ function hexDist(q1, r1, q2, r2) {
   return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
 }
 
-/** Pixel position [dx, dy from SVG origin] of a ship at tDays. */
-function shipPixelPos(ship, tDays) {
-  if (ship.dest_q === null) {
-    const [dx, dy] = axialToPixel(ship.q_sh, ship.r_sh);
-    return [SVG_CX + dx, SVG_CY + dy];
-  }
+/** Current hex [q,r] of a ship at tDays, accounting for movement. */
+function shipHexAt(ship, tDays) {
+  if (ship.dest_q === null) return [ship.q_sh, ship.r_sh];
   const dist = hexDist(ship.q_sh, ship.r_sh, ship.dest_q, ship.dest_r);
-  if (dist === 0) {
-    const [dx, dy] = axialToPixel(ship.q_sh, ship.r_sh);
-    return [SVG_CX + dx, SVG_CY + dy];
-  }
-  const shElapsed = ship.sH_per_day * (tDays - ship.order_day);
-  const t = Math.min(1, shElapsed / dist);
-  const qf = ship.q_sh + (ship.dest_q - ship.q_sh) * t;
-  const rf = ship.r_sh + (ship.dest_r - ship.r_sh) * t;
-  const [q, r] = cubeRound(qf, rf);
+  if (dist === 0) return [ship.q_sh, ship.r_sh];
+  const t = Math.min(1, ship.sH_per_day * (tDays - ship.order_day) / dist);
+  return cubeRound(ship.q_sh + (ship.dest_q - ship.q_sh) * t,
+                   ship.r_sh + (ship.dest_r - ship.r_sh) * t);
+}
+
+/** Pixel position [px, py in SVG space] of a ship at tDays. */
+function shipPixelPos(ship, tDays) {
+  const [q, r] = shipHexAt(ship, tDays);
   const [dx, dy] = axialToPixel(q, r);
   return [SVG_CX + dx, SVG_CY + dy];
+}
+
+/** Hex [q,r] of an orbiting body relative to (0,0), given period in days. */
+function orbHex(angle0, periodDays, distSH, tDays) {
+  const angle = orbAngle(angle0, periodDays, tDays);
+  const rad = angle * Math.PI / 180;
+  const r = SQ3 * distSH;
+  return cubeRound(...screenToAxialFrac(r * Math.sin(rad), -r * Math.cos(rad)));
 }
 
 // ============================================================
@@ -549,6 +554,85 @@ function step(timestamp) {
 })();
 
 // ============================================================
+// Intercept calculation
+// ============================================================
+
+/**
+ * If (svgX, svgY) is within 12 screen-pixels of a planet or moon, returns a
+ * closure getTargetHex(T) → [q,r] describing where that body will be at day T.
+ * Returns null if no orbital body was hit.
+ */
+function findOrbitalTarget(svgX, svgY) {
+  const hitR = 12 / currentScale;   // 12 screen-px converted to SVG units
+  const hitR2 = hitR * hitR;
+
+  for (const star of ORBITAL.stars) {
+    // Star pixel position at current time
+    let stPx = SVG_CX, stPy = SVG_CY;
+    if (star.component !== 'A') {
+      const [dx, dy] = hexSnapOrbitPx(star.orbital_angle_0, star.orbital_period_years, star.distance_sh, tDays);
+      stPx = SVG_CX + dx; stPy = SVG_CY + dy;
+    }
+
+    for (const p of star.planets) {
+      if (p.is_ast) continue;
+      const [pdx, pdy] = hexSnapOrbitPx(p.orbital_angle_0, p.orbital_period_years, p.distance_sh, tDays);
+      const ppx = stPx + pdx, ppy = stPy + pdy;
+
+      // Check planet hit
+      const dx = svgX - ppx, dy = svgY - ppy;
+      const hitPlanet = dx*dx + dy*dy <= hitR2;
+
+      // Check moon hits (moons intercept ≡ parent planet)
+      let hitMoon = false;
+      if (!hitPlanet) {
+        for (let mi = 0; mi < p.moons.length; mi++) {
+          const m = p.moons[mi];
+          const visualR = (10 + mi * 6) / currentScale;
+          const mAngle = orbAngle(m.orbital_angle_0, m.orbital_period_days, tDays);
+          const mRad = mAngle * Math.PI / 180;
+          const mdx = svgX - (ppx + visualR * Math.sin(mRad));
+          const mdy = svgY - (ppy - visualR * Math.cos(mRad));
+          if (mdx*mdx + mdy*mdy <= hitR2) { hitMoon = true; break; }
+        }
+      }
+
+      if (hitPlanet || hitMoon) {
+        // Return closure: planet position at arbitrary future time T
+        const capturedStar = star, capturedPlanet = p;
+        return (T) => {
+          let sq = 0, sr = 0;
+          if (capturedStar.component !== 'A') {
+            [sq, sr] = orbHex(capturedStar.orbital_angle_0,
+                              capturedStar.orbital_period_years * 365.25,
+                              capturedStar.distance_sh, T);
+          }
+          const [dq, dr] = orbHex(capturedPlanet.orbital_angle_0,
+                                   capturedPlanet.orbital_period_years * 365.25,
+                                   capturedPlanet.distance_sh, T);
+          return [sq + dq, sr + dr];
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Binary + linear search for the earliest time the ship can reach a moving target.
+ * Steps in 1-hour increments; returns [q,r] of the intercept hex or null.
+ */
+function findIntercept(fromQ, fromR, sHPerDay, getTargetHex, tNow) {
+  const dt = 1 / 24;          // 1-hour steps
+  const maxDays = 3650;        // give up after 10 years
+  for (let dT = 0; dT <= maxDays; dT += dt) {
+    const [tq, tr] = getTargetHex(tNow + dT);
+    if (hexDist(fromQ, fromR, tq, tr) <= sHPerDay * dT) return [tq, tr];
+  }
+  return null;
+}
+
+// ============================================================
 // Ship selection and movement orders
 // Left-click: select ship    Right-click: move selected ship
 // ============================================================
@@ -576,14 +660,33 @@ function step(timestamp) {
     render(tDays);
   });
 
-  // Right-click: issue move order for selected ship
+  // Right-click: intercept orbital body or direct move
   wrap.addEventListener('contextmenu', async (ev) => {
     ev.preventDefault();
     if (!selectedShipId) return;
-    const [q, r] = evToHex(ev);
+
+    const ship = ORBITAL.ships.find(s => s.ship_id === selectedShipId);
+    if (!ship) return;
+
+    // Convert click to SVG space for hit-testing
+    const svgRect = document.getElementById('system-svg').getBoundingClientRect();
+    const svgX = (ev.clientX - svgRect.left) / currentScale;
+    const svgY = (ev.clientY - svgRect.top)  / currentScale;
+
+    let destQ, destR;
+    const getTargetHex = findOrbitalTarget(svgX, svgY);
+    if (getTargetHex) {
+      const [fromQ, fromR] = shipHexAt(ship, tDays);
+      const result = findIntercept(fromQ, fromR, ship.sH_per_day, getTargetHex, tDays);
+      if (!result) return;   // no intercept reachable
+      [destQ, destR] = result;
+    } else {
+      [destQ, destR] = evToHex(ev);
+    }
+
     const nodeId = '{{ node_id }}';
     const resp = await fetch(
-      `/campaign/system/${nodeId}/ship/${selectedShipId}/move?dest_q=${q}&dest_r=${r}&t_days=${tDays}`,
+      `/campaign/system/${nodeId}/ship/${selectedShipId}/move?dest_q=${destQ}&dest_r=${destR}&t_days=${tDays}`,
       { method: 'POST' }
     );
     if (!resp.ok) return;
