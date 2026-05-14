@@ -19,7 +19,12 @@ from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from campaign.generator import generate_system_with_companions
+from campaign.generator import (
+    HUMAN_HOME_SPEC,
+    SystemSpec,
+    build_system_from_spec,
+    generate_system_with_companions,
+)
 from campaign.linker import build_galaxy
 from campaign.models import (
     AnomalyType,
@@ -49,17 +54,32 @@ _galaxy: Optional[Galaxy] = None
 _galaxy_seed: int = 42
 
 
-def _make_galaxy(seed: int, n_systems: int = 24) -> Galaxy:
+_DEFAULT_SYSTEM_OVERRIDES: dict[str, SystemSpec] = {
+    "SYS-0001": HUMAN_HOME_SPEC,
+}
+
+
+def _make_galaxy(
+    seed: int,
+    n_systems: int = 24,
+    system_overrides: dict[str, SystemSpec] | None = None,
+) -> Galaxy:
+    if system_overrides is None:
+        system_overrides = _DEFAULT_SYSTEM_OVERRIDES
     rng = random.Random(seed)
     systems: dict[str, SystemNode] = {}
     for i in range(n_systems):
         node_id = f"SYS-{i + 1:04d}"
-        r = rng.random()
-        add_bin = r < 0.30
-        add_tri = add_bin and rng.random() < 0.15
-        node = generate_system_with_companions(
-            rng, node_id, add_binary=add_bin, add_trinary=add_tri
-        )
+        spec = system_overrides.get(node_id)
+        if spec is not None:
+            node = build_system_from_spec(rng, node_id, spec)
+        else:
+            r = rng.random()
+            add_bin = r < 0.30
+            add_tri = add_bin and rng.random() < 0.15
+            node = generate_system_with_companions(
+                rng, node_id, add_binary=add_bin, add_trinary=add_tri
+            )
         systems[node_id] = node
     g = build_galaxy(systems, rng)
     # Spawn the U.N.S. Broadside (DD, speed 5) in the first system

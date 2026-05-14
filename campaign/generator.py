@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import random
+from dataclasses import dataclass
 from typing import Optional
 
 from campaign.hex_utils import (
@@ -543,6 +544,7 @@ def _build_system_node(
     rng: random.Random,
     node_id: str,
     category: SystemCategory = SystemCategory.NORMAL,
+    force_spectral_a: Optional[SpectralClass] = None,
 ) -> SystemNode:
     """Core generation — star, planets, WPs, moons, coords.
 
@@ -556,7 +558,7 @@ def _build_system_node(
         return node
 
     # -- Primary star -------------------------------------------------
-    star_a = _generate_star(rng, "A")
+    star_a = _generate_star(rng, "A", force_spectral=force_spectral_a)
     node.stars.append(star_a)
 
     # -- Planets for A ------------------------------------------------
@@ -582,6 +584,105 @@ def _build_system_node(
     # -- Coords (single-hex AST; expansion happens after this) --------
     _finalize_coords(node)
 
+    return node
+
+
+@dataclass
+class SystemSpec:
+    """Constraints for a named system node.  Fields left at defaults roll normally.
+
+    Add an entry to the `system_overrides` dict in `_make_galaxy` for each
+    system that needs controlled generation (home worlds, NPC capitals, etc.).
+    """
+    spectral_class:    Optional[SpectralClass] = None  # None → roll table
+    guaranteed_terran: bool                    = False  # retry until ≥1 T/ST survives
+    add_binary:        bool                    = False
+    add_trinary:       bool                    = False  # requires add_binary
+
+
+HUMAN_HOME_SPEC = SystemSpec(
+    spectral_class=SpectralClass.YELLOW,
+    guaranteed_terran=True,
+)
+
+
+def _has_terran(node: SystemNode) -> bool:
+    return any(
+        p.planet_type in {PlanetType.T, PlanetType.ST}
+        for s in node.stars
+        for p in s.planets
+    )
+
+
+def _inject_terran(node: SystemNode, rng: random.Random) -> None:
+    """Fallback: replace the first non-AST planet with a T planet.
+
+    Called only when retry exhaustion leaves no Terran world.  Picks the
+    first surviving non-AST orbit slot on star A and overwrites its type.
+    If star A has no surviving planets, appends one at a fixed inner orbit.
+    """
+    primary = node.primary
+    if primary is None:
+        return
+    candidates = [p for p in primary.planets if p.planet_type != PlanetType.AST]
+    if candidates:
+        p = candidates[0]
+        p.planet_type = PlanetType.T
+        p.mass = 2
+        p.hi = _roll(rng, 10)
+    else:
+        primary.planets.append(Planet(
+            orbit_slot=1,
+            distance_sh=5,
+            planet_type=PlanetType.T,
+            mass=2,
+            hi=_roll(rng, 10),
+            parent_star="A",
+        ))
+
+
+def build_system_from_spec(
+    rng: random.Random,
+    node_id: str,
+    spec: SystemSpec,
+    *,
+    max_retries: int = 20,
+) -> SystemNode:
+    """Generate a system satisfying the constraints in `spec`."""
+    node: SystemNode = SystemNode(node_id=node_id)  # silences unbound warning
+    for _ in range(max_retries):
+        node = _build_system_node(rng, node_id, force_spectral_a=spec.spectral_class)
+
+        if spec.add_binary:
+            star_a = node.primary
+            if star_a is not None:
+                star_b = _generate_star(rng, "B")
+                star_b.bearing     = _roll(rng, 12)
+                star_b.distance_sh = max(1, round((_roll(rng, 12) + _roll(rng, 12) + 5) * 12 / LM_PER_SH))
+                star_b.planets     = _generate_planets(rng, star_b, "B")
+                star_a.planets     = _apply_binary_disruption(star_a.planets, star_b.distance_sh)
+                star_b.planets     = _apply_binary_disruption(star_b.planets, star_b.distance_sh)
+                star_b.planets     = _apply_gas_giant_disruption(star_b.planets, rng)
+                star_b.planets     = _apply_wp_collision(star_b.planets, node.warp_points)
+                for p in star_b.planets:
+                    p.moons = _generate_moons(rng, p)
+                node.stars.append(star_b)
+
+                if spec.add_trinary:
+                    star_c = _generate_star(rng, "C")
+                    star_c.bearing     = _roll(rng, 12)
+                    star_c.distance_sh = max(1, round((_roll(rng, 4) + 1) * 360 / LM_PER_SH))
+                    node.stars.append(star_c)
+
+        _finalize_coords(node)
+        _expand_all_ast_belts(node)
+
+        if not spec.guaranteed_terran or _has_terran(node):
+            return node
+
+    # Retry exhaustion — patch in a Terran world and return
+    _inject_terran(node, rng)
+    _finalize_coords(node)
     return node
 
 
