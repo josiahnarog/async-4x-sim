@@ -39,6 +39,7 @@ from campaign.models import (
     MoonType,
     Planet,
     PlanetType,
+    Population,
     SpectralClass,
     Star,
     SystemCategory,
@@ -594,15 +595,17 @@ class SystemSpec:
     Add an entry to the `system_overrides` dict in `_make_galaxy` for each
     system that needs controlled generation (home worlds, NPC capitals, etc.).
     """
-    spectral_class:    Optional[SpectralClass] = None  # None → roll table
-    guaranteed_terran: bool                    = False  # retry until ≥1 T/ST survives
-    add_binary:        bool                    = False
-    add_trinary:       bool                    = False  # requires add_binary
+    spectral_class:     Optional[SpectralClass] = None  # None → roll table
+    guaranteed_terran:  bool                    = False  # retry until ≥1 T/ST survives
+    starting_population: Optional[Population]   = None   # placed on first T/ST planet
+    add_binary:         bool                    = False
+    add_trinary:        bool                    = False  # requires add_binary
 
 
 HUMAN_HOME_SPEC = SystemSpec(
     spectral_class=SpectralClass.YELLOW,
     guaranteed_terran=True,
+    starting_population=Population(owner="human", size=3, industry=3),
 )
 
 
@@ -639,6 +642,16 @@ def _inject_terran(node: SystemNode, rng: random.Random) -> None:
             hi=_roll(rng, 10),
             parent_star="A",
         ))
+
+
+def _apply_starting_population(node: SystemNode, spec: "SystemSpec") -> None:
+    if spec.starting_population is None:
+        return
+    for star in node.stars:
+        for p in star.planets:
+            if p.planet_type in {PlanetType.T, PlanetType.ST}:
+                p.population = spec.starting_population
+                return
 
 
 def build_system_from_spec(
@@ -678,11 +691,13 @@ def build_system_from_spec(
         _expand_all_ast_belts(node)
 
         if not spec.guaranteed_terran or _has_terran(node):
+            _apply_starting_population(node, spec)
             return node
 
     # Retry exhaustion — patch in a Terran world and return
     _inject_terran(node, rng)
     _finalize_coords(node)
+    _apply_starting_population(node, spec)
     return node
 
 

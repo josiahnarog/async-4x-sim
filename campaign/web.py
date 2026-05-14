@@ -35,6 +35,7 @@ from campaign.models import (
     MoonType,
     Planet,
     PlanetType,
+    Population,
     SpectralClass,
     Star,
     SystemNode,
@@ -371,6 +372,14 @@ def _build_orbital_data(node: SystemNode) -> dict:
                     "is_big":              m.is_big,
                 })
 
+            pop_out = None
+            if p.population is not None:
+                pop_out = {
+                    "owner":    p.population.owner,
+                    "size":     p.population.size,
+                    "industry": p.population.industry,
+                }
+
             planets_out.append({
                 "distance_sh":          p.distance_sh,
                 "orbital_angle_0":      p.orbital_angle_0,
@@ -381,6 +390,7 @@ def _build_orbital_data(node: SystemNode) -> dict:
                 "radius_px":            pr,
                 "is_ast":               p.planet_type == PlanetType.AST,
                 "moons":                moons_out,
+                "population":           pop_out,
             })
 
         stars_out.append({
@@ -501,10 +511,13 @@ async def system_view(request: Request, node_id: str):
                 tl_str = " [tidelock]" if p.tidelock else ""
                 atm_str = " [atm]" if p.has_atmosphere else ""
                 moon_str = f" {len(p.moons)}☽" if p.moons else ""
+                pop_str = ""
+                if p.population is not None:
+                    pop_str = f" ◉ {p.population.owner} P{p.population.size}/I{p.population.industry}"
                 planet_info.append(
                     f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
                     f"{p.planet_type.value:3s}  M{p.mass or '-'}"
-                    f"{hi_str}{tl_str}{atm_str}{moon_str}  [{star.component}]"
+                    f"{hi_str}{tl_str}{atm_str}{moon_str}{pop_str}  [{star.component}]"
                 )
 
     wp_info = []

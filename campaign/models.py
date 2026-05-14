@@ -82,6 +82,13 @@ class SystemCategory(str, Enum):
 # ---------------------------------------------------------------------------
 
 @dataclass
+class Population:
+    owner:    str  # player/faction ID, e.g. "human", "npc_1"
+    size:     int  # 1–10
+    industry: int  # 1–10
+
+
+@dataclass
 class Moon:
     moon_type: MoonType
     orbit_th:  int        # distance from planet centre in tactical hexes
@@ -103,9 +110,10 @@ class Planet:
     mass:           Optional[int] = None   # 1, 2, or 3; None for AST
     has_atmosphere: bool = False           # True for Mass 2/3 B and H worlds
     tidelock:       bool = False           # within tidelock zone of parent star
-    hi:             Optional[int] = None  # 1–10; revealed after survey; T/ST only
+    hi:             Optional[int] = None        # 1–10; revealed after survey; T/ST only
     moons:          list[Moon] = field(default_factory=list)
-    parent_star:    str = "A"             # "A" or "B"
+    population:     Optional[Population] = None
+    parent_star:    str = "A"                   # "A" or "B"
     # Strategic hex position (absolute, relative to system primary at sH (0,0))
     q_sh:           int   = 0
     r_sh:           int   = 0

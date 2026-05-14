@@ -372,6 +372,18 @@ function render(tDays) {
           cx: ppx.toFixed(1), cy: ppy.toFixed(1), r: (p.radius_px * sz).toFixed(2),
           fill: p.colour, stroke: '#ffffff', 'stroke-width': (0.5 * sz).toFixed(2)
         }));
+        // Colony indicator — outer ring + population label
+        if (p.population) {
+          objLayer.appendChild(mkEl('circle', {
+            cx: ppx.toFixed(1), cy: ppy.toFixed(1),
+            r: ((p.radius_px + 3) * sz).toFixed(2),
+            fill: 'none', stroke: '#00ffcc', 'stroke-width': (1.2 * sz).toFixed(2), opacity: '0.85'
+          }));
+          const popLabel = `P${p.population.size}/I${p.population.industry}`;
+          objLayer.appendChild(mkText(ppx, ppy + p.radius_px * sz + 10, popLabel, {
+            'text-anchor': 'middle', fill: '#00ffcc', 'font-size': '7', 'font-family': 'monospace'
+          }));
+        }
       }
 
       // Label — only for non-AST planets
