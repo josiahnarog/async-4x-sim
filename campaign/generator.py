@@ -114,8 +114,12 @@ _STAR_MASS_SOLAR: dict[SpectralClass, float] = {
     SpectralClass.RED_GIANT:    1.2,
 }
 
-# 1 sH = LM_PER_SH LM;  1 AU ≈ 8.317 LM
-_SH_TO_AU: float = LM_PER_SH / 8.317
+# The Starfire orbit table labels distances in "LM" but those values are ~11×
+# larger than real light-minutes (Yellow biosphere 72–144 game-LM corresponds
+# to 0.9–1.5 AU in real physics).  Using the raw 8.317 LM/AU conversion puts
+# the biosphere at 8–17 AU and gives 25–72 year orbital periods.
+# Correct scale: Yellow biosphere midpoint (18 sH) ≈ 1.2 AU → 6/90 AU/sH.
+_SH_TO_AU: float = LM_PER_SH / 90.0
 
 # 1 TH = 1/2880 sH.  TH physical size is fixed at the LM_PER_SH=12 reference scale
 # so moon orbital periods are independent of the strategic-hex scale setting.
