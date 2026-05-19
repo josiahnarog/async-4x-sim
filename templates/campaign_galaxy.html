@@ -17,26 +17,30 @@
            background: #1a1a3a; color: #c0c0d8; cursor: pointer;
            font-family: inherit; font-size: 0.85em; text-decoration: none; }
     .btn:hover { background: #2a2a5a; border-color: #445; }
-    #canvas-wrap { display: flex; flex-direction: column; width: 100%; height: calc(100vh - 52px); overflow: hidden; }
+    /* ---- Game controls (top-right) ---- */
+    #game-controls { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    #gal-btn-play { background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+                    border-radius: 4px; padding: 4px 12px; cursor: pointer;
+                    font-size: 0.88em; font-family: inherit; }
+    #gal-btn-play:hover { background: #22224a; }
+    #gal-speed-select { background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+                        border-radius: 4px; padding: 3px 6px; font-size: 0.88em;
+                        font-family: inherit; cursor: pointer; }
+    #game-time-display { color: #a8d8ea; font-size: 0.88em; min-width: 140px; text-align: right; }
+    #canvas-wrap { display: flex; flex-direction: column; width: 100%; height: calc(100vh - 52px); overflow: hidden; position: relative; }
     #galaxy-svg { width: 100%; flex: 1; min-height: 0; display: block; cursor: grab; }
     #galaxy-svg:active { cursor: grabbing; }
     #scrubber-bar {
       flex-shrink: 0; background: #0d0d20; border-top: 1px solid #1a1a3a;
-      padding: 8px 14px; display: flex; align-items: center; gap: 10px;
+      padding: 8px 14px; display: none; align-items: center; gap: 10px;
       font-size: 0.78em; color: #8898b8;
     }
-    #scrubber-bar button {
-      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
-      border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 0.9em;
-      font-family: inherit;
-    }
-    #scrubber-bar button:hover { background: #22224a; }
+    #btn-scrub-play { background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+                      border-radius: 4px; padding: 3px 10px; cursor: pointer;
+                      font-size: 0.9em; font-family: inherit; flex-shrink: 0; }
+    #btn-scrub-play:hover { background: #22224a; }
     #gal-time-slider { flex: 1; accent-color: #44aadd; cursor: pointer; min-width: 0; }
     #gal-time-label  { min-width: 140px; color: #aaccee; text-align: right; }
-    #gal-speed-select {
-      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
-      border-radius: 4px; padding: 3px 6px; font-size: 0.9em; font-family: inherit; cursor: pointer;
-    }
     #tooltip {
       position: absolute; pointer-events: none; background: #0d0d1f; border: 1px solid #334;
       border-radius: 6px; padding: 8px 12px; font-size: 0.78em; color: #c0c0d8;
@@ -72,16 +76,9 @@
   <a href="/tactical/" class="nav-link">← Tactical</a>
   <a href="/campaign/new" class="btn">New Galaxy</a>
   <span class="seed-badge">seed={{ seed }}</span>
-</header>
-
-<div id="canvas-wrap">
-  <svg id="galaxy-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-  <div id="tooltip"></div>
-  <div id="scrubber-bar">
+  <div id="game-controls">
     <button id="gal-btn-play">▶ Play</button>
-    <input type="range" id="gal-time-slider" min="0" max="36500" step="1" value="0"/>
-    <span id="gal-time-label">Year 0, Day 0</span>
-    <label style="white-space:nowrap">Speed:
+    <label style="white-space:nowrap;font-size:0.85em;color:#8898b8">Speed:
       <select id="gal-speed-select">
         <option value="0.000694">1 min/frame</option>
         <option value="0.00694" selected>10 min/frame</option>
@@ -92,7 +89,18 @@
         <option value="30">1 mo/frame</option>
       </select>
     </label>
-    <button id="gal-btn-reset">Reset</button>
+    <span id="game-time-display">Y1 D001 00:00</span>
+  </div>
+</header>
+
+<div id="canvas-wrap">
+  <svg id="galaxy-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="tooltip"></div>
+  <div id="scrubber-bar">
+    <span style="white-space:nowrap;color:#6688aa;font-size:0.82em">Preview:</span>
+    <button id="btn-scrub-play">▶</button>
+    <input type="range" id="gal-time-slider" min="0" max="730" step="0.5" value="0"/>
+    <span id="gal-time-label">Y1 D001 00:00</span>
   </div>
   <div id="ship-panel">
     <h3>SHIPS</h3>
@@ -130,11 +138,12 @@
   let selectedShipId = null;
   let allShips = [];
 
-  // Time scrubber state — persisted across views via sessionStorage
-  let tDays = parseFloat(sessionStorage.getItem('tDays') || '0');
-  let playing = false;
-  let animId = null;
-  let lastFrameTime = null;
+  // Game time state — tGame is authoritative, scrubberOffset is preview only
+  let tGame = 0;  // initialised after first api/galaxy fetch
+  let scrubberOffset = 0;
+  let gameIsPlaying = false;
+  let gameAnimId = null;
+  let gameLastTime = null;
 
   // Stored after render for dynamic layer
   let renderData = null;
@@ -316,18 +325,23 @@
     // Centre viewport
     vx = 0; vy = 0; scale = 1;
     applyTransform();
-    dynamicRender(tDays);
+    dynamicRender(displayTime());
   }
 
   // ============================================================
   // Time helpers
   // ============================================================
 
-  function formatTime(t) {
-    const year = Math.floor(t / 365.25);
-    const day  = Math.round(t % 365.25);
-    return `Year ${year}, Day ${day}`;
+  function formatGameTime(t) {
+    const totalMins = Math.round(t * 24 * 60);
+    const mins  = totalMins % 60;
+    const hours = Math.floor(totalMins / 60) % 24;
+    const day   = (Math.floor(t) % 365) + 1;
+    const year  = Math.floor(t / 365.25) + 1;
+    return `Y${year} D${String(day).padStart(3,'0')} ${String(hours).padStart(2,'0')}:${String(mins).padStart(2,'0')}`;
   }
+
+  function displayTime() { return tGame + scrubberOffset; }
 
   /** Which system is a ship in at time t? (galaxy-view version — system only, no q/r needed) */
   function shipSystemAt(ship, t) {
@@ -346,8 +360,6 @@
   /** Redraw the dynamic layer (ship markers + ghost route lines) for time t. */
   function dynamicRender(t) {
     dynG.innerHTML = '';
-    document.getElementById('gal-time-label').textContent = formatTime(t);
-    document.getElementById('gal-time-slider').value = t;
     if (!renderData) return;
 
     for (const ship of renderData.ships) {
@@ -394,44 +406,129 @@
   }
 
   // ============================================================
-  // Time scrubber controls
+  // Game controls and scrubber
   // ============================================================
   {
-    const slider   = document.getElementById('gal-time-slider');
-    const btnPlay  = document.getElementById('gal-btn-play');
-    const btnReset = document.getElementById('gal-btn-reset');
-    const speedSel = document.getElementById('gal-speed-select');
+    const scrubberBar    = document.getElementById('scrubber-bar');
+    const scrubSlider    = document.getElementById('gal-time-slider');
+    const scrubLabel     = document.getElementById('gal-time-label');
+    const btnPlay        = document.getElementById('gal-btn-play');
+    const speedSel       = document.getElementById('gal-speed-select');
+    const gameTimeDisp   = document.getElementById('game-time-display');
 
-    function setTime(t) {
-      tDays = Math.max(0, Math.min(36500, t));
-      sessionStorage.setItem('tDays', tDays);
-      dynamicRender(tDays);
+    function updateGameTimeDisplay() {
+      gameTimeDisp.textContent = formatGameTime(tGame);
     }
 
-    slider.addEventListener('input', () => setTime(parseFloat(slider.value)));
-
-    btnPlay.addEventListener('click', () => {
-      playing = !playing;
-      btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
-      if (playing) { lastFrameTime = null; requestAnimationFrame(step); }
-      else if (animId) { cancelAnimationFrame(animId); animId = null; }
-    });
-
-    btnReset.addEventListener('click', () => {
-      playing = false; btnPlay.textContent = '▶ Play';
-      if (animId) { cancelAnimationFrame(animId); animId = null; }
-      lastFrameTime = null; setTime(0);
-    });
-
-    function step(ts) {
-      if (!playing) return;
-      const wallMs = lastFrameTime !== null ? ts - lastFrameTime : 0;
-      lastFrameTime = ts;
-      const speed = parseFloat(speedSel.value);
-      setTime(tDays + speed * wallMs / (1000 / 60));
-      if (tDays >= 36500) { playing = false; btnPlay.textContent = '▶ Play'; return; }
-      animId = requestAnimationFrame(step);
+    async function pauseGame() {
+      if (!gameIsPlaying) return;
+      gameIsPlaying = false;
+      if (gameAnimId) { cancelAnimationFrame(gameAnimId); gameAnimId = null; }
+      gameLastTime = null;
+      btnPlay.textContent = '▶ Play';
+      sessionStorage.setItem('tGame', tGame);
+      // Sync server
+      await fetch('/campaign/tick?t=' + tGame, { method: 'POST' });
+      const resp = await fetch('/campaign/api/galaxy');
+      const data = await resp.json();
+      if (renderData) renderData.ships = data.ships;
+      allShips = data.ships || [];
+      buildShipPanel(allShips);
+      tGame = data.game_time;
+      sessionStorage.setItem('tGame', tGame);
+      scrubberOffset = 0;
+      scrubSlider.value = 0;
+      scrubLabel.textContent = formatGameTime(tGame);
+      scrubberBar.style.display = 'flex';
+      updateGameTimeDisplay();
+      dynamicRender(tGame);
     }
+
+    // Scrubber preview play
+    const btnScrubPlay  = document.getElementById('btn-scrub-play');
+    let scrubIsPlaying  = false;
+    let scrubAnimId     = null;
+    let scrubLastTime   = null;
+
+    function stopScrubPlay() {
+      scrubIsPlaying = false;
+      if (scrubAnimId) { cancelAnimationFrame(scrubAnimId); scrubAnimId = null; }
+      scrubLastTime = null;
+      btnScrubPlay.textContent = '▶';
+    }
+
+    function scrubStep(ts) {
+      if (!scrubIsPlaying) return;
+      const wallMs = scrubLastTime !== null ? ts - scrubLastTime : 0;
+      scrubLastTime = ts;
+      scrubberOffset = Math.min(730, scrubberOffset + parseFloat(speedSel.value) * wallMs / (1000 / 60));
+      scrubSlider.value = scrubberOffset;
+      scrubLabel.textContent = formatGameTime(tGame + scrubberOffset);
+      dynamicRender(tGame + scrubberOffset);
+      if (scrubberOffset >= 730) { stopScrubPlay(); return; }
+      scrubAnimId = requestAnimationFrame(scrubStep);
+    }
+
+    btnScrubPlay.addEventListener('click', () => {
+      if (scrubIsPlaying) { stopScrubPlay(); }
+      else {
+        scrubIsPlaying = true;
+        btnScrubPlay.textContent = '⏸';
+        scrubLastTime = null;
+        requestAnimationFrame(scrubStep);
+      }
+    });
+
+    function playGame() {
+      if (gameIsPlaying) return;
+      stopScrubPlay();
+      gameIsPlaying = true;
+      scrubberOffset = 0;
+      scrubberBar.style.display = 'none';
+      btnPlay.textContent = '⏸ Pause';
+      gameLastTime = null;
+      requestAnimationFrame(gameStep);
+    }
+
+    function toggleGamePlay() {
+      if (gameIsPlaying) pauseGame(); else playGame();
+    }
+
+    function gameStep(ts) {
+      if (!gameIsPlaying) return;
+      const wallMs = gameLastTime !== null ? ts - gameLastTime : 0;
+      gameLastTime = ts;
+      tGame += parseFloat(speedSel.value) * wallMs / (1000 / 60);
+      sessionStorage.setItem('tGame', tGame);
+      updateGameTimeDisplay();
+      dynamicRender(tGame);
+      if (tGame >= 36500) { pauseGame(); return; }
+      gameAnimId = requestAnimationFrame(gameStep);
+    }
+
+    btnPlay.addEventListener('click', toggleGamePlay);
+
+    document.addEventListener('keydown', ev => {
+      if (ev.code === 'Space' && ev.target === document.body) {
+        ev.preventDefault();
+        toggleGamePlay();
+      }
+    });
+
+    scrubSlider.addEventListener('input', () => {
+      stopScrubPlay();
+      scrubberOffset = parseFloat(scrubSlider.value);
+      scrubLabel.textContent = formatGameTime(tGame + scrubberOffset);
+      dynamicRender(tGame + scrubberOffset);
+    });
+
+    // Expose for use in issueRoute callback
+    window._galUpdateAfterRoute = function(ships, gameTime) {
+      if (renderData) renderData.ships = ships;
+      allShips = ships || [];
+      buildShipPanel(allShips);
+      dynamicRender(tGame + scrubberOffset);
+    };
   }
 
   // Pan (track drag distance to distinguish click vs drag)
@@ -500,13 +597,10 @@
   }
 
   function issueRoute(shipId, destSystemId) {
-    const tDays = 0;
     console.log(`[issueRoute] ship=${shipId} dest=${destSystemId}`);
     routeStatus.textContent = 'Routing…';
     routeStatus.style.color = '#ffcc00';
-    fetch(`/campaign/ship/${shipId}/route?dest_system_id=${destSystemId}&t_days=${tDays}`, {
-      method: 'POST',
-    })
+    fetch(`/campaign/ship/${shipId}/route?dest_system_id=${destSystemId}`, { method: 'POST' })
     .then(r => {
       console.log(`[issueRoute] HTTP ${r.status}`);
       return r.json();
@@ -522,15 +616,10 @@
         routeStatus.textContent =
           `${s.name} → ${destSystemId}  (${data.hops} hop${data.hops !== 1 ? 's' : ''})`;
         routeStatus.style.color = '#00ffcc';
-        // Re-fetch ships (with updated legs) and redraw dynamic layer
-        // without re-running the expensive force layout.
         fetch('/campaign/api/galaxy')
           .then(r => r.json())
           .then(updated => {
-            if (renderData) renderData.ships = updated.ships;
-            allShips = updated.ships || [];
-            buildShipPanel(allShips);
-            dynamicRender(tDays);
+            if (window._galUpdateAfterRoute) window._galUpdateAfterRoute(updated.ships, updated.game_time);
           });
       }
     })
@@ -545,6 +634,15 @@
   fetch('/campaign/api/galaxy')
     .then(r => r.json())
     .then(data => {
+      // Initialise tGame: prefer sessionStorage (if player was mid-game), else server value
+      tGame = Math.max(
+        data.game_time || 0,
+        parseFloat(sessionStorage.getItem('tGame') || '0')
+      );
+      sessionStorage.setItem('tGame', tGame);
+      document.getElementById('game-time-display').textContent = formatGameTime(tGame);
+      document.getElementById('gal-time-label').textContent = formatGameTime(tGame);
+      document.getElementById('scrubber-bar').style.display = 'flex';
       render(data);
       buildShipPanel(data.ships || []);
     })

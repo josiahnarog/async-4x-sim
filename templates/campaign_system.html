@@ -16,6 +16,15 @@
     header h1 { margin: 0; color: #a8d8ea; font-size: 1.05em; letter-spacing: 0.06em; }
     .nav-link { color: #5588aa; text-decoration: none; font-size: 0.85em; }
     .nav-link:hover { color: #a8d8ea; }
+    /* ---- Game controls (top-right) ---- */
+    #game-controls { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    #btn-game-play { background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+                     border-radius: 4px; padding: 4px 12px; cursor: pointer;
+                     font-size: 0.88em; font-family: inherit; }
+    #btn-game-play:hover { background: #22224a; }
+    #game-speed { background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+                  border-radius: 4px; padding: 3px 6px; font-size: 0.88em; font-family: inherit; cursor: pointer; }
+    #game-time-display { color: #a8d8ea; font-size: 0.88em; min-width: 140px; text-align: right; }
 
     /* ---- Main layout ---- */
     .main { display: flex; flex: 1; overflow: hidden; }
@@ -26,31 +35,24 @@
     #map-wrap:active { cursor: grabbing; }
     #system-svg { display: block; overflow: visible; }
 
-    /* ---- Time scrubber bar ---- */
+    /* ---- Time scrubber bar (hidden while game is playing) ---- */
     #scrubber-bar {
       flex-shrink: 0;
       background: #0d0d20;
       border-top: 1px solid #1a1a3a;
       padding: 8px 14px;
-      display: flex;
+      display: none;
       align-items: center;
       gap: 10px;
       font-size: 0.78em;
       color: #8898b8;
     }
-    #scrubber-bar button {
-      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
-      border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 0.9em;
-      font-family: inherit;
-    }
-    #scrubber-bar button:hover { background: #22224a; }
+    #btn-scrub-play { background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+                      border-radius: 4px; padding: 3px 10px; cursor: pointer;
+                      font-size: 0.9em; font-family: inherit; flex-shrink: 0; }
+    #btn-scrub-play:hover { background: #22224a; }
     #time-slider { flex: 1; accent-color: #44aadd; cursor: pointer; min-width: 0; }
-    #time-label { min-width: 120px; color: #aaccee; text-align: right; }
-    #speed-select {
-      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
-      border-radius: 4px; padding: 3px 6px; font-size: 0.9em; font-family: inherit;
-      cursor: pointer;
-    }
+    #time-label { min-width: 140px; color: #aaccee; text-align: right; }
 
     /* ---- Side panel ---- */
     .panel { width: 320px; flex-shrink: 0; overflow-y: auto;
@@ -74,6 +76,21 @@
 <header>
   <h1>{{ node_id }}</h1>
   <a href="/campaign/" class="nav-link">← Galaxy Map</a>
+  <div id="game-controls">
+    <button id="btn-game-play">▶ Play</button>
+    <label style="white-space:nowrap;font-size:0.85em;color:#8898b8">Speed:
+      <select id="game-speed">
+        <option value="0.000694">1 min/frame</option>
+        <option value="0.00694" selected>10 min/frame</option>
+        <option value="0.04167">1 hr/frame</option>
+        <option value="0.25">6 hr/frame</option>
+        <option value="1">1 d/frame</option>
+        <option value="7">1 wk/frame</option>
+        <option value="30">1 mo/frame</option>
+      </select>
+    </label>
+    <span id="game-time-display">Y1 D001 00:00</span>
+  </div>
 </header>
 
 <div class="main">
@@ -92,23 +109,12 @@
       </svg>
     </div>
 
-    <!-- Time scrubber -->
+    <!-- Time scrubber (preview only — hidden while game is playing) -->
     <div id="scrubber-bar">
-      <button id="btn-play">▶ Play</button>
-      <input type="range" id="time-slider" min="0" max="36500" step="30" value="0"/>
-      <span id="time-label">Year 0, Day 0</span>
-      <label style="white-space:nowrap">Speed:
-        <select id="speed-select">
-          <option value="0.000694">1 min/frame</option>
-          <option value="0.00694" selected>10 min/frame</option>
-          <option value="0.04167">1 hr/frame</option>
-          <option value="0.25">6 hr/frame</option>
-          <option value="1">1 d/frame</option>
-          <option value="7">1 wk/frame</option>
-          <option value="30">1 mo/frame</option>
-        </select>
-      </label>
-      <button id="btn-reset">Reset</button>
+      <span style="white-space:nowrap;color:#6688aa;font-size:0.82em">Preview:</span>
+      <button id="btn-scrub-play">▶</button>
+      <input type="range" id="time-slider" min="0" max="730" step="0.5" value="0"/>
+      <span id="time-label">Y1 D001 00:00</span>
     </div>
   </div>
 
@@ -460,22 +466,22 @@ function render(tDays) {
     objLayer.appendChild(mkText(spx, spy + s * 2 + 9 * sz, ship.name, {
       'text-anchor': 'middle', fill: col, 'font-size': (8 * sz).toFixed(2), 'font-family': 'monospace'
     }));
-    // Ghost path: one dashed line per intra-system MoveLeg in the route
+    // Ghost path — teal for intercept orders, gold for normal movement
+    const pathCol = ship.intercept_target ? '#00ffcc' : '#ffcc00';
     for (const leg of (ship.move_legs || [])) {
       objLayer.appendChild(mkEl('line', {
         x1: leg.from_x.toFixed(1), y1: leg.from_y.toFixed(1),
         x2: leg.to_x.toFixed(1),   y2: leg.to_y.toFixed(1),
-        stroke: '#ffcc00', 'stroke-width': (0.5 * sz).toFixed(2),
+        stroke: pathCol, 'stroke-width': (0.5 * sz).toFixed(2),
         'stroke-dasharray': `${3*sz},${3*sz}`, opacity: '0.5',
       }));
-      // Diamond at each leg destination
       const ds = 4 * sz;
       objLayer.appendChild(mkEl('polygon', {
         points: `${leg.to_x.toFixed(1)},${(leg.to_y - ds).toFixed(1)} ` +
                 `${(leg.to_x + ds).toFixed(1)},${leg.to_y.toFixed(1)} ` +
                 `${leg.to_x.toFixed(1)},${(leg.to_y + ds).toFixed(1)} ` +
                 `${(leg.to_x - ds).toFixed(1)},${leg.to_y.toFixed(1)}`,
-        fill: 'none', stroke: '#ffcc00', 'stroke-width': (0.8 * sz).toFixed(2), opacity: '0.7',
+        fill: 'none', stroke: pathCol, 'stroke-width': (0.8 * sz).toFixed(2), opacity: '0.7',
       }));
     }
   }
@@ -495,72 +501,153 @@ function render(tDays) {
 }
 
 // ============================================================
-// Time label formatting
+// Time formatting — Year/Day/HH:MM
 // ============================================================
 
-function formatTime(tDays) {
-  const year = Math.floor(tDays / 365.25);
-  const day  = Math.round(tDays % 365.25);
-  return `Year ${year}, Day ${day}`;
+function formatGameTime(t) {
+  const totalMins = Math.round(t * 24 * 60);
+  const mins  = totalMins % 60;
+  const hours = Math.floor(totalMins / 60) % 24;
+  const day   = (Math.floor(t) % 365) + 1;
+  const year  = Math.floor(t / 365.25) + 1;
+  return `Y${year} D${String(day).padStart(3,'0')} ${String(hours).padStart(2,'0')}:${String(mins).padStart(2,'0')}`;
 }
 
 // ============================================================
-// Scrubber controls
+// Game time state
 // ============================================================
 
-const slider    = document.getElementById('time-slider');
-const timeLabel = document.getElementById('time-label');
-const btnPlay   = document.getElementById('btn-play');
-const btnReset  = document.getElementById('btn-reset');
-const speedSel  = document.getElementById('speed-select');
+let tGame = Math.max(
+  ORBITAL.game_time || 0,
+  parseFloat(sessionStorage.getItem('tGame') || '0')
+);
+let scrubberOffset  = 0;
+let gameIsPlaying   = false;
+let gameAnimId      = null;
+let gameLastTime    = null;
+let selectedShipId  = ORBITAL.ships.length > 0 ? ORBITAL.ships[0].ship_id : null;
 
-let tDays          = parseFloat(sessionStorage.getItem('tDays') || '0');
-let playing        = false;
-let animId         = null;
-let lastTime       = null;
-let selectedShipId = ORBITAL.ships.length > 0 ? ORBITAL.ships[0].ship_id : null;
+function displayTime() { return tGame + scrubberOffset; }
 
-function setTime(t) {
-  tDays = Math.max(0, Math.min(36500, t));
-  slider.value = tDays;
-  timeLabel.textContent = formatTime(tDays);
-  sessionStorage.setItem('tDays', tDays);
-  render(tDays);
+// ============================================================
+// Game controls
+// ============================================================
+
+const btnGamePlay      = document.getElementById('btn-game-play');
+const gameSpeedSel     = document.getElementById('game-speed');
+const gameTimeDisplay  = document.getElementById('game-time-display');
+const scrubberBar      = document.getElementById('scrubber-bar');
+const scrubberSlider   = document.getElementById('time-slider');
+const scrubberLabel    = document.getElementById('time-label');
+
+function updateGameTimeDisplay() {
+  gameTimeDisplay.textContent = formatGameTime(tGame);
 }
 
-slider.addEventListener('input', () => {
-  setTime(parseFloat(slider.value));
-});
+async function pauseGame() {
+  if (!gameIsPlaying) return;
+  gameIsPlaying = false;
+  if (gameAnimId) { cancelAnimationFrame(gameAnimId); gameAnimId = null; }
+  gameLastTime = null;
+  btnGamePlay.textContent = '▶ Play';
+  sessionStorage.setItem('tGame', tGame);
 
-btnPlay.addEventListener('click', () => {
-  playing = !playing;
-  btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
-  if (playing) { lastTime = null; requestAnimationFrame(step); }
-  else if (animId) { cancelAnimationFrame(animId); animId = null; }
-});
+  // Sync server and reload orbital data
+  await fetch('/campaign/tick?t=' + tGame, { method: 'POST' });
+  const resp = await fetch('/campaign/api/system/' + NODE_ID);
+  const data = await resp.json();
+  Object.assign(ORBITAL, data);
+  tGame = data.game_time;
+  sessionStorage.setItem('tGame', tGame);
 
-btnReset.addEventListener('click', () => {
-  playing = false;
-  btnPlay.textContent = '▶ Play';
-  if (animId) { cancelAnimationFrame(animId); animId = null; }
-  lastTime = null;
-  setTime(0);
-});
+  scrubberOffset = 0;
+  scrubberSlider.value = 0;
+  scrubberLabel.textContent = formatGameTime(tGame);
+  scrubberBar.style.display = 'flex';
+  updateGameTimeDisplay();
+  render(tGame);
+}
 
-function step(timestamp) {
-  if (!playing) return;
-  const wallMs = lastTime !== null ? timestamp - lastTime : 0;
-  lastTime = timestamp;
-  const speed = parseFloat(speedSel.value);
-  setTime(tDays + speed * wallMs / (1000 / 60));
-  if (tDays >= 36500) {
-    playing = false;
-    btnPlay.textContent = '▶ Play';
-    lastTime = null;
-    return;
+function playGame() {
+  if (gameIsPlaying) return;
+  stopScrubPlay();
+  gameIsPlaying = true;
+  scrubberOffset = 0;
+  scrubberBar.style.display = 'none';
+  btnGamePlay.textContent = '⏸ Pause';
+  gameLastTime = null;
+  requestAnimationFrame(gameStep);
+}
+
+function toggleGamePlay() {
+  if (gameIsPlaying) pauseGame(); else playGame();
+}
+
+function gameStep(ts) {
+  if (!gameIsPlaying) return;
+  const wallMs = gameLastTime !== null ? ts - gameLastTime : 0;
+  gameLastTime = ts;
+  tGame += parseFloat(gameSpeedSel.value) * wallMs / (1000 / 60);
+  sessionStorage.setItem('tGame', tGame);
+  updateGameTimeDisplay();
+  render(tGame);
+  if (tGame >= 36500) { pauseGame(); return; }
+  gameAnimId = requestAnimationFrame(gameStep);
+}
+
+btnGamePlay.addEventListener('click', toggleGamePlay);
+
+document.addEventListener('keydown', ev => {
+  if (ev.code === 'Space' && ev.target === document.body) {
+    ev.preventDefault();
+    toggleGamePlay();
   }
-  animId = requestAnimationFrame(step);
+});
+
+scrubberSlider.addEventListener('input', () => {
+  stopScrubPlay();
+  scrubberOffset = parseFloat(scrubberSlider.value);
+  scrubberLabel.textContent = formatGameTime(tGame + scrubberOffset);
+  render(tGame + scrubberOffset);
+});
+
+// ============================================================
+// Scrubber preview play
+// ============================================================
+const btnScrubPlay = document.getElementById('btn-scrub-play');
+let scrubIsPlaying = false;
+let scrubAnimId    = null;
+let scrubLastTime  = null;
+
+function stopScrubPlay() {
+  scrubIsPlaying = false;
+  if (scrubAnimId) { cancelAnimationFrame(scrubAnimId); scrubAnimId = null; }
+  scrubLastTime = null;
+  btnScrubPlay.textContent = '▶';
 }
+
+function scrubStep(ts) {
+  if (!scrubIsPlaying) return;
+  const wallMs = scrubLastTime !== null ? ts - scrubLastTime : 0;
+  scrubLastTime = ts;
+  scrubberOffset = Math.min(730, scrubberOffset + parseFloat(gameSpeedSel.value) * wallMs / (1000 / 60));
+  scrubberSlider.value = scrubberOffset;
+  scrubberLabel.textContent = formatGameTime(tGame + scrubberOffset);
+  render(tGame + scrubberOffset);
+  if (scrubberOffset >= 730) { stopScrubPlay(); return; }
+  scrubAnimId = requestAnimationFrame(scrubStep);
+}
+
+btnScrubPlay.addEventListener('click', () => {
+  if (scrubIsPlaying) {
+    stopScrubPlay();
+  } else {
+    scrubIsPlaying = true;
+    btnScrubPlay.textContent = '⏸';
+    scrubLastTime = null;
+    requestAnimationFrame(scrubStep);
+  }
+});
 
 // ============================================================
 // Pan / zoom
@@ -584,7 +671,7 @@ function step(timestamp) {
     currentScale = sc;
     svg.style.transform = `translate(${ox}px,${oy}px) scale(${sc})`;
     svg.style.transformOrigin = '0 0';
-    render(tDays);
+    render(displayTime());
   }
 
   wrap.addEventListener('mousedown', ev => {
@@ -617,7 +704,7 @@ function step(timestamp) {
  * closure getTargetHex(T) → [q,r] describing where that body will be at day T.
  * Returns null if no orbital body was hit.
  */
-function findOrbitalTarget(svgX, svgY) {
+function findOrbitalTarget(svgX, svgY, tAtQuery) {
   const hitR = 12 / currentScale;   // 12 screen-px converted to SVG units
   const hitR2 = hitR * hitR;
 
@@ -625,13 +712,13 @@ function findOrbitalTarget(svgX, svgY) {
     // Star pixel position at current time
     let stPx = SVG_CX, stPy = SVG_CY;
     if (star.component !== 'A') {
-      const [dx, dy] = hexSnapOrbitPx(star.orbital_angle_0, star.orbital_period_years, star.distance_sh, tDays);
+      const [dx, dy] = hexSnapOrbitPx(star.orbital_angle_0, star.orbital_period_years, star.distance_sh, tAtQuery);
       stPx = SVG_CX + dx; stPy = SVG_CY + dy;
     }
 
     for (const p of star.planets) {
       if (p.is_ast) continue;
-      const [pdx, pdy] = hexSnapOrbitPx(p.orbital_angle_0, p.orbital_period_years, p.distance_sh, tDays);
+      const [pdx, pdy] = hexSnapOrbitPx(p.orbital_angle_0, p.orbital_period_years, p.distance_sh, tAtQuery);
       const ppx = stPx + pdx, ppy = stPy + pdy;
 
       // Check planet hit
@@ -644,7 +731,7 @@ function findOrbitalTarget(svgX, svgY) {
         for (let mi = 0; mi < p.moons.length; mi++) {
           const m = p.moons[mi];
           const visualR = (10 + mi * 6) / currentScale;
-          const mAngle = orbAngle(m.orbital_angle_0, m.orbital_period_days, tDays);
+          const mAngle = orbAngle(m.orbital_angle_0, m.orbital_period_days, tAtQuery);
           const mRad = mAngle * Math.PI / 180;
           const mdx = svgX - (ppx + visualR * Math.sin(mRad));
           const mdy = svgY - (ppy - visualR * Math.cos(mRad));
@@ -705,56 +792,84 @@ function findIntercept(fromQ, fromR, sHPerDay, getTargetHex, tNow) {
 
   // Left-click: select a ship in this system whose hex matches the clicked hex
   wrap.addEventListener('click', (ev) => {
+    const tDisp = displayTime();
     const [q, r] = evToHex(ev);
     const hit = ORBITAL.ships.find(ship => {
-      const pos = shipSystemAndPosAt(ship, tDays);
+      const pos = shipSystemAndPosAt(ship, tDisp);
       if (pos.system !== NODE_ID) return false;
       return pos.q === q && pos.r === r;
     });
     selectedShipId = hit ? hit.ship_id : null;
-    render(tDays);
+    render(tDisp);
   });
 
-  // Right-click: intercept orbital body or direct move
+  // Right-click: intercept another ship, intercept an orbital body, or direct move
   wrap.addEventListener('contextmenu', async (ev) => {
     ev.preventDefault();
     if (!selectedShipId) return;
 
+    const tDisp = displayTime();
     const ship = ORBITAL.ships.find(s => s.ship_id === selectedShipId);
     if (!ship) return;
 
-    // Convert click to SVG space for hit-testing
+    const [clickQ, clickR] = evToHex(ev);
+    const nodeId = '{{ node_id }}';
+
+    // ---- Check if clicking on another ship ----
+    const targetShip = ORBITAL.ships.find(s => {
+      if (s.ship_id === selectedShipId) return false;
+      const pos = shipSystemAndPosAt(s, tDisp);
+      return pos.system === NODE_ID && pos.q === clickQ && pos.r === clickR;
+    });
+
+    if (targetShip) {
+      const resp = await fetch(
+        `/campaign/system/${nodeId}/ship/${selectedShipId}/intercept` +
+        `?target_id=${targetShip.ship_id}`,
+        { method: 'POST' }
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      Object.assign(ORBITAL, data);
+      render(tDisp);
+      return;
+    }
+
+    // ---- Otherwise: intercept orbital body or direct hex move ----
     const svgRect = document.getElementById('system-svg').getBoundingClientRect();
     const svgX = (ev.clientX - svgRect.left) / currentScale;
     const svgY = (ev.clientY - svgRect.top)  / currentScale;
 
     let destQ, destR;
-    const getTargetHex = findOrbitalTarget(svgX, svgY);
+    const getTargetHex = findOrbitalTarget(svgX, svgY, tDisp);
     if (getTargetHex) {
-      const [fromQ, fromR] = shipHexAt(ship, tDays);
-      const result = findIntercept(fromQ, fromR, ship.sH_per_day, getTargetHex, tDays);
-      if (!result) return;   // no intercept reachable
+      const [fromQ, fromR] = shipHexAt(ship, tGame);
+      const result = findIntercept(fromQ, fromR, ship.sH_per_day, getTargetHex, tGame);
+      if (!result) return;
       [destQ, destR] = result;
     } else {
-      [destQ, destR] = evToHex(ev);
+      [destQ, destR] = [clickQ, clickR];
     }
 
-    const nodeId = '{{ node_id }}';
     const resp = await fetch(
-      `/campaign/system/${nodeId}/ship/${selectedShipId}/move?dest_q=${destQ}&dest_r=${destR}&t_days=${tDays}`,
+      `/campaign/system/${nodeId}/ship/${selectedShipId}/move` +
+      `?dest_q=${destQ}&dest_r=${destR}`,
       { method: 'POST' }
     );
     if (!resp.ok) return;
     const data = await resp.json();
     Object.assign(ORBITAL, data);
-    render(tDays);
+    render(displayTime());
   });
 })();
 
 // ============================================================
-// Initial render — restore shared scrubber position from sessionStorage
+// Initial render
 // ============================================================
-setTime(tDays);
+updateGameTimeDisplay();
+scrubberLabel.textContent = formatGameTime(tGame);
+scrubberBar.style.display = 'flex';
+render(tGame);
 </script>
 </body>
 </html>

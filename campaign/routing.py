@@ -8,6 +8,12 @@ ship_system_and_pos_at(ship, t_days) -> (system_id, q, r)
 build_route(galaxy, ship, dest_system_id, t_days) -> list[MoveLeg | TransitLeg]
     BFS through warp points; produce a fully-timed leg list.
 
+find_intercept(from_q, from_r, speed, target, system_id, t_days) -> (q, r, day) | None
+    Step-search for the earliest hex+time where an interceptor can meet target.
+
+build_intercept_route(galaxy, interceptor, target, t_days) -> list[MoveLeg]
+    Single MoveLeg to the computed intercept point; [] if no intercept possible.
+
 Extension point
 ---------------
 To allow routing from within a system view (player clicks a WP), call
@@ -125,6 +131,68 @@ def build_route(
         cur_day = transit_day
 
     return legs
+
+
+def find_intercept(
+    from_q: int,
+    from_r: int,
+    speed: float,
+    target: CampaignShip,
+    system_id: str,
+    t_days: float,
+    dt: float = 1 / 24,
+    max_days: float = 365.0,
+) -> Optional[tuple[int, int, float]]:
+    """Step forward in dt increments to find the earliest intercept.
+
+    Returns (q, r, arrive_day) of the first hex the interceptor can reach
+    no later than the target occupies it.  Returns None if no intercept is
+    possible within max_days or if the target leaves system_id first.
+    """
+    steps = int(max_days / dt)
+    for i in range(steps + 1):
+        t = t_days + i * dt
+        sys, tq, tr = ship_system_and_pos_at(target, t)
+        if sys != system_id:
+            break
+        dist = hex_dist(from_q, from_r, tq, tr)
+        if speed > 0 and dist <= speed * i * dt:
+            return tq, tr, t
+    return None
+
+
+def build_intercept_route(
+    galaxy: Galaxy,
+    interceptor: CampaignShip,
+    target: CampaignShip,
+    t_days: float,
+) -> list:
+    """Compute a single MoveLeg to intercept target within the same system.
+
+    Returns [] if both ships are not in the same system or no intercept is
+    reachable within 365 days.
+    """
+    cur_sys, cur_q, cur_r = ship_system_and_pos_at(interceptor, t_days)
+    tgt_sys, _, _ = ship_system_and_pos_at(target, t_days)
+
+    if cur_sys != tgt_sys:
+        return []
+
+    result = find_intercept(cur_q, cur_r, interceptor.sH_per_day, target, cur_sys, t_days)
+    if result is None:
+        return []
+
+    tq, tr, arrive_day = result
+    if hex_dist(cur_q, cur_r, tq, tr) == 0:
+        return []
+
+    return [MoveLeg(
+        system_id=cur_sys,
+        from_q=cur_q, from_r=cur_r,
+        to_q=tq,      to_r=tr,
+        start_day=t_days,
+        arrive_day=arrive_day,
+    )]
 
 
 def _bfs(

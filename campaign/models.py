@@ -224,15 +224,16 @@ class TransitLeg:
 
 @dataclass
 class CampaignShip:
-    ship_id:   str
-    name:      str
-    hull_type: str            # "DD", "FG", etc.
-    speed:     int            # tactical speed rating
-    system_id: str            # node_id of the system the ship is currently in
-    q_sh:      int            # position at start of current route (or idle position)
-    r_sh:      int
-    order_day: float = 0.0    # t_days when q_sh/r_sh was last snapshotted
-    route:     list = field(default_factory=list)  # list[MoveLeg | TransitLeg]
+    ship_id:          str
+    name:             str
+    hull_type:        str            # "DD", "FG", etc.
+    speed:            int            # tactical speed rating
+    system_id:        str            # node_id of the system the ship is currently in
+    q_sh:             int            # position at start of current route (or idle position)
+    r_sh:             int
+    order_day:        float = 0.0   # t_days when q_sh/r_sh was last snapshotted
+    route:            list  = field(default_factory=list)   # list[MoveLeg | TransitLeg]
+    intercept_target: Optional[str] = None  # ship_id being intercepted, if any
 
     @property
     def sH_per_day(self) -> float:
@@ -251,5 +252,6 @@ class GalaxyEdge:
 
 @dataclass
 class Galaxy:
-    systems: dict[str, SystemNode] = field(default_factory=dict)
-    edges:   list[GalaxyEdge]      = field(default_factory=list)
+    systems:   dict[str, SystemNode] = field(default_factory=dict)
+    edges:     list[GalaxyEdge]      = field(default_factory=list)
+    game_time: float                 = 0.0
