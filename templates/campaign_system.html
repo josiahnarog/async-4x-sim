@@ -457,7 +457,8 @@ function render(tDays) {
     if (shipSystemAndPosAt(ship, tDays).system !== NODE_ID) continue;
     const [spx, spy] = shipPixelPos(ship, tDays);
     const s = 6 * sz;
-    const col = selectedShipId === ship.ship_id ? '#ffffff' : '#ffcc00';
+    const ownerCol = ship.owner === 'human' ? '#ffcc00' : '#ff4444';
+    const col = selectedShipId === ship.ship_id ? '#ffffff' : ownerCol;
     // Arrowhead pointing north (forward)
     objLayer.appendChild(mkEl('polygon', {
       points: `${spx.toFixed(1)},${(spy - s * 1.6).toFixed(1)} ${(spx + s).toFixed(1)},${(spy + s).toFixed(1)} ${spx.toFixed(1)},${(spy + s * 0.4).toFixed(1)} ${(spx - s).toFixed(1)},${(spy + s).toFixed(1)}`,

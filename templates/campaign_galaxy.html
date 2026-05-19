@@ -365,6 +365,7 @@
     for (const ship of renderData.ships) {
       const curSys = shipSystemAt(ship, t);
       const pos = nodePos[curSys];
+      const shipCol = ship.owner === 'human' ? '#ffcc00' : '#ff4444';
 
       // Ghost route lines — future TransitLegs not yet executed
       for (const leg of (ship.legs || [])) {
@@ -374,10 +375,9 @@
         if (!fp || !tp) continue;
         dynG.appendChild(mkEl('line', {
           x1: fp.x, y1: fp.y, x2: tp.x, y2: tp.y,
-          stroke: '#ffcc00', 'stroke-width': 1.5,
+          stroke: shipCol, 'stroke-width': 1.5,
           'stroke-dasharray': '8,5', opacity: 0.55,
         }));
-        // Arrowhead at destination node edge
         const dx = tp.x - fp.x, dy = tp.y - fp.y;
         const len = Math.sqrt(dx*dx + dy*dy) || 1;
         const ux = dx/len, uy = dy/len;
@@ -387,20 +387,21 @@
           points: `${(ax+ux*10).toFixed(1)},${(ay+uy*10).toFixed(1)} ` +
                   `${(ax-uy*perp).toFixed(1)},${(ay+ux*perp).toFixed(1)} ` +
                   `${(ax+uy*perp).toFixed(1)},${(ay-ux*perp).toFixed(1)}`,
-          fill: '#ffcc00', opacity: 0.7,
+          fill: shipCol, opacity: 0.7,
         }));
       }
 
       // Ship marker on current node
       if (!pos) continue;
+      const shipCol = ship.owner === 'human' ? '#ffcc00' : '#ff4444';
       dynG.appendChild(mkEl('circle', {
         cx: pos.x, cy: pos.y, r: pos.r + 7,
-        fill: 'none', stroke: '#ffcc00', 'stroke-width': 1.5, opacity: 0.9,
+        fill: 'none', stroke: shipCol, 'stroke-width': 1.5, opacity: 0.9,
       }));
       const sx = pos.x, sy = pos.y - pos.r - 12;
       dynG.appendChild(mkEl('polygon', {
         points: `${sx},${sy-5} ${sx+4},${sy+5} ${sx},${sy} ${sx-4},${sy+5}`,
-        fill: '#ffcc00', opacity: 0.95,
+        fill: shipCol, opacity: 0.95,
       }));
     }
   }
@@ -570,8 +571,9 @@
       const row = document.createElement('div');
       row.className = 'ship-row';
       row.dataset.shipId = s.ship_id;
+      const dotCol = s.owner === 'human' ? '#ffcc00' : '#ff4444';
       row.innerHTML =
-        `<div class="ship-dot"></div>` +
+        `<div class="ship-dot" style="background:${dotCol}"></div>` +
         `<div><div style="color:#c0c0d8">${s.name}</div>` +
         `<div style="color:#556;font-size:0.85em">${s.hull_type} · ${s.system_id}</div></div>`;
       row.addEventListener('click', () => selectShip(s.ship_id));

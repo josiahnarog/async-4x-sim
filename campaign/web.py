@@ -95,14 +95,16 @@ def _make_galaxy(
         speed=5,
         system_id=first_id,
         q_sh=0, r_sh=0,
+        owner="human",
     ))
     g.systems[first_id].ships.append(CampaignShip(
-        ship_id="perseverance-1",
-        name="U.N.S. Perseverance",
+        ship_id="raider-1",
+        name="R.S.S. Raider",
         hull_type="FG",
         speed=6,
         system_id=first_id,
         q_sh=-8, r_sh=5,
+        owner="npc_1",
     ))
     return g
 
@@ -209,6 +211,7 @@ async def api_galaxy():
                 "ship_id":   s.ship_id,
                 "name":      s.name,
                 "hull_type": s.hull_type,
+                "owner":     s.owner,
                 "system_id": s.system_id,
                 "legs":      _serialize_legs(s.route),
             })
@@ -502,6 +505,7 @@ def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
                 "ship_id":          ship.ship_id,
                 "name":             ship.name,
                 "hull_type":        ship.hull_type,
+                "owner":            ship.owner,
                 "sH_per_day":       ship.sH_per_day,
                 "system_id":        ship.system_id,
                 "q_sh":             ship.q_sh,
@@ -540,7 +544,7 @@ def _recalc_intercepts(galaxy: Galaxy, moved_ship: CampaignShip, t_days: float) 
                 ship_id=s.ship_id, name=s.name,
                 hull_type=s.hull_type, speed=s.speed,
                 system_id=s.system_id, q_sh=iq, r_sh=ir,
-                order_day=t_days, route=new_route,
+                owner=s.owner, order_day=t_days, route=new_route,
                 intercept_target=s.intercept_target,
             )
 
@@ -675,7 +679,7 @@ async def ship_move(node_id: str, ship_id: str, dest_q: int, dest_r: int) -> JSO
         ship_id=ship.ship_id, name=ship.name,
         hull_type=ship.hull_type, speed=ship.speed,
         system_id=node_id, q_sh=cur_q, r_sh=cur_r,
-        order_day=t_days, route=new_route,
+        owner=ship.owner, order_day=t_days, route=new_route,
         intercept_target=ship.intercept_target,
     )
     idx = node.ships.index(ship)
@@ -711,7 +715,7 @@ async def ship_intercept(node_id: str, ship_id: str, target_id: str) -> JSONResp
         ship_id=ship.ship_id, name=ship.name,
         hull_type=ship.hull_type, speed=ship.speed,
         system_id=node_id, q_sh=cur_q, r_sh=cur_r,
-        order_day=t_days, route=new_route,
+        owner=ship.owner, order_day=t_days, route=new_route,
         intercept_target=target_id,
     )
     idx = node.ships.index(ship)
@@ -746,7 +750,7 @@ async def ship_route(ship_id: str, dest_system_id: str) -> JSONResponse:
         ship_id=ship.ship_id, name=ship.name,
         hull_type=ship.hull_type, speed=ship.speed,
         system_id=cur_sys, q_sh=cur_q, r_sh=cur_r,
-        order_day=t_days, route=new_legs,
+        owner=ship.owner, order_day=t_days, route=new_legs,
     )
     idx = ship_node.ships.index(ship)
     ship_node.ships[idx] = updated_ship
@@ -780,7 +784,7 @@ async def tick(t: float) -> JSONResponse:
                 ship_id=ship.ship_id, name=ship.name,
                 hull_type=ship.hull_type, speed=ship.speed,
                 system_id=new_sys, q_sh=new_q, r_sh=new_r,
-                order_day=t, route=remaining,
+                owner=ship.owner, order_day=t, route=remaining,
                 intercept_target=ship.intercept_target,
             ), new_sys))
 
@@ -799,6 +803,7 @@ async def tick(t: float) -> JSONResponse:
                 "ship_id":          s.ship_id,
                 "name":             s.name,
                 "hull_type":        s.hull_type,
+                "owner":            s.owner,
                 "system_id":        s.system_id,
                 "q_sh":             s.q_sh,
                 "r_sh":             s.r_sh,

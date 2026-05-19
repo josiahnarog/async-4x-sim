@@ -231,6 +231,7 @@ class CampaignShip:
     system_id:        str            # node_id of the system the ship is currently in
     q_sh:             int            # position at start of current route (or idle position)
     r_sh:             int
+    owner:            str  = "human" # player/faction ID, e.g. "human", "npc_1"
     order_day:        float = 0.0   # t_days when q_sh/r_sh was last snapshotted
     route:            list  = field(default_factory=list)   # list[MoveLeg | TransitLeg]
     intercept_target: Optional[str] = None  # ship_id being intercepted, if any
