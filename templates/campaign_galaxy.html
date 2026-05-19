@@ -17,19 +17,53 @@
            background: #1a1a3a; color: #c0c0d8; cursor: pointer;
            font-family: inherit; font-size: 0.85em; text-decoration: none; }
     .btn:hover { background: #2a2a5a; border-color: #445; }
-    #canvas-wrap { position: relative; width: 100%; height: calc(100vh - 52px); overflow: hidden; }
-    #galaxy-svg { width: 100%; height: 100%; display: block; cursor: grab; }
+    #canvas-wrap { display: flex; flex-direction: column; width: 100%; height: calc(100vh - 52px); overflow: hidden; }
+    #galaxy-svg { width: 100%; flex: 1; min-height: 0; display: block; cursor: grab; }
     #galaxy-svg:active { cursor: grabbing; }
+    #scrubber-bar {
+      flex-shrink: 0; background: #0d0d20; border-top: 1px solid #1a1a3a;
+      padding: 8px 14px; display: flex; align-items: center; gap: 10px;
+      font-size: 0.78em; color: #8898b8;
+    }
+    #scrubber-bar button {
+      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+      border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 0.9em;
+      font-family: inherit;
+    }
+    #scrubber-bar button:hover { background: #22224a; }
+    #gal-time-slider { flex: 1; accent-color: #44aadd; cursor: pointer; min-width: 0; }
+    #gal-time-label  { min-width: 140px; color: #aaccee; text-align: right; }
+    #gal-speed-select {
+      background: #1a1a3a; border: 1px solid #2a2a5a; color: #a8d8ea;
+      border-radius: 4px; padding: 3px 6px; font-size: 0.9em; font-family: inherit; cursor: pointer;
+    }
     #tooltip {
       position: absolute; pointer-events: none; background: #0d0d1f; border: 1px solid #334;
       border-radius: 6px; padding: 8px 12px; font-size: 0.78em; color: #c0c0d8;
       display: none; max-width: 220px; line-height: 1.7;
     }
-    .legend { position: absolute; bottom: 12px; left: 12px; background: #0d0d1f;
+    .legend { position: absolute; bottom: 58px; left: 12px; background: #0d0d1f;
               border: 1px solid #222; border-radius: 6px; padding: 8px 12px; font-size: 0.75em; }
     .legend-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
     .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .seed-badge { color: #444; font-size: 0.78em; }
+    #ship-panel {
+      position: absolute; top: 10px; right: 10px;
+      background: #0d0d1f; border: 1px solid #334; border-radius: 6px;
+      padding: 10px 14px; font-size: 0.78em; min-width: 180px; max-width: 240px;
+    }
+    #ship-panel h3 { margin: 0 0 8px; color: #a8d8ea; font-size: 0.9em; letter-spacing: 0.05em; }
+    .ship-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 6px; border-radius: 4px; cursor: pointer; margin: 2px 0;
+    }
+    .ship-row:hover { background: #1a1a3a; }
+    .ship-row.selected { background: #1a2a4a; border: 1px solid #4488ff; }
+    .ship-dot { width: 8px; height: 8px; border-radius: 50%; background: #ffcc00; flex-shrink: 0; }
+    #route-status {
+      margin-top: 8px; padding-top: 8px; border-top: 1px solid #223;
+      color: #556; font-size: 0.85em; min-height: 2em;
+    }
   </style>
 </head>
 <body>
@@ -43,6 +77,28 @@
 <div id="canvas-wrap">
   <svg id="galaxy-svg" xmlns="http://www.w3.org/2000/svg"></svg>
   <div id="tooltip"></div>
+  <div id="scrubber-bar">
+    <button id="gal-btn-play">▶ Play</button>
+    <input type="range" id="gal-time-slider" min="0" max="36500" step="1" value="0"/>
+    <span id="gal-time-label">Year 0, Day 0</span>
+    <label style="white-space:nowrap">Speed:
+      <select id="gal-speed-select">
+        <option value="0.000694">1 min/frame</option>
+        <option value="0.00694" selected>10 min/frame</option>
+        <option value="0.04167">1 hr/frame</option>
+        <option value="0.25">6 hr/frame</option>
+        <option value="1">1 d/frame</option>
+        <option value="7">1 wk/frame</option>
+        <option value="30">1 mo/frame</option>
+      </select>
+    </label>
+    <button id="gal-btn-reset">Reset</button>
+  </div>
+  <div id="ship-panel">
+    <h3>SHIPS</h3>
+    <div id="ship-list"><span style="color:#445">loading…</span></div>
+    <div id="route-status">Select a ship, then click a system to route.</div>
+  </div>
   <div class="legend">
     <div style="color:#a8d8ea;margin-bottom:4px;font-size:0.8em">STAR TYPE</div>
     <div class="legend-row"><div class="legend-dot" style="background:#ffffff"></div>White</div>
@@ -59,26 +115,45 @@
 
 <script>
 (function() {
-  const svg = document.getElementById('galaxy-svg');
-  const wrap = document.getElementById('canvas-wrap');
-  const tip  = document.getElementById('tooltip');
+  const svg       = document.getElementById('galaxy-svg');
+  const wrap      = document.getElementById('canvas-wrap');
+  const tip       = document.getElementById('tooltip');
+  const shipList  = document.getElementById('ship-list');
+  const routeStatus = document.getElementById('route-status');
 
   // Pan/zoom state
   let vx = 0, vy = 0, scale = 1;
   let dragging = false, dragX = 0, dragY = 0;
+  let didDrag = false;
+
+  // Ship selection state
+  let selectedShipId = null;
+  let allShips = [];
+
+  // Time scrubber state — persisted across views via sessionStorage
+  let tDays = parseFloat(sessionStorage.getItem('tDays') || '0');
+  let playing = false;
+  let animId = null;
+  let lastFrameTime = null;
+
+  // Stored after render for dynamic layer
+  let renderData = null;
+  let nodePos = {};  // nodeId → {x, y, r}
 
   function applyTransform() {
     mainG.setAttribute('transform', `translate(${vx},${vy}) scale(${scale})`);
   }
 
-  // SVG groups
-  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  // SVG groups (order = painter's algorithm: edges → nodes → dynamic → labels)
+  const defs  = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
   const mainG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const edgeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const nodeG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const dynG  = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const labelG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mainG.appendChild(edgeG);
   mainG.appendChild(nodeG);
+  mainG.appendChild(dynG);
   mainG.appendChild(labelG);
   svg.appendChild(defs);
   svg.appendChild(mainG);
@@ -148,10 +223,18 @@
   }
 
   function render(data) {
+    renderData = data;
     const W = wrap.clientWidth  || 900;
-    const H = wrap.clientHeight || 700;
+    const H = (svg.clientHeight || wrap.clientHeight - 50) || 700;
 
     forceLayout(data.nodes, data.edges, W, H);
+
+    // Cache node positions for dynamicRender
+    nodePos = {};
+    data.nodes.forEach(n => {
+      const r = 8 + Math.min(n.wps, 6) * 1.5;
+      nodePos[n.id] = {x: n.x, y: n.y, r};
+    });
 
     // Edges
     edgeG.innerHTML = '';
@@ -180,20 +263,6 @@
         }));
       }
 
-      // Ships-present indicator: gold ring + small chevron
-      if (n.ships > 0) {
-        nodeG.appendChild(mkEl('circle', {
-          cx: n.x, cy: n.y, r: r + 7,
-          fill: 'none', stroke: '#ffcc00', 'stroke-width': 1.5,
-          opacity: 0.9,
-        }));
-        const sy = n.y - r - 12, sx = n.x, sh = 5, sw = 4;
-        nodeG.appendChild(mkEl('polygon', {
-          points: `${sx},${sy - sh} ${sx + sw},${sy + sh} ${sx},${sy} ${sx - sw},${sy + sh}`,
-          fill: '#ffcc00', opacity: 0.95,
-        }));
-      }
-
       const circle = mkEl('circle', {
         cx: n.x, cy: n.y, r,
         fill: n.colour, stroke: '#ffffff', 'stroke-width': 0.5,
@@ -219,7 +288,15 @@
       });
       circle.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
       circle.addEventListener('click', () => {
+        console.log(`[node click] id=${n.id} didDrag=${didDrag} selectedShip=${selectedShipId}`);
+        if (didDrag) return;
         window.location.href = `/campaign/system/${n.id}`;
+      });
+      circle.addEventListener('contextmenu', ev => {
+        ev.preventDefault();
+        console.log(`[node contextmenu] id=${n.id} selectedShip=${selectedShipId}`);
+        if (!selectedShipId) return;
+        issueRoute(selectedShipId, n.id);
       });
 
       nodeG.appendChild(circle);
@@ -239,16 +316,134 @@
     // Centre viewport
     vx = 0; vy = 0; scale = 1;
     applyTransform();
+    dynamicRender(tDays);
   }
 
-  // Pan
+  // ============================================================
+  // Time helpers
+  // ============================================================
+
+  function formatTime(t) {
+    const year = Math.floor(t / 365.25);
+    const day  = Math.round(t % 365.25);
+    return `Year ${year}, Day ${day}`;
+  }
+
+  /** Which system is a ship in at time t? (galaxy-view version — system only, no q/r needed) */
+  function shipSystemAt(ship, t) {
+    let system = ship.system_id;
+    for (const leg of (ship.legs || [])) {
+      if (leg.type === 'move') {
+        if (t < leg.arrive_day) return system;
+      } else {
+        if (t < leg.day) return system;
+        system = leg.to_system;
+      }
+    }
+    return system;
+  }
+
+  /** Redraw the dynamic layer (ship markers + ghost route lines) for time t. */
+  function dynamicRender(t) {
+    dynG.innerHTML = '';
+    document.getElementById('gal-time-label').textContent = formatTime(t);
+    document.getElementById('gal-time-slider').value = t;
+    if (!renderData) return;
+
+    for (const ship of renderData.ships) {
+      const curSys = shipSystemAt(ship, t);
+      const pos = nodePos[curSys];
+
+      // Ghost route lines — future TransitLegs not yet executed
+      for (const leg of (ship.legs || [])) {
+        if (leg.type !== 'transit' || leg.day <= t) continue;
+        const fp = nodePos[leg.from_system];
+        const tp = nodePos[leg.to_system];
+        if (!fp || !tp) continue;
+        dynG.appendChild(mkEl('line', {
+          x1: fp.x, y1: fp.y, x2: tp.x, y2: tp.y,
+          stroke: '#ffcc00', 'stroke-width': 1.5,
+          'stroke-dasharray': '8,5', opacity: 0.55,
+        }));
+        // Arrowhead at destination node edge
+        const dx = tp.x - fp.x, dy = tp.y - fp.y;
+        const len = Math.sqrt(dx*dx + dy*dy) || 1;
+        const ux = dx/len, uy = dy/len;
+        const ax = tp.x - ux*(tp.r+8), ay = tp.y - uy*(tp.r+8);
+        const perp = 5;
+        dynG.appendChild(mkEl('polygon', {
+          points: `${(ax+ux*10).toFixed(1)},${(ay+uy*10).toFixed(1)} ` +
+                  `${(ax-uy*perp).toFixed(1)},${(ay+ux*perp).toFixed(1)} ` +
+                  `${(ax+uy*perp).toFixed(1)},${(ay-ux*perp).toFixed(1)}`,
+          fill: '#ffcc00', opacity: 0.7,
+        }));
+      }
+
+      // Ship marker on current node
+      if (!pos) continue;
+      dynG.appendChild(mkEl('circle', {
+        cx: pos.x, cy: pos.y, r: pos.r + 7,
+        fill: 'none', stroke: '#ffcc00', 'stroke-width': 1.5, opacity: 0.9,
+      }));
+      const sx = pos.x, sy = pos.y - pos.r - 12;
+      dynG.appendChild(mkEl('polygon', {
+        points: `${sx},${sy-5} ${sx+4},${sy+5} ${sx},${sy} ${sx-4},${sy+5}`,
+        fill: '#ffcc00', opacity: 0.95,
+      }));
+    }
+  }
+
+  // ============================================================
+  // Time scrubber controls
+  // ============================================================
+  {
+    const slider   = document.getElementById('gal-time-slider');
+    const btnPlay  = document.getElementById('gal-btn-play');
+    const btnReset = document.getElementById('gal-btn-reset');
+    const speedSel = document.getElementById('gal-speed-select');
+
+    function setTime(t) {
+      tDays = Math.max(0, Math.min(36500, t));
+      sessionStorage.setItem('tDays', tDays);
+      dynamicRender(tDays);
+    }
+
+    slider.addEventListener('input', () => setTime(parseFloat(slider.value)));
+
+    btnPlay.addEventListener('click', () => {
+      playing = !playing;
+      btnPlay.textContent = playing ? '⏸ Pause' : '▶ Play';
+      if (playing) { lastFrameTime = null; requestAnimationFrame(step); }
+      else if (animId) { cancelAnimationFrame(animId); animId = null; }
+    });
+
+    btnReset.addEventListener('click', () => {
+      playing = false; btnPlay.textContent = '▶ Play';
+      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      lastFrameTime = null; setTime(0);
+    });
+
+    function step(ts) {
+      if (!playing) return;
+      const wallMs = lastFrameTime !== null ? ts - lastFrameTime : 0;
+      lastFrameTime = ts;
+      const speed = parseFloat(speedSel.value);
+      setTime(tDays + speed * wallMs / (1000 / 60));
+      if (tDays >= 36500) { playing = false; btnPlay.textContent = '▶ Play'; return; }
+      animId = requestAnimationFrame(step);
+    }
+  }
+
+  // Pan (track drag distance to distinguish click vs drag)
   svg.addEventListener('mousedown', ev => {
     if (ev.button !== 0) return;
-    dragging = true; dragX = ev.clientX; dragY = ev.clientY;
+    dragging = true; didDrag = false; dragX = ev.clientX; dragY = ev.clientY;
   });
   window.addEventListener('mousemove', ev => {
     if (!dragging) return;
-    vx += ev.clientX - dragX; vy += ev.clientY - dragY;
+    const dx = ev.clientX - dragX, dy = ev.clientY - dragY;
+    if (Math.abs(dx) + Math.abs(dy) > 3) didDrag = true;
+    vx += dx; vy += dy;
     dragX = ev.clientX; dragY = ev.clientY;
     applyTransform();
   });
@@ -267,10 +462,92 @@
     applyTransform();
   }, { passive: false });
 
+  function buildShipPanel(ships) {
+    allShips = ships;
+    if (!ships.length) {
+      shipList.innerHTML = '<span style="color:#445">No ships</span>';
+      return;
+    }
+    shipList.innerHTML = '';
+    ships.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'ship-row';
+      row.dataset.shipId = s.ship_id;
+      row.innerHTML =
+        `<div class="ship-dot"></div>` +
+        `<div><div style="color:#c0c0d8">${s.name}</div>` +
+        `<div style="color:#556;font-size:0.85em">${s.hull_type} · ${s.system_id}</div></div>`;
+      row.addEventListener('click', () => selectShip(s.ship_id));
+      shipList.appendChild(row);
+    });
+  }
+
+  function selectShip(shipId) {
+    const prev = selectedShipId;
+    selectedShipId = (selectedShipId === shipId) ? null : shipId;
+    console.log(`[selectShip] prev=${prev} → now=${selectedShipId}`);
+    document.querySelectorAll('.ship-row').forEach(r => {
+      r.classList.toggle('selected', r.dataset.shipId === selectedShipId);
+    });
+    if (selectedShipId) {
+      const s = allShips.find(x => x.ship_id === selectedShipId);
+      routeStatus.textContent = `Routing ${s.name} — right-click a destination system.`;
+      routeStatus.style.color = '#4488ff';
+    } else {
+      routeStatus.textContent = 'Select a ship, then right-click a system to route.';
+      routeStatus.style.color = '#556';
+    }
+  }
+
+  function issueRoute(shipId, destSystemId) {
+    const tDays = 0;
+    console.log(`[issueRoute] ship=${shipId} dest=${destSystemId}`);
+    routeStatus.textContent = 'Routing…';
+    routeStatus.style.color = '#ffcc00';
+    fetch(`/campaign/ship/${shipId}/route?dest_system_id=${destSystemId}&t_days=${tDays}`, {
+      method: 'POST',
+    })
+    .then(r => {
+      console.log(`[issueRoute] HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      console.log('[issueRoute] response:', data);
+      if (data.error) {
+        routeStatus.textContent = `Error: ${data.error}`;
+        routeStatus.style.color = '#ff4444';
+      } else {
+        const s = allShips.find(x => x.ship_id === shipId);
+        selectShip(null);
+        routeStatus.textContent =
+          `${s.name} → ${destSystemId}  (${data.hops} hop${data.hops !== 1 ? 's' : ''})`;
+        routeStatus.style.color = '#00ffcc';
+        // Re-fetch ships (with updated legs) and redraw dynamic layer
+        // without re-running the expensive force layout.
+        fetch('/campaign/api/galaxy')
+          .then(r => r.json())
+          .then(updated => {
+            if (renderData) renderData.ships = updated.ships;
+            allShips = updated.ships || [];
+            buildShipPanel(allShips);
+            dynamicRender(tDays);
+          });
+      }
+    })
+    .catch(err => {
+      console.error('[issueRoute] fetch error:', err);
+      routeStatus.textContent = `Request failed: ${err}`;
+      routeStatus.style.color = '#ff4444';
+    });
+  }
+
   // Fetch data and render
   fetch('/campaign/api/galaxy')
     .then(r => r.json())
-    .then(data => render(data))
+    .then(data => {
+      render(data);
+      buildShipPanel(data.ships || []);
+    })
     .catch(err => {
       svg.innerHTML = `<text x="50%" y="50%" fill="red" text-anchor="middle">${err}</text>`;
     });

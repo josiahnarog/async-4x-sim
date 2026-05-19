@@ -99,8 +99,8 @@
       <span id="time-label">Year 0, Day 0</span>
       <label style="white-space:nowrap">Speed:
         <select id="speed-select">
-          <option value="0.000694" selected>1 min/frame</option>
-          <option value="0.00694">10 min/frame</option>
+          <option value="0.000694">1 min/frame</option>
+          <option value="0.00694" selected>10 min/frame</option>
           <option value="0.04167">1 hr/frame</option>
           <option value="0.25">6 hr/frame</option>
           <option value="1">1 d/frame</option>
@@ -167,6 +167,7 @@ const HEX_SIZE = ORBITAL.hex_size;
 const SVG_CX   = ORBITAL.svg_cx;
 const SVG_CY   = ORBITAL.svg_cy;
 const SQ3      = Math.sqrt(3);
+const NODE_ID  = ORBITAL.node_id;
 
 // ============================================================
 // Hex math (mirrors campaign/hex_utils.py)
@@ -194,19 +195,55 @@ function hexDist(q1, r1, q2, r2) {
   return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
 }
 
-/** Current hex [q,r] of a ship at tDays, accounting for movement. */
+/**
+ * Walk all route legs to determine which system a ship is in and its [q,r]
+ * at tDays.  Mirrors campaign/routing.py ship_system_and_pos_at().
+ */
+function shipSystemAndPosAt(ship, tDays) {
+  let system = ship.system_id;
+  let q = ship.q_sh, r = ship.r_sh;
+  for (const leg of (ship.legs || [])) {
+    if (leg.type === 'move') {
+      if (tDays < leg.arrive_day) {
+        if (tDays >= leg.start_day) {
+          const total = leg.arrive_day - leg.start_day;
+          const t = total > 0 ? Math.min(1, (tDays - leg.start_day) / total) : 1;
+          [q, r] = cubeRound(leg.from_q + (leg.to_q - leg.from_q) * t,
+                             leg.from_r + (leg.to_r - leg.from_r) * t);
+        }
+        return {system, q, r};
+      }
+      q = leg.to_q; r = leg.to_r;
+    } else {  // transit
+      if (tDays < leg.day) return {system, q, r};
+      system = leg.to_system;
+      q = leg.exit_q; r = leg.exit_r;
+    }
+  }
+  return {system, q, r};
+}
+
+/** Current hex [q,r] of a ship at tDays (convenience wrapper). */
 function shipHexAt(ship, tDays) {
-  if (ship.dest_q === null) return [ship.q_sh, ship.r_sh];
-  const dist = hexDist(ship.q_sh, ship.r_sh, ship.dest_q, ship.dest_r);
-  if (dist === 0) return [ship.q_sh, ship.r_sh];
-  const t = Math.min(1, ship.sH_per_day * (tDays - ship.order_day) / dist);
-  return cubeRound(ship.q_sh + (ship.dest_q - ship.q_sh) * t,
-                   ship.r_sh + (ship.dest_r - ship.r_sh) * t);
+  const pos = shipSystemAndPosAt(ship, tDays);
+  return [pos.q, pos.r];
 }
 
 /** Pixel position [px, py in SVG space] of a ship at tDays. */
 function shipPixelPos(ship, tDays) {
-  const [q, r] = shipHexAt(ship, tDays);
+  // Smooth pixel interpolation from pre-computed move_legs for this system
+  for (const leg of (ship.move_legs || [])) {
+    if (tDays >= leg.start_day && tDays <= leg.arrive_day) {
+      const total = leg.arrive_day - leg.start_day;
+      const t = total > 0 ? Math.min(1, (tDays - leg.start_day) / total) : 1;
+      return [
+        leg.from_x + (leg.to_x - leg.from_x) * t,
+        leg.from_y + (leg.to_y - leg.from_y) * t,
+      ];
+    }
+  }
+  // Fallback: hex position from full-route tracking
+  const {q, r} = shipSystemAndPosAt(ship, tDays);
   const [dx, dy] = axialToPixel(q, r);
   return [SVG_CX + dx, SVG_CY + dy];
 }
@@ -409,8 +446,9 @@ function render(tDays) {
     }
   }
 
-  // ---- Ships (zoom-invariant) ----
+  // ---- Ships (zoom-invariant; only those in this system at tDays) ----
   for (const ship of ORBITAL.ships) {
+    if (shipSystemAndPosAt(ship, tDays).system !== NODE_ID) continue;
     const [spx, spy] = shipPixelPos(ship, tDays);
     const s = 6 * sz;
     const col = selectedShipId === ship.ship_id ? '#ffffff' : '#ffcc00';
@@ -422,18 +460,22 @@ function render(tDays) {
     objLayer.appendChild(mkText(spx, spy + s * 2 + 9 * sz, ship.name, {
       'text-anchor': 'middle', fill: col, 'font-size': (8 * sz).toFixed(2), 'font-family': 'monospace'
     }));
-    // Destination marker + line when under orders
-    if (ship.dest_q !== null && ship.dest_x !== null) {
+    // Ghost path: one dashed line per intra-system MoveLeg in the route
+    for (const leg of (ship.move_legs || [])) {
       objLayer.appendChild(mkEl('line', {
-        x1: spx.toFixed(1), y1: spy.toFixed(1),
-        x2: ship.dest_x.toFixed(1), y2: ship.dest_y.toFixed(1),
+        x1: leg.from_x.toFixed(1), y1: leg.from_y.toFixed(1),
+        x2: leg.to_x.toFixed(1),   y2: leg.to_y.toFixed(1),
         stroke: '#ffcc00', 'stroke-width': (0.5 * sz).toFixed(2),
-        'stroke-dasharray': `${3*sz},${3*sz}`, opacity: '0.5'
+        'stroke-dasharray': `${3*sz},${3*sz}`, opacity: '0.5',
       }));
+      // Diamond at each leg destination
       const ds = 4 * sz;
       objLayer.appendChild(mkEl('polygon', {
-        points: `${ship.dest_x.toFixed(1)},${(ship.dest_y - ds).toFixed(1)} ${(ship.dest_x + ds).toFixed(1)},${ship.dest_y.toFixed(1)} ${ship.dest_x.toFixed(1)},${(ship.dest_y + ds).toFixed(1)} ${(ship.dest_x - ds).toFixed(1)},${ship.dest_y.toFixed(1)}`,
-        fill: 'none', stroke: '#ffcc00', 'stroke-width': (0.8 * sz).toFixed(2), opacity: '0.7'
+        points: `${leg.to_x.toFixed(1)},${(leg.to_y - ds).toFixed(1)} ` +
+                `${(leg.to_x + ds).toFixed(1)},${leg.to_y.toFixed(1)} ` +
+                `${leg.to_x.toFixed(1)},${(leg.to_y + ds).toFixed(1)} ` +
+                `${(leg.to_x - ds).toFixed(1)},${leg.to_y.toFixed(1)}`,
+        fill: 'none', stroke: '#ffcc00', 'stroke-width': (0.8 * sz).toFixed(2), opacity: '0.7',
       }));
     }
   }
@@ -472,7 +514,7 @@ const btnPlay   = document.getElementById('btn-play');
 const btnReset  = document.getElementById('btn-reset');
 const speedSel  = document.getElementById('speed-select');
 
-let tDays          = 0;
+let tDays          = parseFloat(sessionStorage.getItem('tDays') || '0');
 let playing        = false;
 let animId         = null;
 let lastTime       = null;
@@ -482,6 +524,7 @@ function setTime(t) {
   tDays = Math.max(0, Math.min(36500, t));
   slider.value = tDays;
   timeLabel.textContent = formatTime(tDays);
+  sessionStorage.setItem('tDays', tDays);
   render(tDays);
 }
 
@@ -660,13 +703,13 @@ function findIntercept(fromQ, fromR, sHPerDay, getTargetHex, tNow) {
     return cubeRound(...screenToAxialFrac(cx / HEX_SIZE, cy / HEX_SIZE));
   }
 
-  // Left-click: select a ship whose current hex matches the clicked hex
+  // Left-click: select a ship in this system whose hex matches the clicked hex
   wrap.addEventListener('click', (ev) => {
     const [q, r] = evToHex(ev);
     const hit = ORBITAL.ships.find(ship => {
-      const [spx, spy] = shipPixelPos(ship, tDays);
-      const [sq, sr] = cubeRound(...screenToAxialFrac((spx - SVG_CX) / HEX_SIZE, (spy - SVG_CY) / HEX_SIZE));
-      return sq === q && sr === r;
+      const pos = shipSystemAndPosAt(ship, tDays);
+      if (pos.system !== NODE_ID) return false;
+      return pos.q === q && pos.r === r;
     });
     selectedShipId = hit ? hit.ship_id : null;
     render(tDays);
@@ -709,9 +752,9 @@ function findIntercept(fromQ, fromR, sHPerDay, getTargetHex, tNow) {
 })();
 
 // ============================================================
-// Initial render at t=0
+// Initial render — restore shared scrubber position from sessionStorage
 // ============================================================
-setTime(0);
+setTime(tDays);
 </script>
 </body>
 </html>

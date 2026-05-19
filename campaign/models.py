@@ -195,17 +195,44 @@ class SystemNode:
 
 
 @dataclass
+class MoveLeg:
+    """Ship moving in a straight line within a single system."""
+    system_id:  str
+    from_q:     int
+    from_r:     int
+    to_q:       int
+    to_r:       int
+    start_day:  float
+    arrive_day: float
+
+
+@dataclass
+class TransitLeg:
+    """Instantaneous warp-point transit between two systems.
+
+    exit_q/exit_r are the sH coords of the destination WP in to_system.
+    transit_cost_days stub is always 0.0 for now; day == previous arrive_day.
+    """
+    from_system: str
+    to_system:   str
+    wp_from:     str   # wp_id in from_system
+    wp_to:       str   # wp_id in to_system
+    exit_q:      int   # position in to_system after transit
+    exit_r:      int
+    day:         float
+
+
+@dataclass
 class CampaignShip:
     ship_id:   str
     name:      str
     hull_type: str            # "DD", "FG", etc.
     speed:     int            # tactical speed rating
     system_id: str            # node_id of the system the ship is currently in
-    q_sh:      int            # position when order_day was set
+    q_sh:      int            # position at start of current route (or idle position)
     r_sh:      int
-    order_day: float = 0.0    # tDays at which the current move order was issued
-    dest_q:    Optional[int] = None
-    dest_r:    Optional[int] = None
+    order_day: float = 0.0    # t_days when q_sh/r_sh was last snapshotted
+    route:     list = field(default_factory=list)  # list[MoveLeg | TransitLeg]
 
     @property
     def sH_per_day(self) -> float:

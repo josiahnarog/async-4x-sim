@@ -32,6 +32,7 @@ from campaign.models import (
     Galaxy,
     LM_PER_SH,
     LM_PER_SPEED_PER_DAY,
+    MoveLeg,
     MoonType,
     Planet,
     PlanetType,
@@ -39,9 +40,11 @@ from campaign.models import (
     SpectralClass,
     Star,
     SystemNode,
+    TransitLeg,
     WPVisibility,
 )
 from campaign.hex_utils import axial_to_screen, cube_round, hex_dist
+from campaign.routing import build_route, ship_system_and_pos_at
 from campaign.tables import classify_orbit, get_zone_bounds
 
 router = APIRouter(prefix="/campaign")
@@ -191,7 +194,18 @@ async def api_galaxy():
             "wp_b":  e.wp_b,
         })
 
-    return {"nodes": nodes, "edges": edges}
+    ships = []
+    for node in g.systems.values():
+        for s in node.ships:
+            ships.append({
+                "ship_id":   s.ship_id,
+                "name":      s.name,
+                "hull_type": s.hull_type,
+                "system_id": s.system_id,
+                "legs":      _serialize_legs(s.route),
+            })
+
+    return {"nodes": nodes, "edges": edges, "ships": ships}
 
 
 # ---------------------------------------------------------------------------
@@ -335,10 +349,38 @@ def _render_system_svg(node: SystemNode) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Route serialization helper
+# ---------------------------------------------------------------------------
+
+def _serialize_legs(route: list) -> list[dict]:
+    out: list[dict] = []
+    for leg in route:
+        if isinstance(leg, MoveLeg):
+            out.append({
+                "type": "move",
+                "system_id": leg.system_id,
+                "from_q": leg.from_q, "from_r": leg.from_r,
+                "to_q":   leg.to_q,   "to_r":   leg.to_r,
+                "start_day":  leg.start_day,
+                "arrive_day": leg.arrive_day,
+            })
+        elif isinstance(leg, TransitLeg):
+            out.append({
+                "type": "transit",
+                "from_system": leg.from_system,
+                "to_system":   leg.to_system,
+                "day":         leg.day,
+                "exit_q":      leg.exit_q,
+                "exit_r":      leg.exit_r,
+            })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Orbital data builder (consumed by JS time scrubber)
 # ---------------------------------------------------------------------------
 
-def _build_orbital_data(node: SystemNode) -> dict:
+def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
     """Return a JSON-serialisable dict of orbital parameters for all moving objects."""
     stars_out = []
     for star in node.stars:
@@ -416,31 +458,46 @@ def _build_orbital_data(node: SystemNode) -> dict:
             "label":  f"\u2192{dest}",
         })
 
+    # Include ALL ships from the galaxy so JS can filter by computed system at tDays.
     ships_out = []
-    for ship in node.ships:
-        dx, dy = _axial_to_pixel(ship.q_sh, ship.r_sh)
-        dest_x, dest_y = None, None
-        if ship.dest_q is not None:
-            ddx, ddy = _axial_to_pixel(ship.dest_q, ship.dest_r)
-            dest_x, dest_y = _SVG_CX + ddx, _SVG_CY + ddy
-        ships_out.append({
-            "ship_id":   ship.ship_id,
-            "name":      ship.name,
-            "hull_type": ship.hull_type,
-            "sH_per_day": ship.sH_per_day,
-            "q_sh":      ship.q_sh,
-            "r_sh":      ship.r_sh,
-            "order_day": ship.order_day,
-            "dest_q":    ship.dest_q,
-            "dest_r":    ship.dest_r,
-            "dest_x":    dest_x,
-            "dest_y":    dest_y,
-        })
+    for sys_node in galaxy.systems.values():
+        for ship in sys_node.ships:
+            # Pre-computed pixel move_legs for this system's ghost path rendering
+            move_legs = []
+            for leg in ship.route:
+                if isinstance(leg, MoveLeg) and leg.system_id == node.node_id:
+                    fx, fy = _axial_to_pixel(leg.from_q, leg.from_r)
+                    tx, ty = _axial_to_pixel(leg.to_q,   leg.to_r)
+                    move_legs.append({
+                        "from_x":    _SVG_CX + fx,
+                        "from_y":    _SVG_CY + fy,
+                        "to_x":      _SVG_CX + tx,
+                        "to_y":      _SVG_CY + ty,
+                        "from_q":    leg.from_q,
+                        "from_r":    leg.from_r,
+                        "to_q":      leg.to_q,
+                        "to_r":      leg.to_r,
+                        "start_day": leg.start_day,
+                        "arrive_day": leg.arrive_day,
+                    })
+            ships_out.append({
+                "ship_id":    ship.ship_id,
+                "name":       ship.name,
+                "hull_type":  ship.hull_type,
+                "sH_per_day": ship.sH_per_day,
+                "system_id":  ship.system_id,
+                "q_sh":       ship.q_sh,
+                "r_sh":       ship.r_sh,
+                "order_day":  ship.order_day,
+                "legs":       _serialize_legs(ship.route),
+                "move_legs":  move_legs,
+            })
 
     return {
         "hex_size":    _HEX_SIZE,
         "svg_cx":      _SVG_CX,
         "svg_cy":      _SVG_CY,
+        "node_id":     node.node_id,
         "stars":       stars_out,
         "warp_points": wps_out,
         "ships":       ships_out,
@@ -528,7 +585,7 @@ async def system_view(request: Request, node_id: str):
             f"{wp.visibility.value:10s}  → {dest}"
         )
 
-    orbital_json = json.dumps(_build_orbital_data(node))
+    orbital_json = json.dumps(_build_orbital_data(node, g))
 
     return templates.TemplateResponse(
         "campaign_system.html",
@@ -549,8 +606,13 @@ async def system_view(request: Request, node_id: str):
 @router.post("/system/{node_id}/ship/{ship_id}/move", response_class=JSONResponse)
 async def ship_move(node_id: str, ship_id: str,
                     dest_q: int, dest_r: int, t_days: float) -> JSONResponse:
-    """Issue a movement order.  Advances the ship's position to t_days first,
-    then sets the new destination.  Returns updated orbital JSON."""
+    """Issue an intra-system movement order.
+
+    Advances the ship to t_days, then replaces its route with a single
+    MoveLeg to (dest_q, dest_r) within this system.  Returns updated
+    orbital JSON.  (Extension point: calling this from the system view
+    after routing to a WP enables manual intra-system waypointing.)
+    """
     g = _get_galaxy()
     node = g.systems.get(node_id)
     if node is None:
@@ -560,32 +622,75 @@ async def ship_move(node_id: str, ship_id: str,
     if ship is None:
         return JSONResponse({"error": "ship not found"}, status_code=404)
 
-    # Advance position to current game time before issuing new order
-    cur_q, cur_r = _ship_pos_at(ship, t_days)
+    _, cur_q, cur_r = ship_system_and_pos_at(ship, t_days)
+    dist = hex_dist(cur_q, cur_r, dest_q, dest_r)
+    arrive_day = t_days + dist / ship.sH_per_day if ship.sH_per_day > 0 else t_days
+
+    new_route = []
+    if dist > 0:
+        new_route = [MoveLeg(
+            system_id=node_id,
+            from_q=cur_q, from_r=cur_r,
+            to_q=dest_q, to_r=dest_r,
+            start_day=t_days,
+            arrive_day=arrive_day,
+        )]
+
     idx = node.ships.index(ship)
     node.ships[idx] = CampaignShip(
-        ship_id=ship.ship_id,
-        name=ship.name,
-        hull_type=ship.hull_type,
-        speed=ship.speed,
-        system_id=ship.system_id,
-        q_sh=cur_q,
-        r_sh=cur_r,
-        order_day=t_days,
-        dest_q=dest_q,
-        dest_r=dest_r,
+        ship_id=ship.ship_id, name=ship.name,
+        hull_type=ship.hull_type, speed=ship.speed,
+        system_id=node_id, q_sh=cur_q, r_sh=cur_r,
+        order_day=t_days, route=new_route,
     )
-    return JSONResponse(_build_orbital_data(node))
+    return JSONResponse(_build_orbital_data(node, g))
 
 
-def _ship_pos_at(ship: CampaignShip, t_days: float) -> tuple[int, int]:
-    """Return the ship's hex position at t_days."""
-    if ship.dest_q is None:
-        return ship.q_sh, ship.r_sh
-    dist = hex_dist(ship.q_sh, ship.r_sh, ship.dest_q, ship.dest_r)
-    if dist == 0:
-        return ship.q_sh, ship.r_sh
-    sh_elapsed = ship.sH_per_day * (t_days - ship.order_day)
-    t = min(1.0, sh_elapsed / dist)
-    return cube_round(ship.q_sh + (ship.dest_q - ship.q_sh) * t,
-                      ship.r_sh + (ship.dest_r - ship.r_sh) * t)
+@router.post("/ship/{ship_id}/route", response_class=JSONResponse)
+async def ship_route(ship_id: str, dest_system_id: str, t_days: float) -> JSONResponse:
+    """Issue an interstellar route order from the galaxy view.
+
+    BFS-plans a full warp-point path and replaces the ship's route with
+    the computed leg list.  The ship's snapshot position and system_id are
+    advanced to t_days before planning.
+    """
+    g = _get_galaxy()
+
+    ship = None
+    ship_node = None
+    for node in g.systems.values():
+        found = next((s for s in node.ships if s.ship_id == ship_id), None)
+        if found:
+            ship = found
+            ship_node = node
+            break
+
+    if ship is None:
+        return JSONResponse({"error": "ship not found"}, status_code=404)
+    if dest_system_id not in g.systems:
+        return JSONResponse({"error": "destination system not found"}, status_code=404)
+
+    new_legs = build_route(g, ship, dest_system_id, t_days)
+
+    # Advance snapshot to t_days and attach new route
+    cur_sys, cur_q, cur_r = ship_system_and_pos_at(ship, t_days)
+    idx = ship_node.ships.index(ship)
+    ship_node.ships[idx] = CampaignShip(
+        ship_id=ship.ship_id, name=ship.name,
+        hull_type=ship.hull_type, speed=ship.speed,
+        system_id=cur_sys, q_sh=cur_q, r_sh=cur_r,
+        order_day=t_days, route=new_legs,
+    )
+
+    # If the ship moved to a different system in the snapshot, update lists
+    if cur_sys != ship_node.node_id:
+        ship_node.ships.pop(idx)
+        g.systems[cur_sys].ships.append(ship_node.ships[idx] if idx < len(ship_node.ships) else CampaignShip(
+            ship_id=ship.ship_id, name=ship.name,
+            hull_type=ship.hull_type, speed=ship.speed,
+            system_id=cur_sys, q_sh=cur_q, r_sh=cur_r,
+            order_day=t_days, route=new_legs,
+        ))
+
+    hops = sum(1 for leg in new_legs if isinstance(leg, TransitLeg))
+    return JSONResponse({"ok": True, "hops": hops, "legs": len(new_legs)})
