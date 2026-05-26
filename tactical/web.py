@@ -72,6 +72,30 @@ def _autosave(session: GameSession) -> None:
     )
 
 
+def create_game_from_battle(
+    name:   str,
+    battle: object,   # BattleState — typed loosely to mirror _new_game
+    rng:    random.Random,
+) -> str:
+    """Create a new tactical game from a pre-built BattleState. Returns game_id.
+
+    Intended for use by the campaign layer when spawning a combat encounter.
+    """
+    from tactical.encounter import Encounter
+    game_id = str(uuid.uuid4())
+    enc = Encounter.start(battle, rng=rng)
+    session = GameSession(
+        game_id=game_id, name=name, enc=enc, rng=rng,
+        log=[], turn_number=1,
+    )
+    _sessions[game_id] = session
+    save_game(
+        game_id=game_id, name=name, enc=enc, rng=rng,
+        log=[], turn_number=1,
+    )
+    return game_id
+
+
 def _new_game(name: str) -> GameSession:
     from tactical.encounter import Encounter
     from tactical.scenarios import default_scenario

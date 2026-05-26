@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from ships.instance import ShipInstance
+
 
 # ---------------------------------------------------------------------------
 # Unit constants
@@ -75,6 +77,12 @@ class SystemCategory(str, Enum):
     NO_PLANET_STAR = "No Planet Star" # Blue Giant, White/Red Dwarf, etc.
     ANOMALY        = "Anomaly"       # Blackhole, Pulsar, etc.
     STARLESS       = "Starless"      # No star; warp points only
+
+
+class EngagementStatus(str, Enum):
+    PENDING     = "pending"      # detected, not yet resolved
+    IN_PROGRESS = "in_progress"  # tactical game started
+    RESOLVED    = "resolved"     # combat finished
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +234,7 @@ class TransitLeg:
 class CampaignShip:
     ship_id:          str
     name:             str
-    hull_type:        str            # "DD", "FG", etc.
-    speed:            int            # tactical speed rating
+    instance:         ShipInstance   # live ship state (systems, design)
     system_id:        str            # node_id of the system the ship is currently in
     q_sh:             int            # position at start of current route (or idle position)
     r_sh:             int
@@ -238,8 +245,8 @@ class CampaignShip:
 
     @property
     def sH_per_day(self) -> float:
-        """Movement rate in sH/day derived from speed rating and current scale."""
-        return self.speed * LM_PER_SPEED_PER_DAY / LM_PER_SH
+        """Movement rate in sH/day derived from live engine state and scale."""
+        return self.instance.active_speed * LM_PER_SPEED_PER_DAY / LM_PER_SH
 
 
 @dataclass
@@ -252,7 +259,21 @@ class GalaxyEdge:
 
 
 @dataclass
+class Engagement:
+    """A detected combat engagement between ships of opposing owners."""
+    engagement_id:    str
+    system_id:        str
+    q_sh:             int
+    r_sh:             int
+    ship_ids:         list[str]
+    status:           EngagementStatus
+    collision_day:    float
+    tactical_game_id: Optional[str] = None
+
+
+@dataclass
 class Galaxy:
-    systems:   dict[str, SystemNode] = field(default_factory=dict)
-    edges:     list[GalaxyEdge]      = field(default_factory=list)
-    game_time: float                 = 0.0
+    systems:     dict[str, SystemNode] = field(default_factory=dict)
+    edges:       list[GalaxyEdge]      = field(default_factory=list)
+    game_time:   float                 = 0.0
+    engagements: list[Engagement]      = field(default_factory=list)

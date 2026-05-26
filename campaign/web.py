@@ -29,6 +29,8 @@ from campaign.linker import build_galaxy
 from campaign.models import (
     AnomalyType,
     CampaignShip,
+    Engagement,
+    EngagementStatus,
     Galaxy,
     LM_PER_SH,
     LM_PER_SPEED_PER_DAY,
@@ -43,6 +45,10 @@ from campaign.models import (
     TransitLeg,
     WPVisibility,
 )
+from campaign.combat_bridge import auto_resolve_stub, build_battle_from_engagement
+from campaign.routing import find_path_collision
+from ships.catalogue import BROADSIDE_CLASS, RAIDER_CLASS
+from ships.instance import ShipInstance
 from campaign.hex_utils import axial_to_screen, cube_round, hex_dist
 from campaign.routing import build_intercept_route, build_route, ship_system_and_pos_at
 from campaign.tables import classify_orbit, get_zone_bounds
@@ -91,8 +97,7 @@ def _make_galaxy(
     g.systems[first_id].ships.append(CampaignShip(
         ship_id="broadside-1",
         name="U.N.S. Broadside",
-        hull_type="DD",
-        speed=5,
+        instance=ShipInstance.from_design(BROADSIDE_CLASS, "broadside-1"),
         system_id=first_id,
         q_sh=0, r_sh=0,
         owner="human",
@@ -100,8 +105,7 @@ def _make_galaxy(
     g.systems[first_id].ships.append(CampaignShip(
         ship_id="raider-1",
         name="R.S.S. Raider",
-        hull_type="FG",
-        speed=6,
+        instance=ShipInstance.from_design(RAIDER_CLASS, "raider-1"),
         system_id=first_id,
         q_sh=-8, r_sh=5,
         owner="npc_1",
@@ -210,7 +214,7 @@ async def api_galaxy():
             ships.append({
                 "ship_id":   s.ship_id,
                 "name":      s.name,
-                "hull_type": s.hull_type,
+                "hull_type": s.instance.design.hull_type_id,
                 "owner":     s.owner,
                 "system_id": s.system_id,
                 "legs":      _serialize_legs(s.route),
@@ -504,7 +508,9 @@ def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
             ships_out.append({
                 "ship_id":          ship.ship_id,
                 "name":             ship.name,
-                "hull_type":        ship.hull_type,
+                "hull_type":        ship.instance.design.hull_type_id,
+                "design_name":      ship.instance.design.name,
+                "systems":          ship.instance.systems.render_compact(),
                 "owner":            ship.owner,
                 "sH_per_day":       ship.sH_per_day,
                 "system_id":        ship.system_id,
@@ -516,6 +522,19 @@ def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
                 "move_legs":        move_legs,
             })
 
+    engagements_out = []
+    for eng in galaxy.engagements:
+        if eng.status == EngagementStatus.RESOLVED:
+            continue
+        if eng.system_id != node.node_id:
+            continue
+        dx, dy = _axial_to_pixel(eng.q_sh, eng.r_sh)
+        engagements_out.append({
+            **_eng_to_dict(eng),
+            "x": _SVG_CX + dx,
+            "y": _SVG_CY + dy,
+        })
+
     return {
         "hex_size":    _HEX_SIZE,
         "svg_cx":      _SVG_CX,
@@ -525,6 +544,24 @@ def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
         "stars":       stars_out,
         "warp_points": wps_out,
         "ships":       ships_out,
+        "engagements": engagements_out,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Engagement helpers
+# ---------------------------------------------------------------------------
+
+def _eng_to_dict(e: Engagement) -> dict:
+    return {
+        "engagement_id":    e.engagement_id,
+        "system_id":        e.system_id,
+        "q_sh":             e.q_sh,
+        "r_sh":             e.r_sh,
+        "ship_ids":         e.ship_ids,
+        "status":           e.status.value,
+        "collision_day":    e.collision_day,
+        "tactical_game_id": e.tactical_game_id,
     }
 
 
@@ -542,7 +579,7 @@ def _recalc_intercepts(galaxy: Galaxy, moved_ship: CampaignShip, t_days: float) 
             _, iq, ir = ship_system_and_pos_at(s, t_days)
             sys_node.ships[i] = CampaignShip(
                 ship_id=s.ship_id, name=s.name,
-                hull_type=s.hull_type, speed=s.speed,
+                instance=s.instance,
                 system_id=s.system_id, q_sh=iq, r_sh=ir,
                 owner=s.owner, order_day=t_days, route=new_route,
                 intercept_target=s.intercept_target,
@@ -677,7 +714,7 @@ async def ship_move(node_id: str, ship_id: str, dest_q: int, dest_r: int) -> JSO
 
     updated = CampaignShip(
         ship_id=ship.ship_id, name=ship.name,
-        hull_type=ship.hull_type, speed=ship.speed,
+        instance=ship.instance,
         system_id=node_id, q_sh=cur_q, r_sh=cur_r,
         owner=ship.owner, order_day=t_days, route=new_route,
         intercept_target=ship.intercept_target,
@@ -713,7 +750,7 @@ async def ship_intercept(node_id: str, ship_id: str, target_id: str) -> JSONResp
 
     updated = CampaignShip(
         ship_id=ship.ship_id, name=ship.name,
-        hull_type=ship.hull_type, speed=ship.speed,
+        instance=ship.instance,
         system_id=node_id, q_sh=cur_q, r_sh=cur_r,
         owner=ship.owner, order_day=t_days, route=new_route,
         intercept_target=target_id,
@@ -748,7 +785,7 @@ async def ship_route(ship_id: str, dest_system_id: str) -> JSONResponse:
 
     updated_ship = CampaignShip(
         ship_id=ship.ship_id, name=ship.name,
-        hull_type=ship.hull_type, speed=ship.speed,
+        instance=ship.instance,
         system_id=cur_sys, q_sh=cur_q, r_sh=cur_r,
         owner=ship.owner, order_day=t_days, route=new_legs,
     )
@@ -765,44 +802,107 @@ async def ship_route(ship_id: str, dest_system_id: str) -> JSONResponse:
 
 @router.post("/tick", response_class=JSONResponse)
 async def tick(t: float) -> JSONResponse:
-    """Advance game time to t, walking all ships forward and handling transits."""
+    """Advance game time to t, stopping early at the first combat collision."""
+    import uuid as _uuid
     g = _get_galaxy()
     if t < g.game_time:
         return JSONResponse({"error": "cannot go back in time"}, status_code=400)
 
-    # Compute new state for every ship
+    # Block advancement while any engagement is unresolved
+    unresolved = [e for e in g.engagements if e.status != EngagementStatus.RESOLVED]
+    if unresolved:
+        ships_out = _ships_payload(g)
+        return JSONResponse({
+            "game_time":        g.game_time,
+            "ships":            ships_out,
+            "paused_for_combat": True,
+            "engagements":      [_eng_to_dict(e) for e in unresolved],
+        })
+
+    # ---- Collision detection: find earliest hostile hex collision ----
+    all_ships = [s for node in g.systems.values() for s in node.ships]
+    earliest_t:  float | None = None
+    hex_collisions: dict[tuple, set[str]] = {}   # (system, q, r) → ship_ids
+
+    for i in range(len(all_ships)):
+        for j in range(i + 1, len(all_ships)):
+            a, b = all_ships[i], all_ships[j]
+            if a.owner == b.owner:
+                continue
+            # Extend scan by one hourly step so Python's cube_round
+            # can catch collisions that JS detected one step earlier.
+            result = find_path_collision(a, b, g.game_time, t + 1 / 24)
+            if result is None:
+                continue
+            col_t, col_sys, col_q, col_r = result
+            if earliest_t is None or col_t < earliest_t:
+                earliest_t = col_t
+                hex_collisions = {}
+            if col_t == earliest_t:
+                key = (col_sys, col_q, col_r)
+                hex_collisions.setdefault(key, set())
+                hex_collisions[key].add(a.ship_id)
+                hex_collisions[key].add(b.ship_id)
+
+    effective_t = earliest_t if earliest_t is not None else t
+
+    # ---- Advance all ships to effective_t ----
     updates: list[tuple[CampaignShip, str]] = []
     for sys_node in g.systems.values():
         for ship in sys_node.ships:
-            new_sys, new_q, new_r = ship_system_and_pos_at(ship, t)
+            new_sys, new_q, new_r = ship_system_and_pos_at(ship, effective_t)
             remaining = [
                 leg for leg in ship.route
-                if (isinstance(leg, MoveLeg) and leg.arrive_day > t)
-                or (isinstance(leg, TransitLeg) and leg.day > t)
+                if (isinstance(leg, MoveLeg) and leg.arrive_day > effective_t)
+                or (isinstance(leg, TransitLeg) and leg.day > effective_t)
             ]
             updates.append((CampaignShip(
                 ship_id=ship.ship_id, name=ship.name,
-                hull_type=ship.hull_type, speed=ship.speed,
+                instance=ship.instance,
                 system_id=new_sys, q_sh=new_q, r_sh=new_r,
-                owner=ship.owner, order_day=t, route=remaining,
+                owner=ship.owner, order_day=effective_t, route=remaining,
                 intercept_target=ship.intercept_target,
             ), new_sys))
 
-    # Rebuild system ship lists
     for sys_node in g.systems.values():
         sys_node.ships.clear()
     for updated, new_sys in updates:
         g.systems[new_sys].ships.append(updated)
 
-    g.game_time = t
+    g.game_time = effective_t
 
-    ships_out = []
+    # ---- Create Engagement records for every collision hex ----
+    new_engagements: list[Engagement] = []
+    for (col_sys, col_q, col_r), ship_ids in hex_collisions.items():
+        eng = Engagement(
+            engagement_id=str(_uuid.uuid4())[:8],
+            system_id=col_sys,
+            q_sh=col_q,
+            r_sh=col_r,
+            ship_ids=sorted(ship_ids),
+            status=EngagementStatus.PENDING,
+            collision_day=effective_t,
+        )
+        g.engagements.append(eng)
+        new_engagements.append(eng)
+
+    ships_out = _ships_payload(g)
+    return JSONResponse({
+        "game_time":          g.game_time,
+        "ships":              ships_out,
+        "paused_for_combat":  len(new_engagements) > 0,
+        "engagements":        [_eng_to_dict(e) for e in new_engagements],
+    })
+
+
+def _ships_payload(g: Galaxy) -> list[dict]:
+    out = []
     for sys_node in g.systems.values():
         for s in sys_node.ships:
-            ships_out.append({
+            out.append({
                 "ship_id":          s.ship_id,
                 "name":             s.name,
-                "hull_type":        s.hull_type,
+                "hull_type":        s.instance.design.hull_type_id,
                 "owner":            s.owner,
                 "system_id":        s.system_id,
                 "q_sh":             s.q_sh,
@@ -811,5 +911,74 @@ async def tick(t: float) -> JSONResponse:
                 "intercept_target": s.intercept_target,
                 "legs":             _serialize_legs(s.route),
             })
+    return out
 
-    return JSONResponse({"game_time": g.game_time, "ships": ships_out})
+
+@router.post("/engagement/{engagement_id}/auto-resolve", response_class=JSONResponse)
+async def engagement_auto_resolve(engagement_id: str) -> JSONResponse:
+    """Coin-flip auto-resolution: destroy the losing side, mark engagement resolved."""
+    import random as _random
+    g = _get_galaxy()
+    eng = next((e for e in g.engagements if e.engagement_id == engagement_id), None)
+    if eng is None:
+        return JSONResponse({"error": "engagement not found"}, status_code=404)
+    if eng.status == EngagementStatus.RESOLVED:
+        return JSONResponse({"error": "already resolved"}, status_code=400)
+
+    result = auto_resolve_stub(eng, g, _random.Random())
+
+    # Remove destroyed ships from all system ship lists
+    destroyed_set = set(result["destroyed"])
+    for sys_node in g.systems.values():
+        sys_node.ships[:] = [s for s in sys_node.ships if s.ship_id not in destroyed_set]
+
+    # Mark resolved
+    idx = g.engagements.index(eng)
+    g.engagements[idx] = Engagement(
+        engagement_id=eng.engagement_id,
+        system_id=eng.system_id,
+        q_sh=eng.q_sh, r_sh=eng.r_sh,
+        ship_ids=eng.ship_ids,
+        status=EngagementStatus.RESOLVED,
+        collision_day=eng.collision_day,
+        tactical_game_id=eng.tactical_game_id,
+    )
+
+    return JSONResponse({**result, "engagement_id": engagement_id, "status": "resolved"})
+
+
+@router.post("/engagement/{engagement_id}/start-tactical", response_class=JSONResponse)
+async def engagement_start_tactical(engagement_id: str) -> JSONResponse:
+    """Build a tactical encounter from the engagement and return its game URL."""
+    from tactical.web import create_game_from_battle
+    g = _get_galaxy()
+    eng = next((e for e in g.engagements if e.engagement_id == engagement_id), None)
+    if eng is None:
+        return JSONResponse({"error": "engagement not found"}, status_code=404)
+    if eng.status == EngagementStatus.RESOLVED:
+        return JSONResponse({"error": "already resolved"}, status_code=400)
+
+    battle, rng = build_battle_from_engagement(eng, g)
+    game_id = create_game_from_battle(
+        name=f"Combat {eng.engagement_id} @ {eng.system_id}",
+        battle=battle,
+        rng=rng,
+    )
+
+    # Mark in-progress and record the tactical game id
+    idx = g.engagements.index(eng)
+    g.engagements[idx] = Engagement(
+        engagement_id=eng.engagement_id,
+        system_id=eng.system_id,
+        q_sh=eng.q_sh, r_sh=eng.r_sh,
+        ship_ids=eng.ship_ids,
+        status=EngagementStatus.IN_PROGRESS,
+        collision_day=eng.collision_day,
+        tactical_game_id=game_id,
+    )
+
+    return JSONResponse({
+        "game_id":  game_id,
+        "url":      f"/tactical/?game_id={game_id}",
+        "ship_ids": eng.ship_ids,
+    })

@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 
-from campaign.hex_utils import hex_dist
+from campaign.hex_utils import cube_round, hex_dist
 from campaign.models import CampaignShip, Galaxy, GalaxyEdge, MoveLeg, TransitLeg
 
 TRANSIT_COST_DAYS: float = 0.0  # stub; increase to add warp transit time
@@ -52,8 +52,10 @@ def ship_system_and_pos_at(
             if t_days < leg.arrive_day:
                 total = leg.arrive_day - leg.start_day
                 frac = min(1.0, (t_days - leg.start_day) / total) if total > 0 else 1.0
-                q = round(leg.from_q + (leg.to_q - leg.from_q) * frac)
-                r = round(leg.from_r + (leg.to_r - leg.from_r) * frac)
+                q, r = cube_round(
+                    leg.from_q + (leg.to_q - leg.from_q) * frac,
+                    leg.from_r + (leg.to_r - leg.from_r) * frac,
+                )
                 return system, q, r
             q, r = leg.to_q, leg.to_r
         else:  # TransitLeg
@@ -193,6 +195,31 @@ def build_intercept_route(
         start_day=t_days,
         arrive_day=arrive_day,
     )]
+
+
+def find_path_collision(
+    ship_a: CampaignShip,
+    ship_b: CampaignShip,
+    t_start: float,
+    t_end:   float,
+    dt:      float = 1 / 24,
+) -> Optional[tuple[float, str, int, int]]:
+    """Return (t, system_id, q, r) of the earliest hex shared by ship_a and ship_b.
+
+    Steps in dt increments (default 1 hour) through [t_start, t_end].
+    Handles ships that transition between systems during the window.
+    Returns None if no collision is found.
+    """
+    t = t_start
+    while True:
+        sa, qa, ra = ship_system_and_pos_at(ship_a, t)
+        sb, qb, rb = ship_system_and_pos_at(ship_b, t)
+        if sa == sb and qa == qb and ra == rb:
+            return (t, sa, qa, ra)
+        if t >= t_end:
+            break
+        t = min(t + dt, t_end)
+    return None
 
 
 def _bfs(

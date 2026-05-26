@@ -393,7 +393,6 @@
 
       // Ship marker on current node
       if (!pos) continue;
-      const shipCol = ship.owner === 'human' ? '#ffcc00' : '#ff4444';
       dynG.appendChild(mkEl('circle', {
         cx: pos.x, cy: pos.y, r: pos.r + 7,
         fill: 'none', stroke: shipCol, 'stroke-width': 1.5, opacity: 0.9,

@@ -54,6 +54,30 @@
     #time-slider { flex: 1; accent-color: #44aadd; cursor: pointer; min-width: 0; }
     #time-label { min-width: 140px; color: #aaccee; text-align: right; }
 
+    /* ---- Combat modal ---- */
+    #combat-modal {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.78); z-index: 1000;
+      align-items: center; justify-content: center;
+    }
+    #combat-modal.open { display: flex; }
+    #combat-box {
+      background: #0d0d1f; border: 1px solid #ff4444; border-radius: 8px;
+      padding: 24px 28px; min-width: 320px; max-width: 460px;
+      font-size: 0.88em;
+    }
+    #combat-box h2 { margin: 0 0 10px; color: #ff4444; font-size: 1.05em; }
+    #combat-ship-list { margin-bottom: 14px; line-height: 1.8; color: #c0c0d8; }
+    #combat-result { margin-bottom: 10px; color: #00ffcc; min-height: 1.4em; }
+    .combat-btn {
+      padding: 6px 16px; border-radius: 5px; border: 1px solid #445;
+      background: #1a1a3a; color: #c0c0d8; cursor: pointer;
+      font-family: inherit; font-size: 0.9em; margin-right: 8px;
+    }
+    .combat-btn:hover { background: #2a2a5a; }
+    .combat-btn.primary { border-color: #ff4444; color: #ff8888; }
+    .combat-btn.primary:hover { background: #2a1a1a; }
+
     /* ---- Side panel ---- */
     .panel { width: 320px; flex-shrink: 0; overflow-y: auto;
              border-left: 1px solid #1a1a3a; padding: 12px 14px; font-size: 0.8em; }
@@ -156,6 +180,20 @@
       <div style="margin-top:8px;color:#888">◆ WP (diamonds by visibility)</div>
       <div class="legend-row"><div class="legend-diamond" style="background:#44ddff"></div>Open</div>
       <div class="legend-row"><div class="legend-diamond" style="background:#ff4444"></div>Closed</div>
+    </div>
+  </div>
+</div>
+
+<!-- Combat engagement modal -->
+<div id="combat-modal">
+  <div id="combat-box">
+    <h2>&#9876; COMBAT ENGAGED</h2>
+    <div id="combat-ship-list"></div>
+    <div id="combat-result"></div>
+    <div>
+      <button class="combat-btn primary" id="btn-fight">Fight Manually</button>
+      <button class="combat-btn" id="btn-auto">Auto-resolve</button>
+      <button class="combat-btn" id="btn-combat-close">Close</button>
     </div>
   </div>
 </div>
@@ -499,6 +537,40 @@ function render(tDays) {
       'text-anchor': 'middle', fill: wp.colour, 'font-size': (8 * sz).toFixed(2), 'font-family': 'monospace'
     }));
   }
+
+  // ---- Engagement (combat) markers ----
+  for (const eng of (ORBITAL.engagements || [])) {
+    if (eng.status === 'resolved') continue;
+    const ex = eng.x, ey = eng.y;
+    const s = 9 * sz;
+    // Outer alert ring
+    objLayer.appendChild(mkEl('circle', {
+      cx: ex.toFixed(1), cy: ey.toFixed(1), r: (s + 3 * sz).toFixed(2),
+      fill: 'none', stroke: '#ff2222', 'stroke-width': (2 * sz).toFixed(2), opacity: '0.85',
+    }));
+    // ✕ cross
+    objLayer.appendChild(mkEl('line', {
+      x1: (ex - s * 0.65).toFixed(1), y1: (ey - s * 0.65).toFixed(1),
+      x2: (ex + s * 0.65).toFixed(1), y2: (ey + s * 0.65).toFixed(1),
+      stroke: '#ff3333', 'stroke-width': (2.5 * sz).toFixed(2), opacity: '0.95',
+    }));
+    objLayer.appendChild(mkEl('line', {
+      x1: (ex + s * 0.65).toFixed(1), y1: (ey - s * 0.65).toFixed(1),
+      x2: (ex - s * 0.65).toFixed(1), y2: (ey + s * 0.65).toFixed(1),
+      stroke: '#ff3333', 'stroke-width': (2.5 * sz).toFixed(2), opacity: '0.95',
+    }));
+    objLayer.appendChild(mkText(ex, ey - s - 5 * sz, 'COMBAT', {
+      'text-anchor': 'middle', fill: '#ff4444',
+      'font-size': (8 * sz).toFixed(2), 'font-family': 'monospace',
+    }));
+    // Transparent click target
+    const hit = mkEl('circle', {
+      cx: ex.toFixed(1), cy: ey.toFixed(1), r: (s + 6 * sz).toFixed(2),
+      fill: 'transparent', style: 'cursor:pointer',
+    });
+    hit.addEventListener('click', (ev) => { ev.stopPropagation(); openCombatModal(eng); });
+    objLayer.appendChild(hit);
+  }
 }
 
 // ============================================================
@@ -553,13 +625,24 @@ async function pauseGame() {
   btnGamePlay.textContent = '▶ Play';
   sessionStorage.setItem('tGame', tGame);
 
-  // Sync server and reload orbital data
-  await fetch('/campaign/tick?t=' + tGame, { method: 'POST' });
-  const resp = await fetch('/campaign/api/system/' + NODE_ID);
-  const data = await resp.json();
-  Object.assign(ORBITAL, data);
-  tGame = data.game_time;
-  sessionStorage.setItem('tGame', tGame);
+  // Sync server (may stop earlier than tGame if a collision occurred)
+  try {
+    const tickResp = await fetch('/campaign/tick?t=' + tGame, { method: 'POST' });
+    if (!tickResp.ok) console.warn('tick returned', tickResp.status);
+  } catch (e) {
+    console.warn('tick fetch failed:', e);
+  }
+
+  // Reload orbital data (includes updated engagements)
+  try {
+    const resp = await fetch('/campaign/api/system/' + NODE_ID);
+    const data = await resp.json();
+    Object.assign(ORBITAL, data);
+    tGame = data.game_time;
+    sessionStorage.setItem('tGame', tGame);
+  } catch (e) {
+    console.warn('ORBITAL reload failed:', e);
+  }
 
   scrubberOffset = 0;
   scrubberSlider.value = 0;
@@ -567,6 +650,10 @@ async function pauseGame() {
   scrubberBar.style.display = 'flex';
   updateGameTimeDisplay();
   render(tGame);
+
+  // Show modal for any pending engagement in this system
+  const pending = (ORBITAL.engagements || []).filter(e => e.status !== 'resolved');
+  if (pending.length > 0) openCombatModal(pending[0]);
 }
 
 function playGame() {
@@ -584,11 +671,50 @@ function toggleGamePlay() {
   if (gameIsPlaying) pauseGame(); else playGame();
 }
 
+/**
+ * Scan [tPrev, tNext] in 1-hour increments for the earliest time two ships
+ * from different owners share the same system and hex.
+ * Returns the collision time, or null if none found.
+ */
+function findEarliestCollision(tPrev, tNext) {
+  const ships = ORBITAL.ships || [];
+  if (ships.length < 2) return null;
+  const dt = 1 / 24;
+  let t = tPrev;
+  while (true) {
+    // Map "system:q:r" → first owner seen at that position
+    const seen = new Map();
+    for (const ship of ships) {
+      const {system, q, r} = shipSystemAndPosAt(ship, t);
+      const key = `${system}:${q}:${r}`;
+      const prevOwner = seen.get(key);
+      if (prevOwner !== undefined && prevOwner !== ship.owner) return t;
+      if (prevOwner === undefined) seen.set(key, ship.owner);
+    }
+    if (t >= tNext) break;
+    t = Math.min(t + dt, tNext);
+  }
+  return null;
+}
+
 function gameStep(ts) {
   if (!gameIsPlaying) return;
   const wallMs = gameLastTime !== null ? ts - gameLastTime : 0;
   gameLastTime = ts;
-  tGame += parseFloat(gameSpeedSel.value) * wallMs / (1000 / 60);
+  const nextTGame = tGame + parseFloat(gameSpeedSel.value) * wallMs / (1000 / 60);
+
+  // Detect hostile hex collision in this time step — auto-pause exactly at contact
+  const colT = findEarliestCollision(tGame, nextTGame);
+  if (colT !== null) {
+    tGame = colT;
+    sessionStorage.setItem('tGame', tGame);
+    updateGameTimeDisplay();
+    render(tGame);
+    pauseGame();   // syncs server, creates Engagement, shows modal
+    return;
+  }
+
+  tGame = nextTGame;
   sessionStorage.setItem('tGame', tGame);
   updateGameTimeDisplay();
   render(tGame);
@@ -865,12 +991,109 @@ function findIntercept(fromQ, fromR, sHPerDay, getTargetHex, tNow) {
 })();
 
 // ============================================================
+// Combat modal
+// ============================================================
+
+const combatModal    = document.getElementById('combat-modal');
+const combatShipList = document.getElementById('combat-ship-list');
+const combatResult   = document.getElementById('combat-result');
+const btnFight       = document.getElementById('btn-fight');
+const btnAuto        = document.getElementById('btn-auto');
+const btnCombatClose = document.getElementById('btn-combat-close');
+
+let activeCombatEng = null;
+
+function openCombatModal(eng) {
+  activeCombatEng = eng;
+  combatResult.textContent = '';
+  btnFight.disabled = false;
+  btnAuto.disabled  = false;
+
+  // List ships in this engagement
+  const shipNames = eng.ship_ids.map(sid => {
+    const s = (ORBITAL.ships || []).find(x => x.ship_id === sid);
+    return s ? `${s.name} (${s.hull_type}, ${s.owner})` : sid;
+  });
+  combatShipList.innerHTML = shipNames.map(n =>
+    `<div>&#9654; ${n}</div>`
+  ).join('');
+
+  combatModal.classList.add('open');
+}
+
+function closeCombatModal() {
+  combatModal.classList.remove('open');
+  activeCombatEng = null;
+}
+
+btnCombatClose.addEventListener('click', closeCombatModal);
+
+btnFight.addEventListener('click', async () => {
+  if (!activeCombatEng) return;
+  btnFight.disabled = true;
+  btnAuto.disabled  = true;
+  combatResult.textContent = 'Starting tactical battle…';
+  const resp = await fetch(
+    `/campaign/engagement/${activeCombatEng.engagement_id}/start-tactical`,
+    { method: 'POST' }
+  );
+  const data = await resp.json();
+  if (data.error) {
+    combatResult.textContent = `Error: ${data.error}`;
+    btnFight.disabled = false;
+    btnAuto.disabled  = false;
+    return;
+  }
+  // Open tactical view in new tab; mark engagement in-progress
+  window.open(data.url, '_blank');
+  combatResult.textContent = `Tactical game launched (${data.game_id}). Resolve combat and return here.`;
+  // Refresh ORBITAL to reflect in_progress status
+  const refresh = await fetch('/campaign/api/system/' + NODE_ID);
+  const refreshData = await refresh.json();
+  Object.assign(ORBITAL, refreshData);
+  render(displayTime());
+});
+
+btnAuto.addEventListener('click', async () => {
+  if (!activeCombatEng) return;
+  btnFight.disabled = true;
+  btnAuto.disabled  = true;
+  combatResult.textContent = 'Resolving…';
+  const resp = await fetch(
+    `/campaign/engagement/${activeCombatEng.engagement_id}/auto-resolve`,
+    { method: 'POST' }
+  );
+  const data = await resp.json();
+  if (data.error) {
+    combatResult.textContent = `Error: ${data.error}`;
+    btnFight.disabled = false;
+    btnAuto.disabled  = false;
+    return;
+  }
+  combatResult.textContent =
+    `${data.winner} wins! Destroyed: ${data.destroyed.join(', ') || 'none'}.`;
+  // Refresh orbital data (destroyed ships gone, engagement resolved)
+  const refresh = await fetch('/campaign/api/system/' + NODE_ID);
+  const refreshData = await refresh.json();
+  Object.assign(ORBITAL, refreshData);
+  render(displayTime());
+  // Close after brief pause so player can read the result
+  setTimeout(closeCombatModal, 2000);
+});
+
+// ============================================================
 // Initial render
 // ============================================================
 updateGameTimeDisplay();
 scrubberLabel.textContent = formatGameTime(tGame);
 scrubberBar.style.display = 'flex';
 render(tGame);
+
+// Show modal if there are already pending engagements in this system on load
+{
+  const pending = (ORBITAL.engagements || []).filter(e => e.status !== 'resolved');
+  if (pending.length > 0) openCombatModal(pending[0]);
+}
 </script>
 </body>
 </html>
