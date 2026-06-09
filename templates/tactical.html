@@ -130,7 +130,7 @@
     // FACING_OFFSETS: N=(0,+1) NE=(+1,0) SE=(+1,-1) S=(0,-1) SW=(-1,0) NW=(-1,+1)
     // Flat-top pixel formula (r increases upward, canvas y increases downward):
     //   px = cx + SIZE * (3/2 * q)
-    //   py = cy - SIZE * (sqrt(3)/2 * q + sqrt(3) * r)
+    //   py = cy + SIZE * (sqrt(3)/2 * q + sqrt(3) * r)
     // -----------------------------------------------------------------------
 
     const SHIPS           = {{ ships_json | safe }};
@@ -229,7 +229,7 @@
     // Fractional axial hex from world (cx=0,cy=0) coords.
     function worldToHex(wx, wy) {
       const q = wx / (SIZE * 1.5);
-      const r = -wy / (SIZE * SQ3) - q / 2;
+      const r = wy / (SIZE * SQ3) - q / 2;
       return { q, r };
     }
     // Round fractional cube/axial to nearest integer hex.
@@ -550,7 +550,7 @@
     function hexToPixel(q, r, cx, cy) {
       return {
         x: cx + SIZE * (1.5 * q),
-        y: cy - SIZE * (SQ3 / 2 * q + SQ3 * r),
+        y: cy + SIZE * (SQ3 / 2 * q + SQ3 * r),
       };
     }
 

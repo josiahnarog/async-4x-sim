@@ -10,6 +10,7 @@ from sim.hexgrid import Hex
 from tactical.battle_state import BattleState
 from tactical.facing import Facing, FACING_OFFSETS
 
+from campaign.hex_utils import hex_dist
 from campaign.models import CampaignShip, Engagement, EngagementStatus, Galaxy, MoveLeg
 
 # ---------------------------------------------------------------------------
@@ -46,18 +47,12 @@ def facing_from_direction(dq: int, dr: int) -> Facing:
 
 
 def ship_facing_from_route(ship: CampaignShip) -> Facing:
-    """Derive tactical facing from the ship's most recent MoveLeg direction.
-
-    The campaign SVG renderer uses y = +sqrt(3)*r (y-down), while the tactical
-    canvas renderer uses y = -sqrt(3)*r (y-up).  Negating dr converts a campaign
-    movement vector to the equivalent visual direction in the tactical coordinate
-    system.
-    """
+    """Derive tactical facing from the ship's most recent MoveLeg direction."""
     for leg in reversed(ship.route):
         if isinstance(leg, MoveLeg):
             return facing_from_direction(
                 leg.to_q - leg.from_q,
-                -(leg.to_r - leg.from_r),   # r-axis is flipped between SVG and canvas
+                leg.to_r - leg.from_r,
             )
     return Facing.N
 
@@ -65,11 +60,6 @@ def ship_facing_from_route(ship: CampaignShip) -> Facing:
 # ---------------------------------------------------------------------------
 # Trajectory-based placement
 # ---------------------------------------------------------------------------
-
-def _hex_dist(qa: int, ra: int, qb: int, rb: int) -> int:
-    dq, dr = qa - qb, ra - rb
-    return max(abs(dq), abs(dr), abs(dq + dr))
-
 
 def _deconflict(
     result: dict[str, tuple[Hex, Facing]],
@@ -88,7 +78,7 @@ def _deconflict(
                 for sb in side_list[j][1]:
                     ha, fa = result[sa.ship_id]
                     hb, fb = result[sb.ship_id]
-                    dist = _hex_dist(ha.q, ha.r, hb.q, hb.r)
+                    dist = hex_dist(ha.q, ha.r, hb.q, hb.r)
                     if dist >= MIN_ENEMY_SEPARATION:
                         continue
 

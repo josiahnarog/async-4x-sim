@@ -50,11 +50,11 @@ class Facing(IntEnum):
 
 
 FACING_OFFSETS: tuple[tuple[int, int], ...] = (
-    (0, 1),    # N
-    (1, 0),    # NE
-    (1, -1),   # SE
-    (0, -1),   # S
-    (-1, 0),   # SW
-    (-1, 1),   # NW
+    (0, -1),   # N
+    (1, -1),   # NE
+    (1, 0),    # SE
+    (0, 1),    # S
+    (-1, 1),   # SW
+    (-1, 0),   # NW
 )
 
