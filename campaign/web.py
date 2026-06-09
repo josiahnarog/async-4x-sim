@@ -354,16 +354,6 @@ def _render_system_svg(node: SystemNode) -> str:
                 f'<polygon points="{pts}" fill="none" stroke="#111128" stroke-width="0.4"/>'
             )
 
-    # --- WP dashed lines from centre (use stored canonical coords) ---
-    for wp in node.warp_points:
-        dx, dy = _axial_to_pixel(wp.q_sh, wp.r_sh)
-        col = _WP_VIS_COLOURS.get(wp.visibility.value, "#44ddff")
-        parts.append(
-            f'<line x1="{_SVG_CX}" y1="{_SVG_CY}" '
-            f'x2="{_SVG_CX + dx:.1f}" y2="{_SVG_CY + dy:.1f}" '
-            f'stroke="{col}" stroke-width="0.8" stroke-dasharray="4,3" opacity="0.5"/>'
-        )
-
     # Scale note
     parts.append(
         f'<text x="8" y="{_SVG_H - 8}" fill="#223344" font-size="8" '
