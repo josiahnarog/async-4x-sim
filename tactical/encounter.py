@@ -178,18 +178,18 @@ class Encounter:
                     if ship.turn_cost > 0 else 0
                 )
         else:
-            # Direct hex move: compute minimum MP needed from scratch.
-            dist         = hex_distance(ship.pos, dest)
-            facing_delta = (int(dest_facing) - int(ship.facing)) % 6
-            turns_needed = min(facing_delta, 6 - facing_delta)
-            # Minimum total MP = enough to move AND to earn all needed turns.
-            # Formula: max(dist, turns_needed * turn_cost - current_charge)
-            # Derivation: total_mp + charge ≥ turns_needed * turn_cost
-            total_cost = max(dist, turns_needed * ship.turn_cost - ship.turn_charge)
+            # Direct hex move (e.g. from AI): use exact BFS for reachability.
+            occupied  = frozenset(self.battle.ship_occupied_hexes(exclude=[ship_id]))
+            reachable = ship.reachable_positions(cap, occupied)
+            if (dest, dest_facing) not in reachable:
+                raise ValueError(
+                    f"Ship {ship_id!r} cannot reach {dest} facing {int(dest_facing)} "
+                    f"within {cap} MP"
+                )
+            total_cost = reachable[(dest, dest_facing)]
             if final_turn_charge is None:
-                # After turns_needed turns the remaining charge is:
-                #   initial_charge + total_cost - turns_needed * turn_cost
-                # clamped to [0, turn_cost].
+                facing_delta = (int(dest_facing) - int(ship.facing)) % 6
+                turns_needed = min(facing_delta, 6 - facing_delta)
                 if ship.turn_cost > 0:
                     remaining = ship.turn_charge + total_cost - turns_needed * ship.turn_cost
                     final_turn_charge = min(max(0, remaining), ship.turn_cost)

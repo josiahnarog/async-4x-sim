@@ -55,11 +55,27 @@ class ShipState:
             return self.turn_cost
         return charge
 
-    def min_mp_to_reach(self, dest: Hex, dest_facing: Facing) -> int:
-        """Minimum MP required to move from current position/facing to dest at dest_facing.
+    def reachable_positions(
+        self,
+        cap: int,
+        occupied: frozenset[Hex] = frozenset(),
+    ) -> dict[tuple[Hex, Facing], int]:
+        """Return {(dest, dest_facing): min_mp_cost} for all positions reachable in ≤ cap MP.
 
-        Uses the same formula as Encounter.stage_move and move_ai._move_cost so
-        all reachability checks stay in sync.
+        Uses exact 0-1 BFS.  This is the single canonical reachability check
+        shared by the AI and stage_move validation.
+        """
+        from tactical.movement import bfs_reachable
+        return bfs_reachable(
+            self.pos, self.facing, self.turn_charge, self.turn_cost, cap, occupied
+        )
+
+    def min_mp_to_reach(self, dest: Hex, dest_facing: Facing) -> int:
+        """Lower-bound estimate of MP needed to reach dest at dest_facing.
+
+        Only exact for 0 or 1 turns; underestimates for 2+ turns (charge resets
+        after each turn so you cannot bank it across turns).  Kept for quick
+        pre-filtering; use reachable_positions() for authoritative checks.
         """
         dist = hex_distance(self.pos, dest)
         facing_delta = (int(dest_facing) - int(self.facing)) % 6

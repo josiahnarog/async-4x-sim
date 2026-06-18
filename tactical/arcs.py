@@ -80,18 +80,18 @@ def bearing_blocked(rb: int, mt: MountType) -> bool:
 def absolute_bearing(dq: int, dr: int) -> int:
     """Facing index (0-5) most closely aligned with vector (dq, dr).
 
-    Converts axial hex delta to flat-top pixel space (r increases upward,
-    canvas y increases downward), then maps pixel-space angle to facing index.
+    Converts axial hex delta to flat-top pixel space (y-down: +r = screen down),
+    then maps pixel-space angle to facing index.
 
         dx = 1.5 * dq
-        dy = -(sqrt(3)/2 * dq  +  sqrt(3) * dr)   [r negated for canvas y]
+        dy = sqrt(3)/2 * dq + sqrt(3) * dr     [y-down: positive r = positive y]
 
     Facing 0 (N) maps to angle -pi/2; each subsequent facing adds pi/3.
     """
     if dq == 0 and dr == 0:
         return 0
     dx = 1.5 * dq
-    dy = -(math.sqrt(3) / 2 * dq + math.sqrt(3) * dr)
+    dy = math.sqrt(3) / 2 * dq + math.sqrt(3) * dr
     angle = math.atan2(dy, dx)
     return round((angle + math.pi / 2) / (math.pi / 3)) % 6
 

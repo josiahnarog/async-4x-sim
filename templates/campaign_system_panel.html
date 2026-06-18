@@ -1,0 +1,89 @@
+{#
+  Shared system-detail panel renderer.
+  Include this fragment in any campaign template that needs renderSystemPanel().
+
+  Provides:
+    renderSystemPanel(orbital, nodeId, tDays, container)
+      - orbital : the /api/system/{id} JSON object
+      - nodeId  : system to display (used to filter ships by current location)
+      - tDays   : current game time in days (for in-transit ship filtering)
+      - container : DOM element whose innerHTML will be replaced
+#}
+<script>
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Walk route legs to determine which system a ship is in at tDays. */
+function _shipSystemAt(ship, tDays) {
+  let system = ship.system_id;
+  for (const leg of (ship.legs || [])) {
+    if (leg.type === 'move') {
+      if (tDays < leg.arrive_day) return system;
+    } else {
+      if (tDays < leg.day) return system;
+      system = leg.to_system;
+    }
+  }
+  return system;
+}
+
+/**
+ * Render system details (stars, planets, warp points, units) into container.
+ * All data comes from the /api/system/{id} JSON so this function works
+ * identically in both the system map view and the galaxy map panel.
+ */
+function renderSystemPanel(orbital, nodeId, tDays, container) {
+  let html = '';
+
+  // ---- Stars ----
+  html += '<h2>Stars</h2>';
+  const starInfo = orbital.star_info || [];
+  if (starInfo.length) {
+    starInfo.forEach(line => { html += `<pre class="star-pre">${_escHtml(line)}</pre>`; });
+  } else {
+    html += '<pre class="star-pre" style="color:#445">Starless node</pre>';
+  }
+
+  // ---- Planets ----
+  html += '<h2>Planets</h2>';
+  const planetInfo = orbital.planet_info || [];
+  if (planetInfo.length) {
+    html += `<pre>${planetInfo.map(_escHtml).join('\n')}</pre>`;
+  } else {
+    html += '<pre style="color:#445">No planets</pre>';
+  }
+
+  // ---- Warp Points ----
+  html += '<h2>Warp Points</h2>';
+  const wpInfo = orbital.wp_info || [];
+  if (wpInfo.length) {
+    html += `<pre class="wp-pre">${wpInfo.map(_escHtml).join('\n')}</pre>`;
+  } else {
+    html += '<pre class="wp-pre" style="color:#445">No warp points</pre>';
+  }
+
+  // ---- Units ----
+  html += '<h2>Units</h2>';
+  const ships = (orbital.ships || []).filter(s => _shipSystemAt(s, tDays) === nodeId);
+  if (ships.length) {
+    ships.forEach(ship => {
+      const ownerCol  = ship.owner === 'human' ? '#ffcc00' : '#ff4444';
+      const designStr = ship.design_name ? `${_escHtml(ship.design_name)} (${ship.hull_type})` : ship.hull_type;
+      html += `<div style="margin-bottom:10px">`;
+      html += `<div style="color:${ownerCol};font-weight:bold;font-size:0.88em">${_escHtml(ship.name)}</div>`;
+      html += `<div style="color:#778;font-size:0.78em">${designStr} · ${_escHtml(ship.owner)}</div>`;
+      if (ship.systems) {
+        html += `<pre style="color:#c8f0c8;font-size:0.78em;margin:3px 0 0;padding:4px 6px">${_escHtml(ship.systems)}</pre>`;
+      }
+      html += `</div>`;
+    });
+  } else {
+    html += '<div style="color:#445;font-size:0.85em">No ships in system</div>';
+  }
+
+  container.innerHTML = html;
+}
+</script>

@@ -976,6 +976,7 @@ def _fire_orders_json(session: GameSession) -> str:
 
 
 def _game_template_context(request: Request, session: GameSession, view: str) -> dict:
+    from tactical.facing import FACING_OFFSETS
     enc = session.enc
     return {
         "request":              request,
@@ -995,6 +996,7 @@ def _game_template_context(request: Request, session: GameSession, view: str) ->
         "recover_paths_json":   _recover_paths_json(session),
         "log":                  "\n".join(session.log[-40:]),
         "view":                 view,
+        "facing_offsets_json":  json.dumps(list(FACING_OFFSETS)),
     }
 
 
@@ -1182,6 +1184,40 @@ async def firepower_map(game_id: str, ship_id: str):
 # ---------------------------------------------------------------------------
 # Routes — per-game
 # ---------------------------------------------------------------------------
+
+@router.get("/game/{game_id}/result")
+async def game_result(game_id: str):
+    """Return battle outcome: completion status, survivors, and destroyed ships.
+
+    Used by the campaign layer to apply tactical results back to galaxy state.
+    """
+    from tactical.encounter import Phase
+    try:
+        session = _get_session(game_id)
+    except KeyError:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "game not found"}, status_code=404)
+
+    enc = session.enc
+    is_complete = enc.phase == Phase.COMPLETE
+    all_ships = list(enc.battle.ships.values())
+    survivors = [s.ship_id for s in all_ships
+                 if s.systems is None or not s.systems.is_destroyed()]
+    destroyed = [s.ship_id for s in all_ships
+                 if s.systems is not None and s.systems.is_destroyed()]
+    surviving_sides = list({s.owner_id for s in all_ships
+                            if s.systems is None or not s.systems.is_destroyed()})
+    is_draw = is_complete and len(surviving_sides) == 0
+    winner  = surviving_sides[0] if len(surviving_sides) == 1 else None
+    return {
+        "is_complete":     is_complete,
+        "survivors":       survivors,
+        "destroyed":       destroyed,
+        "surviving_sides": surviving_sides,
+        "winner":          winner,
+        "is_draw":         is_draw,
+    }
+
 
 @router.get("/game/{game_id}/", response_class=HTMLResponse)
 async def game_view(request: Request, game_id: str, view: str = "master"):

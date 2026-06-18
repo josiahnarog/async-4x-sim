@@ -525,6 +525,55 @@ def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
             "y": _SVG_CY + dy,
         })
 
+    # ---- Human-readable text arrays for the side panel ----
+    star_info: list[str] = []
+    for star in node.stars:
+        if star.anomaly_type:
+            lbl = f"{star.component}: {star.anomaly_type.value}"
+        elif star.spectral_class:
+            lbl = f"{star.component}: {star.spectral_class.value}"
+        else:
+            lbl = f"{star.component}: unknown"
+        if star.bearing:
+            lbl += f"  bearing={star.bearing}  dist={star.distance_sh}sH"
+        star_info.append(lbl)
+
+    planet_info: list[str] = []
+    seen_ast: set[tuple] = set()
+    for star in node.stars:
+        for p in star.planets:
+            if p.planet_type == PlanetType.AST:
+                key = (star.component, p.orbit_slot, p.distance_sh)
+                if key in seen_ast:
+                    continue
+                seen_ast.add(key)
+                planet_info.append(
+                    f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
+                    f"AST belt  ({6 * p.distance_sh} hexes)  [{star.component}]"
+                )
+            else:
+                hi_str  = f" HI={p.hi}" if p.hi is not None else ""
+                tl_str  = " [tidelock]" if p.tidelock else ""
+                atm_str = " [atm]" if p.has_atmosphere else ""
+                moon_str = f" {len(p.moons)}☽" if p.moons else ""
+                pop_str = (
+                    f" ◉ {p.population.owner} P{p.population.size}/I{p.population.industry}"
+                    if p.population else ""
+                )
+                planet_info.append(
+                    f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
+                    f"{p.planet_type.value:3s}  M{p.mass or '-'}"
+                    f"{hi_str}{tl_str}{atm_str}{moon_str}{pop_str}  [{star.component}]"
+                )
+
+    wp_info: list[str] = []
+    for wp in node.warp_points:
+        dest = wp.linked_to[0] if wp.linked_to else "unlinked"
+        wp_info.append(
+            f"{wp.wp_id}  bearing={wp.bearing:2d}  dist={wp.distance_sh:3d}sH  "
+            f"{wp.visibility.value:10s}  → {dest}"
+        )
+
     return {
         "hex_size":    _HEX_SIZE,
         "svg_cx":      _SVG_CX,
@@ -535,6 +584,9 @@ def _build_orbital_data(node: SystemNode, galaxy: Galaxy) -> dict:
         "warp_points": wps_out,
         "ships":       ships_out,
         "engagements": engagements_out,
+        "star_info":   star_info,
+        "planet_info": planet_info,
+        "wp_info":     wp_info,
     }
 
 
@@ -605,58 +657,7 @@ async def system_view(request: Request, node_id: str):
     if node is None:
         return HTMLResponse(f"<h1>System {node_id} not found</h1>", status_code=404)
 
-    svg_content = _render_system_svg(node)
-
-    # Build summary data for the side panel
-    primary = node.primary
-    star_info = []
-    for star in node.stars:
-        if star.anomaly_type:
-            label = f"{star.component}: {star.anomaly_type.value}"
-        elif star.spectral_class:
-            label = f"{star.component}: {star.spectral_class.value}"
-        else:
-            label = f"{star.component}: unknown"
-        if star.bearing:
-            label += f"  bearing={star.bearing}  dist={star.distance_sh}sH"
-        star_info.append(label)
-
-    planet_info = []
-    seen_ast_rings: set[tuple[str, int, int]] = set()   # (component, orbit_slot, distance_sh)
-    for star in node.stars:
-        for p in star.planets:
-            if p.planet_type == PlanetType.AST:
-                key = (star.component, p.orbit_slot, p.distance_sh)
-                if key in seen_ast_rings:
-                    continue
-                seen_ast_rings.add(key)
-                belt_size = 6 * p.distance_sh
-                planet_info.append(
-                    f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
-                    f"AST belt  ({belt_size} hexes)  [{star.component}]"
-                )
-            else:
-                hi_str = f" HI={p.hi}" if p.hi is not None else ""
-                tl_str = " [tidelock]" if p.tidelock else ""
-                atm_str = " [atm]" if p.has_atmosphere else ""
-                moon_str = f" {len(p.moons)}☽" if p.moons else ""
-                pop_str = ""
-                if p.population is not None:
-                    pop_str = f" ◉ {p.population.owner} P{p.population.size}/I{p.population.industry}"
-                planet_info.append(
-                    f"Orbit {p.orbit_slot:2d} @ {p.distance_sh:4d}sH  "
-                    f"{p.planet_type.value:3s}  M{p.mass or '-'}"
-                    f"{hi_str}{tl_str}{atm_str}{moon_str}{pop_str}  [{star.component}]"
-                )
-
-    wp_info = []
-    for wp in node.warp_points:
-        dest = wp.linked_to[0] if wp.linked_to else "unlinked"
-        wp_info.append(
-            f"{wp.wp_id}  bearing={wp.bearing:2d}  dist={wp.distance_sh:3d}sH  "
-            f"{wp.visibility.value:10s}  → {dest}"
-        )
-
+    svg_content  = _render_system_svg(node)
     orbital_json = json.dumps(_build_orbital_data(node, g))
 
     return templates.TemplateResponse(
@@ -665,9 +666,6 @@ async def system_view(request: Request, node_id: str):
             "request":      request,
             "node_id":      node_id,
             "svg":          svg_content,
-            "star_info":    star_info,
-            "planet_info":  planet_info,
-            "wp_info":      wp_info,
             "svg_w":        _SVG_W,
             "svg_h":        _SVG_H,
             "orbital_json": orbital_json,
@@ -937,6 +935,69 @@ async def engagement_auto_resolve(engagement_id: str) -> JSONResponse:
     return JSONResponse({**result, "engagement_id": engagement_id, "status": "resolved"})
 
 
+@router.post("/engagement/{engagement_id}/apply-tactical-result", response_class=JSONResponse)
+async def engagement_apply_tactical(engagement_id: str) -> JSONResponse:
+    """Apply the result of a completed tactical battle back to campaign state.
+
+    Reads survivors/destroyed from the tactical session, removes destroyed ships,
+    and marks the engagement resolved.  Returns an error if the battle is not yet
+    in Phase.COMPLETE.
+    """
+    from tactical.web import _get_session as _tac_session
+    from tactical.encounter import Phase
+
+    g = _get_galaxy()
+    eng = next((e for e in g.engagements if e.engagement_id == engagement_id), None)
+    if eng is None:
+        return JSONResponse({"error": "engagement not found"}, status_code=404)
+    if eng.status == EngagementStatus.RESOLVED:
+        return JSONResponse({"error": "already resolved"}, status_code=400)
+    if eng.status != EngagementStatus.IN_PROGRESS or not eng.tactical_game_id:
+        return JSONResponse({"error": "no tactical game in progress"}, status_code=400)
+
+    try:
+        tac = _tac_session(eng.tactical_game_id)
+    except KeyError:
+        return JSONResponse({"error": "tactical game session not found"}, status_code=404)
+
+    if tac.enc.phase != Phase.COMPLETE:
+        return JSONResponse({"error": "battle not yet complete"}, status_code=400)
+
+    all_ships = list(tac.enc.battle.ships.values())
+    survivors = [s.ship_id for s in all_ships
+                 if s.systems is None or not s.systems.is_destroyed()]
+    destroyed = [s.ship_id for s in all_ships
+                 if s.systems is not None and s.systems.is_destroyed()]
+    surviving_sides = list({s.owner_id for s in all_ships
+                            if s.systems is None or not s.systems.is_destroyed()})
+    is_draw = len(surviving_sides) == 0
+    winner  = surviving_sides[0] if len(surviving_sides) == 1 else None
+
+    destroyed_set = set(destroyed)
+    for sys_node in g.systems.values():
+        sys_node.ships[:] = [s for s in sys_node.ships if s.ship_id not in destroyed_set]
+
+    idx = g.engagements.index(eng)
+    g.engagements[idx] = Engagement(
+        engagement_id=eng.engagement_id,
+        system_id=eng.system_id,
+        q_sh=eng.q_sh, r_sh=eng.r_sh,
+        ship_ids=eng.ship_ids,
+        status=EngagementStatus.RESOLVED,
+        collision_day=eng.collision_day,
+        tactical_game_id=eng.tactical_game_id,
+    )
+
+    return JSONResponse({
+        "engagement_id": engagement_id,
+        "status":        "resolved",
+        "winner":        winner,
+        "is_draw":       is_draw,
+        "survivors":     survivors,
+        "destroyed":     destroyed,
+    })
+
+
 @router.post("/engagement/{engagement_id}/start-tactical", response_class=JSONResponse)
 async def engagement_start_tactical(engagement_id: str) -> JSONResponse:
     """Build a tactical encounter from the engagement and return its game URL."""
@@ -969,6 +1030,6 @@ async def engagement_start_tactical(engagement_id: str) -> JSONResponse:
 
     return JSONResponse({
         "game_id":  game_id,
-        "url":      f"/tactical/?game_id={game_id}",
+        "url":      f"/tactical/game/{game_id}/",
         "ship_ids": eng.ship_ids,
     })

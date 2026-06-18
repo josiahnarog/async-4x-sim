@@ -27,7 +27,10 @@
                         border-radius: 4px; padding: 3px 6px; font-size: 0.88em;
                         font-family: inherit; cursor: pointer; }
     #game-time-display { color: #a8d8ea; font-size: 0.88em; min-width: 140px; text-align: right; }
-    #canvas-wrap { display: flex; flex-direction: column; width: 100%; height: calc(100vh - 52px); overflow: hidden; position: relative; }
+    /* ---- Main two-column layout ---- */
+    #main-layout { display: flex; width: 100%; height: calc(100vh - 52px); }
+    #canvas-wrap { display: flex; flex-direction: column; flex: 1; min-width: 0;
+                   overflow: hidden; position: relative; }
     #galaxy-svg { width: 100%; flex: 1; min-height: 0; display: block; cursor: grab; }
     #galaxy-svg:active { cursor: grabbing; }
     #scrubber-bar {
@@ -51,23 +54,31 @@
     .legend-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
     .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .seed-badge { color: #444; font-size: 0.78em; }
-    #ship-panel {
-      position: absolute; top: 10px; right: 10px;
-      background: #0d0d1f; border: 1px solid #334; border-radius: 6px;
-      padding: 10px 14px; font-size: 0.78em; min-width: 180px; max-width: 240px;
-    }
-    #ship-panel h3 { margin: 0 0 8px; color: #a8d8ea; font-size: 0.9em; letter-spacing: 0.05em; }
-    .ship-row {
-      display: flex; align-items: center; gap: 8px;
-      padding: 4px 6px; border-radius: 4px; cursor: pointer; margin: 2px 0;
-    }
+    /* ---- Right panel ---- */
+    #right-panel { width: 300px; flex-shrink: 0; border-left: 1px solid #1a1a3a;
+                   overflow-y: auto; display: flex; flex-direction: column;
+                   font-size: 0.8em; padding: 10px 14px; gap: 0; }
+    #right-panel h2 { color: #a8d8ea; margin: 10px 0 4px; font-size: 0.88em;
+                      text-transform: uppercase; letter-spacing: 0.08em; }
+    #right-panel h2:first-child { margin-top: 0; }
+    #right-panel pre { background: #0d0d1a; padding: 6px 8px; border-radius: 5px;
+                       font-size: 0.88em; margin: 0 0 4px; overflow: auto; color: #c8f0c8; }
+    #right-panel .star-pre { color: #ffffaa; }
+    #right-panel .wp-pre   { color: #44ddff; }
+    #sys-detail { border-bottom: 1px solid #1a1a3a; padding-bottom: 10px; margin-bottom: 10px; }
+    #sys-detail-title { color: #a8d8ea; font-size: 0.95em; font-weight: bold;
+                        margin: 0 0 2px; display: flex; align-items: center; gap: 8px; }
+    #sys-detail-link { color: #5588aa; font-size: 0.8em; text-decoration: none; flex-shrink: 0; }
+    #sys-detail-link:hover { color: #a8d8ea; }
+    #sys-detail-placeholder { color: #334; font-style: italic; font-size: 0.88em; padding: 6px 0; }
+    /* ---- Fleet section ---- */
+    .ship-row { display: flex; align-items: center; gap: 8px;
+                padding: 4px 6px; border-radius: 4px; cursor: pointer; margin: 2px 0; }
     .ship-row:hover { background: #1a1a3a; }
     .ship-row.selected { background: #1a2a4a; border: 1px solid #4488ff; }
-    .ship-dot { width: 8px; height: 8px; border-radius: 50%; background: #ffcc00; flex-shrink: 0; }
-    #route-status {
-      margin-top: 8px; padding-top: 8px; border-top: 1px solid #223;
-      color: #556; font-size: 0.85em; min-height: 2em;
-    }
+    .ship-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    #route-status { margin-top: 8px; padding-top: 8px; border-top: 1px solid #1a1a3a;
+                    color: #556; font-size: 0.85em; min-height: 2em; }
   </style>
 </head>
 <body>
@@ -93,41 +104,85 @@
   </div>
 </header>
 
-<div id="canvas-wrap">
-  <svg id="galaxy-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-  <div id="tooltip"></div>
-  <div id="scrubber-bar">
-    <span style="white-space:nowrap;color:#6688aa;font-size:0.82em">Preview:</span>
-    <button id="btn-scrub-play">▶</button>
-    <input type="range" id="gal-time-slider" min="0" max="730" step="0.5" value="0"/>
-    <span id="gal-time-label">Y1 D001 00:00</span>
+<div id="main-layout">
+  <div id="canvas-wrap">
+    <svg id="galaxy-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="tooltip"></div>
+    <div id="scrubber-bar">
+      <span style="white-space:nowrap;color:#6688aa;font-size:0.82em">Preview:</span>
+      <button id="btn-scrub-play">▶</button>
+      <input type="range" id="gal-time-slider" min="0" max="730" step="0.5" value="0"/>
+      <span id="gal-time-label">Y1 D001 00:00</span>
+    </div>
+    <div class="legend">
+      <div style="color:#a8d8ea;margin-bottom:4px;font-size:0.8em">STAR TYPE</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ffffff"></div>White</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ffffaa"></div>Yellow-White</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ffff44"></div>Yellow</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ff9900"></div>Orange</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#ff4422"></div>Red</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#cc1100"></div>Red Dwarf</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#4488ff"></div>Blue Giant</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#aa44ff"></div>Anomaly</div>
+      <div class="legend-row"><div class="legend-dot" style="background:#555555"></div>Starless</div>
+    </div>
   </div>
-  <div id="ship-panel">
-    <h3>SHIPS</h3>
-    <div id="ship-list"><span style="color:#445">loading…</span></div>
-    <div id="route-status">Select a ship, then click a system to route.</div>
-  </div>
-  <div class="legend">
-    <div style="color:#a8d8ea;margin-bottom:4px;font-size:0.8em">STAR TYPE</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ffffff"></div>White</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ffffaa"></div>Yellow-White</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ffff44"></div>Yellow</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ff9900"></div>Orange</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#ff4422"></div>Red</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#cc1100"></div>Red Dwarf</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#4488ff"></div>Blue Giant</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#aa44ff"></div>Anomaly</div>
-    <div class="legend-row"><div class="legend-dot" style="background:#555555"></div>Starless</div>
+
+  <div id="right-panel">
+    <!-- System detail section — populated when a node is clicked -->
+    <div id="sys-detail">
+      <div id="sys-detail-title">
+        <span id="sys-detail-name" style="color:#334;font-style:italic">Galaxy Map</span>
+        <a id="sys-detail-link" href="#" style="display:none">Open →</a>
+      </div>
+      <div id="sys-detail-content">
+        <div id="sys-detail-placeholder">Click a system node to inspect it.<br>Double-click to enter.</div>
+      </div>
+    </div>
+
+    <!-- Fleet section — ship list and routing -->
+    <div id="fleet-section">
+      <h2>Fleet</h2>
+      <div id="ship-list"><span style="color:#445">loading…</span></div>
+      <div id="route-status">Select a ship, then right-click a system to route.</div>
+    </div>
   </div>
 </div>
 
+{% include 'campaign_system_panel.html' %}
 <script>
 (function() {
-  const svg       = document.getElementById('galaxy-svg');
-  const wrap      = document.getElementById('canvas-wrap');
-  const tip       = document.getElementById('tooltip');
-  const shipList  = document.getElementById('ship-list');
+  const svg         = document.getElementById('galaxy-svg');
+  const wrap        = document.getElementById('canvas-wrap');
+  const tip         = document.getElementById('tooltip');
+  const shipList    = document.getElementById('ship-list');
   const routeStatus = document.getElementById('route-status');
+
+  // System detail panel elements
+  const sysDetailName    = document.getElementById('sys-detail-name');
+  const sysDetailLink    = document.getElementById('sys-detail-link');
+  const sysDetailContent = document.getElementById('sys-detail-content');
+  const sysPlaceholder   = document.getElementById('sys-detail-placeholder');
+
+  let _clickTimer = null;
+
+  async function showSystemPanel(nodeId) {
+    sysDetailName.textContent = nodeId;
+    sysDetailName.style.color = '#a8d8ea';
+    sysDetailName.style.fontStyle = 'normal';
+    sysDetailLink.href = `/campaign/system/${nodeId}`;
+    sysDetailLink.style.display = 'inline';
+    sysDetailContent.innerHTML = '<span style="color:#445;font-style:italic">Loading…</span>';
+    if (sysPlaceholder) sysPlaceholder.style.display = 'none';
+
+    try {
+      const resp = await fetch(`/campaign/api/system/${nodeId}`);
+      const data = await resp.json();
+      renderSystemPanel(data, nodeId, displayTime(), sysDetailContent);
+    } catch (e) {
+      sysDetailContent.textContent = `Error: ${e}`;
+    }
+  }
 
   // Pan/zoom state
   let vx = 0, vy = 0, scale = 1;
@@ -296,10 +351,19 @@
         tip.style.top  = (ev.clientY - 10) + 'px';
       });
       circle.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+      // Single click → inspect panel; double-click → navigate into system.
       circle.addEventListener('click', () => {
-        console.log(`[node click] id=${n.id} didDrag=${didDrag} selectedShip=${selectedShipId}`);
         if (didDrag) return;
-        window.location.href = `/campaign/system/${n.id}`;
+        if (_clickTimer !== null) {
+          clearTimeout(_clickTimer);
+          _clickTimer = null;
+          window.location.href = `/campaign/system/${n.id}`;
+          return;
+        }
+        _clickTimer = setTimeout(() => {
+          _clickTimer = null;
+          showSystemPanel(n.id);
+        }, 260);
       });
       circle.addEventListener('contextmenu', ev => {
         ev.preventDefault();
@@ -589,7 +653,7 @@
     });
     if (selectedShipId) {
       const s = allShips.find(x => x.ship_id === selectedShipId);
-      routeStatus.textContent = `Routing ${s.name} — right-click a destination system.`;
+      routeStatus.textContent = `Routing ${s ? s.name : selectedShipId} — right-click a destination system.`;
       routeStatus.style.color = '#4488ff';
     } else {
       routeStatus.textContent = 'Select a ship, then right-click a system to route.';

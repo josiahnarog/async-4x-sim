@@ -95,7 +95,8 @@ def _generate_candidates(
     position with all 6 possible facings is also included (so the AI can
     choose to "turn in place" if that improves arc coverage).
     """
-    occupied = battle.ship_occupied_hexes(exclude=[ship.ship_id])
+    occupied  = battle.ship_occupied_hexes(exclude=[ship.ship_id])
+    reachable = ship.reachable_positions(cap, frozenset(occupied))
     enemy_ships = [s for s in battle.ships.values() if s.owner_id != ship.owner_id]
 
     if not enemy_ships:
@@ -110,10 +111,7 @@ def _generate_candidates(
         if key in seen:
             return
         seen.add(key)
-        if dest in occupied:
-            return
-        cost = ship.min_mp_to_reach(dest, facing)
-        if cost > cap:
+        if (dest, facing) not in reachable:
             return
         candidates.append((dest, facing))
 

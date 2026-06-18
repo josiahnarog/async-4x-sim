@@ -5,49 +5,70 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Tactical Encounter</title>
   <style>
-    body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace; margin: 16px; background: #1a1a2e; color: #e0e0e0; }
-    h1 { color: #a8d8ea; margin-bottom: 4px; }
-    h2 { color: #a8d8ea; margin: 12px 0 6px; font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.08em; }
-    .phase { color: #f0e68c; margin-bottom: 12px; font-size: 0.95em; }
-    .row { display: flex; gap: 16px; align-items: flex-start; }
-    .col-map { flex: 0 0 auto; }
-    .col-right { flex: 1; min-width: 320px; }
-    canvas { display: block; background: #0d0d1a; border-radius: 6px; }
-    pre { background: #0d0d1a; padding: 12px; border-radius: 6px; overflow: auto; color: #c8f0c8; font-size: 0.88em; margin: 0; }
-    .ships-pre { color: #d0d8ff; }
-    .log-pre { color: #c0c0c0; max-height: 320px; overflow-y: auto; }
-    .cmd-row { display: flex; gap: 8px; margin-top: 8px; }
-    input[type=text] { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.95em; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body { font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+           background: #1a1a2e; color: #e0e0e0;
+           padding: 8px 14px 6px; display: flex; flex-direction: column; }
+    h1  { color: #a8d8ea; margin: 0 0 1px; font-size: 1.05em; }
+    h2  { color: #a8d8ea; margin: 8px 0 4px; font-size: 0.88em;
+          text-transform: uppercase; letter-spacing: 0.08em; }
+    .phase { color: #f0e68c; font-size: 0.88em; margin-bottom: 4px; }
+    .top-bar { flex-shrink: 0; }
+    .main-row { display: flex; gap: 12px; flex: 1; min-height: 0; }
+    /* Map column */
+    .col-map { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+    .canvas-wrap { flex: 1; min-height: 0; border-radius: 6px; overflow: hidden; }
+    canvas { width: 100%; height: 100%; display: block; background: #0d0d1a; cursor: grab; }
+    canvas:active { cursor: grabbing; }
+    .zoom-bar { display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-shrink: 0; }
+    .unit-info { background: #0d0d1a; border-radius: 6px; padding: 5px 10px;
+                 margin-bottom: 4px; font-size: 0.78em; color: #888;
+                 min-height: 30px; flex-shrink: 0; }
+    .unit-info-id   { color: #a8d8ea; font-weight: bold; }
+    .unit-info-sys  { color: #c8f0c8; word-break: break-all; }
+    .unit-info-meta { color: #aaa; }
+    /* Right column */
+    .col-right { width: 300px; flex-shrink: 0; display: flex; flex-direction: column;
+                 overflow-y: auto; }
+    pre { background: #0d0d1a; padding: 8px 10px; border-radius: 6px; overflow: auto;
+          color: #c8f0c8; font-size: 0.8em; margin: 0; }
+    .ships-pre { color: #d0d8ff; max-height: 200px; overflow-y: auto; }
+    .log-pre   { color: #c0c0c0; max-height: 260px; overflow-y: auto; }
+    .cmd-row { display: flex; gap: 6px; margin-top: 4px; }
+    input[type=text] { flex: 1; padding: 6px 10px; border-radius: 6px; border: 1px solid #444;
+                       background: #0d0d1a; color: #e0e0e0; font-family: inherit; font-size: 0.88em; }
     input[type=text]:focus { outline: none; border-color: #a8d8ea; }
-    button { padding: 8px 16px; border-radius: 6px; border: 1px solid #555; background: #2a2a4a; color: #e0e0e0; cursor: pointer; font-family: inherit; }
+    button { padding: 5px 12px; border-radius: 6px; border: 1px solid #555; background: #2a2a4a;
+             color: #e0e0e0; cursor: pointer; font-family: inherit; font-size: 0.85em; }
     button:hover { background: #3a3a6a; }
-    .hint { font-size: 0.78em; color: #888; margin-top: 6px; line-height: 1.7; }
+    .hint-toggle { font-size: 0.74em; color: #5588aa; cursor: pointer; margin-top: 4px;
+                   user-select: none; }
+    .hint { font-size: 0.74em; color: #888; margin-top: 2px; line-height: 1.6; display: none; }
+    .hint.open { display: block; }
     .hint b { color: #aaa; }
-    .tab-bar { display: flex; gap: 4px; margin-bottom: 10px; }
-    .tab { padding: 6px 16px; border-radius: 6px 6px 0 0; border: 1px solid #444; background: #1a1a2e; color: #888; text-decoration: none; font-size: 0.88em; }
+    .tab-bar { display: flex; gap: 4px; margin-bottom: 6px; }
+    .tab { padding: 4px 12px; border-radius: 6px 6px 0 0; border: 1px solid #444;
+           background: #1a1a2e; color: #888; text-decoration: none; font-size: 0.82em; }
     .tab.active { background: #2a2a4a; color: #a8d8ea; border-bottom-color: #2a2a4a; }
-    .action-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .action-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
     .btn-ai     { background: #1a3a2a; border-color: #3a6a4a; color: #a0d8b0; }
     .btn-ai:hover { background: #2a5a3a; }
     .btn-commit { background: #2a1a3a; border-color: #5a3a6a; color: #c8a8e8; font-weight: bold; }
     .btn-commit:hover { background: #3a2a5a; }
-    .action-sep { color: #555; margin: 0 4px; }
-    .unit-info-id   { color: #a8d8ea; font-weight: bold; }
-    .unit-info-sys  { color: #c8f0c8; word-break: break-all; }
-    .unit-info-meta { color: #aaa; }
+    .action-sep { color: #555; margin: 0 2px; }
   </style>
 </head>
 <body>
-  <h1>Tactical Encounter — {{ game_name }}</h1>
+<div class="top-bar">
+  <h1>Tactical — {{ game_name }}</h1>
   <div class="phase">{{ phase }}</div>
-
   <div class="tab-bar">
     <a href="/tactical/"                                           class="tab">⬅ Lobby</a>
     <a href="/tactical/game/{{ game_id }}/?view=A"      class="tab {% if view == 'A' %}active{% endif %}">Side A</a>
     <a href="/tactical/game/{{ game_id }}/?view=B"      class="tab {% if view == 'B' %}active{% endif %}">Side B</a>
     <a href="/tactical/game/{{ game_id }}/?view=master" class="tab {% if view == 'master' %}active{% endif %}">Master</a>
   </div>
-
   <div class="action-bar">
     {% for side in sides %}
     <form method="post" action="/tactical/game/{{ game_id }}/ai_turn/{{ side }}?view={{ view }}" style="display:inline">
@@ -66,63 +87,49 @@
     </form>
     {% endif %}
   </div>
+</div>
 
-  <div class="row">
-    <div class="col-map">
-      <h2>Map <span style="font-size:0.8em;font-weight:normal;color:#888">(drag to pan · scroll to zoom · left-click to select · right-click to command)</span></h2>
-      <div id="unit-info-panel" style="width:640px;min-height:48px;background:#0d0d1a;border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:0.82em;color:#888;font-family:inherit;box-sizing:border-box;">
-        <span style="color:#555;font-style:italic">No unit selected</span>
-      </div>
-      <canvas id="hexmap" width="640" height="640" style="cursor:grab"></canvas>
-      <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
-        <button id="btn-zoom-in"  onclick="adjustZoom(1.25)">＋</button>
-        <button id="btn-zoom-out" onclick="adjustZoom(0.8)">－</button>
-        <button onclick="resetView()">⌖ Reset</button>
-        <span id="zoom-label" style="font-size:0.8em;color:#888;margin-left:4px">100%</span>
-      </div>
-
-      <h2>Units</h2>
-      <pre class="ships-pre">{{ units_text }}</pre>
+<div class="main-row">
+  <div class="col-map">
+    <div id="unit-info-panel" class="unit-info">
+      <span style="color:#555;font-style:italic">No unit selected</span>
     </div>
-
-    <div class="col-right">
-      <h2>Command</h2>
-      <form method="post" action="/tactical/game/{{ game_id }}/command?view={{ view }}">
-        <div class="cmd-row">
-          <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. move A1 3  |  fireall A1 B1"/>
-          <button type="submit">Send</button>
-        </div>
-      </form>
-      <div class="hint">
-        <b>Movement (MOVE_SUBMISSION):</b><br/>
-        <code>move &lt;id&gt; &lt;n&gt;</code> — forward n hexes &nbsp;|&nbsp;
-        <code>tl/tr &lt;id&gt;</code> — turn left/right &nbsp;|&nbsp;
-        <code>spend &lt;id&gt; &lt;n&gt;</code> — charge turn<br/>
-        <code>launch &lt;carrier_id&gt; &lt;squad_id&gt;</code> — stage squadron launch (executes at movement resolution)<br/>
-        <code>commit move</code> — resolve movement for all sides<br/>
-        <br/>
-        <b>Combat (COMBAT_SUBMISSION):</b><br/>
-        <code>fireall &lt;id&gt; &lt;tgt&gt;</code> — stage fire &nbsp;|&nbsp;
-        <code>pass &lt;id&gt;</code> &nbsp;|&nbsp;
-        <code>commit fire</code><br/>
-        <br/>
-        <b>Fighters (COMBAT_SMALL):</b><br/>
-        <code>intercept &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> — patrol hex &nbsp;|&nbsp;
-        <code>strike &lt;id&gt; &lt;tgt&gt;</code> — attack ship or squadron &nbsp;|&nbsp;
-        <code>breakoff &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> — disengage + move<br/>
-        <code>recover &lt;squad_id&gt; &lt;carrier_id&gt;</code> — dock squadron (must be on carrier's hex)<br/>
-        <code>commit squadrons</code> — resolve fighter phase<br/>
-        <br/>
-        <b>Debug:</b>
-        <code>quickfire &lt;att&gt; &lt;tgt&gt;</code> &nbsp;|&nbsp;
-        <code>shoot &lt;att&gt; &lt;tgt&gt; &lt;w&gt;</code> &nbsp;|&nbsp;
-        <code>reset</code>
-      </div>
-
-      <h2>Log</h2>
-      <pre class="log-pre" id="log">{{ log }}</pre>
+    <div class="canvas-wrap">
+      <canvas id="hexmap"></canvas>
+    </div>
+    <div class="zoom-bar">
+      <button id="btn-zoom-in"  onclick="adjustZoom(1.25)">＋</button>
+      <button id="btn-zoom-out" onclick="adjustZoom(0.8)">－</button>
+      <button onclick="resetView()">⌖ Reset</button>
+      <span id="zoom-label" style="font-size:0.8em;color:#888">100%</span>
+      <span style="font-size:0.74em;color:#555;margin-left:8px">drag · scroll · left-click · right-click</span>
     </div>
   </div>
+
+  <div class="col-right">
+    <h2>Command</h2>
+    <form method="post" action="/tactical/game/{{ game_id }}/command?view={{ view }}">
+      <div class="cmd-row">
+        <input type="text" name="cmd" id="cmd" autofocus placeholder="e.g. move A1 3  |  fireall A1 B1"/>
+        <button type="submit">Send</button>
+      </div>
+    </form>
+    <span class="hint-toggle" onclick="this.nextElementSibling.classList.toggle('open');this.textContent=this.nextElementSibling.classList.contains('open')?'▼ Commands':'▶ Commands'">▶ Commands</span>
+    <div class="hint">
+      <b>Move:</b> <code>move &lt;id&gt; &lt;n&gt;</code> fwd &nbsp;|&nbsp; <code>tl/tr &lt;id&gt;</code> turn &nbsp;|&nbsp; <code>spend &lt;id&gt; &lt;n&gt;</code><br/>
+      <code>launch &lt;carrier&gt; &lt;squad&gt;</code> &nbsp;|&nbsp; <code>commit move</code><br/>
+      <b>Fire:</b> <code>fireall &lt;id&gt; &lt;tgt&gt;</code> &nbsp;|&nbsp; <code>pass &lt;id&gt;</code> &nbsp;|&nbsp; <code>commit fire</code><br/>
+      <b>Fighters:</b> <code>intercept &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> &nbsp;|&nbsp; <code>strike &lt;id&gt; &lt;tgt&gt;</code><br/>
+      <code>breakoff &lt;id&gt; &lt;q&gt; &lt;r&gt;</code> &nbsp;|&nbsp; <code>recover &lt;sq&gt; &lt;carrier&gt;</code> &nbsp;|&nbsp; <code>commit squadrons</code>
+    </div>
+
+    <h2>Log</h2>
+    <pre class="log-pre" id="log">{{ log }}</pre>
+
+    <h2>Units</h2>
+    <pre class="ships-pre">{{ units_text }}</pre>
+  </div>
+</div>
 
   <script>
     // -----------------------------------------------------------------------
@@ -155,14 +162,28 @@
     let zoom = 1.0;
     const MIN_ZOOM = 0.25, MAX_ZOOM = 4.0;
 
+    // Persist pan/zoom in sessionStorage so page reloads don't reset the view.
+    const _VKEY = 'tac_view_{{ game_id }}';
+    function saveView() {
+      try { sessionStorage.setItem(_VKEY, JSON.stringify({panX, panY, zoom})); } catch(e) {}
+    }
+    function loadView() {
+      try {
+        const s = sessionStorage.getItem(_VKEY);
+        if (s) { const v = JSON.parse(s); panX = v.panX||0; panY = v.panY||0; zoom = v.zoom||1; }
+      } catch(e) {}
+    }
+
     function adjustZoom(factor) {
       zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor));
       document.getElementById("zoom-label").textContent = Math.round(zoom * 100) + "%";
+      saveView();
       render();
     }
     function resetView() {
       panX = 0; panY = 0; zoom = 1.0;
       document.getElementById("zoom-label").textContent = "100%";
+      saveView();
       render();
     }
 
@@ -243,8 +264,30 @@
     }
 
     // ---- Hex math helpers ----
-    // Flat-top axial hex directions: N NE SE S SW NW
-    const HEX_OFFSETS = [{dq:0,dr:1},{dq:1,dr:0},{dq:1,dr:-1},{dq:0,dr:-1},{dq:-1,dr:0},{dq:-1,dr:1}];
+    // Sourced directly from Python FACING_OFFSETS (tactical/facing.py) via template injection.
+    // Indexed 0-5: N, NE, SE, S, SW, NW.
+    const HEX_OFFSETS = ({{ facing_offsets_json | safe }}).map(([dq, dr]) => ({dq, dr}));
+
+    // Convert a facing index to its canvas angle (radians).
+    // Derived from HEX_OFFSETS so it stays consistent with any future facing changes.
+    function facingAngle(f) {
+      const {dq, dr} = HEX_OFFSETS[f];
+      return Math.atan2(SQ3 / 2 * dq + SQ3 * dr, 1.5 * dq);
+    }
+
+    // Snap a canvas direction vector (dx, dy) to the nearest facing index.
+    // Uses cosine similarity against HEX_OFFSETS — no baked-in angle assumptions.
+    function angleToFacing(dx, dy) {
+      const mag = Math.hypot(dx, dy);
+      let best = 0, bestDot = -Infinity;
+      for (let f = 0; f < 6; f++) {
+        const {dq, dr} = HEX_OFFSETS[f];
+        const pdx = 1.5 * dq, pdy = SQ3 / 2 * dq + SQ3 * dr;
+        const dot = (dx * pdx + dy * pdy) / (mag * Math.hypot(pdx, pdy));
+        if (dot > bestDot) { bestDot = dot; best = f; }
+      }
+      return best;
+    }
 
     // All occupied hex keys (excluding the given ship_id so it doesn't block itself).
     function occupiedKeys(excludeId) {
@@ -297,11 +340,11 @@
           if (!costs.has(hf) || costs.get(hf) > mp) costs.set(hf, mp);
         }
 
-        // Turn transitions (0 MP cost, requires c >= tc).
+        // Turn transitions (0 MP cost, requires c >= tc; charge resets to 0).
         if (c >= tc) {
           for (const df of [-1, 1]) {
             const nf = ((f + df) % 6 + 6) % 6;
-            const nc = c - tc;
+            const nc = 0;  // charge resets to 0 after turn (mirrors Python)
             const nk = stKey(q, r, nf, nc);
             if (!distMap.has(nk) || distMap.get(nk) > mp) {
               distMap.set(nk, mp);
@@ -312,11 +355,11 @@
 
         if (mp >= cap) continue;
 
-        // Move forward 1 hex (1 MP, earn 1 charge).
+        // Move forward 1 hex (1 MP, charge += 1 clamped to tc).
         const off = HEX_OFFSETS[f];
         const nq = q + off.dq, nr = r + off.dr;
         if (!occ.has(`${nq},${nr}`)) {
-          const nc = c + 1, nmp = mp + 1;
+          const nc = Math.min(c + 1, tc), nmp = mp + 1;
           const nk = stKey(nq, nr, f, nc);
           if (!distMap.has(nk) || distMap.get(nk) > nmp) {
             distMap.set(nk, nmp);
@@ -324,9 +367,9 @@
           }
         }
 
-        // Spend 1 MP (earn 1 charge without moving).
+        // Spend 1 MP idle (charge += 1 clamped to tc, no movement).
         {
-          const nc = c + 1, nmp = mp + 1;
+          const nc = Math.min(c + 1, tc), nmp = mp + 1;
           const nk = stKey(q, r, f, nc);
           if (!distMap.has(nk) || distMap.get(nk) > nmp) {
             distMap.set(nk, nmp);
@@ -514,6 +557,8 @@
       if (Math.sqrt(dx*dx + dy*dy) < 5) {
         const rect = canvas.getBoundingClientRect();
         handleCanvasClick(e.clientX - rect.left, e.clientY - rect.top);
+      } else {
+        saveView();
       }
     });
     canvas.addEventListener("mouseleave", () => { isPanning = false; canvas.style.cursor = "grab"; });
@@ -540,6 +585,7 @@
       panX = mouseX - canvas.width/2  - wx * zoom;
       panY = mouseY - canvas.height/2 - wy * zoom;
       document.getElementById("zoom-label").textContent = Math.round(zoom * 100) + "%";
+      saveView();
       render();
     }, { passive: false });
 
@@ -628,7 +674,7 @@
       const endpoint = hexToPixel(hexes[hexes.length - 1].q, hexes[hexes.length - 1].r, cx, cy);
       ctx.setLineDash([]);
       ctx.globalAlpha = 0.7;
-      const angle    = -Math.PI / 2 + finalFacing * (Math.PI / 3);
+      const angle    = facingAngle(finalFacing);
       const arrowLen = SIZE * 0.48;
       const tipX = endpoint.x + arrowLen * Math.cos(angle);
       const tipY = endpoint.y + arrowLen * Math.sin(angle);
@@ -786,7 +832,7 @@
       ctx.stroke();
 
       // Facing arrow (pointing from center outward)
-      const angle = -Math.PI / 2 + ship.facing * (Math.PI / 3);
+      const angle = facingAngle(ship.facing);
       const arrowLen = SIZE * 0.55;
       const tipX = x + arrowLen * Math.cos(angle);
       const tipY = y + arrowLen * Math.sin(angle);
@@ -1014,7 +1060,7 @@
       for (let f = 0; f < 6; f++) {
         const cost = bfsCosts.get(`${destQ},${destR},${f}`);
         const reachable = cost !== undefined;
-        const angle = -Math.PI / 2 + f * (Math.PI / 3);
+        const angle = facingAngle(f);
         const tipX = x + arrowLen * Math.cos(angle);
         const tipY = y + arrowLen * Math.sin(angle);
         ctx.globalAlpha = reachable ? 0.45 : 0.15;
@@ -1041,7 +1087,7 @@
         const snapFacing   = angleToFacing(dx, dy);
         const snapCost     = bfsCosts.get(`${destQ},${destR},${snapFacing}`);
         const snapReachable = snapCost !== undefined;
-        const snapAngle = -Math.PI / 2 + snapFacing * (Math.PI / 3);
+        const snapAngle = facingAngle(snapFacing);
         const tipX = x + arrowLen * Math.cos(snapAngle);
         const tipY = y + arrowLen * Math.sin(snapAngle);
         ctx.setLineDash([]);
@@ -1152,7 +1198,7 @@
       const wxCenter = -panX / zoom;
       const wyCenter = -panY / zoom;
       const qCenterF = wxCenter / (SIZE * 1.5);
-      const rCenterF = -wyCenter / (SIZE * SQ3) - qCenterF / 2;
+      const rCenterF = wyCenter / (SIZE * SQ3) - qCenterF / 2;
       const cq = Math.round(qCenterF);
       const cr = Math.round(rCenterF);
 
@@ -1208,6 +1254,21 @@
       }
     });
 
+    // Canvas resize: sync drawing buffer to CSS layout size so the canvas fills its container.
+    function syncCanvasSize() {
+      const w = canvas.offsetWidth, h = canvas.offsetHeight;
+      if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+        canvas.width = w;
+        canvas.height = h;
+        render();
+      }
+    }
+    new ResizeObserver(syncCanvasSize).observe(canvas);
+
+    // Initialise: restore saved view, sync size, draw.
+    loadView();
+    document.getElementById("zoom-label").textContent = Math.round(zoom * 100) + "%";
+    syncCanvasSize();
     render();
 
     // Scroll log to bottom

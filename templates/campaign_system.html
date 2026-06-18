@@ -143,28 +143,7 @@
   </div>
 
   <div class="panel">
-    <h2>Stars</h2>
-    {% for line in star_info %}
-    <pre class="star-pre">{{ line }}</pre>
-    {% else %}
-    <pre class="star-pre">Starless node</pre>
-    {% endfor %}
-
-    <h2>Planets</h2>
-    {% if planet_info %}
-    <pre>{% for line in planet_info %}{{ line }}
-{% endfor %}</pre>
-    {% else %}
-    <pre style="color:#555">No planets</pre>
-    {% endif %}
-
-    <h2>Warp Points</h2>
-    {% if wp_info %}
-    <pre class="wp-pre">{% for line in wp_info %}{{ line }}
-{% endfor %}</pre>
-    {% else %}
-    <pre class="wp-pre" style="color:#555">No warp points</pre>
-    {% endif %}
+    <div id="system-info-panel"></div>
 
     <div class="legend">
       <h2>Legend</h2>
@@ -190,14 +169,19 @@
     <h2>&#9876; COMBAT ENGAGED</h2>
     <div id="combat-ship-list"></div>
     <div id="combat-result"></div>
-    <div>
+    <div id="combat-actions-pending">
       <button class="combat-btn primary" id="btn-fight">Fight Manually</button>
       <button class="combat-btn" id="btn-auto">Auto-resolve</button>
       <button class="combat-btn" id="btn-combat-close">Close</button>
     </div>
+    <div id="combat-actions-inprogress" style="display:none">
+      <a id="btn-view-battle" class="combat-btn" target="_blank" style="text-decoration:none">View Battle</a>
+      <button class="combat-btn" id="btn-combat-close2">Close</button>
+    </div>
   </div>
 </div>
 
+{% include 'campaign_system_panel.html' %}
 <script>
 // ============================================================
 // Orbital data (injected by server)
@@ -994,39 +978,102 @@ function findIntercept(fromQ, fromR, sHPerDay, getTargetHex, tNow) {
 // Combat modal
 // ============================================================
 
-const combatModal    = document.getElementById('combat-modal');
-const combatShipList = document.getElementById('combat-ship-list');
-const combatResult   = document.getElementById('combat-result');
-const btnFight       = document.getElementById('btn-fight');
-const btnAuto        = document.getElementById('btn-auto');
-const btnCombatClose = document.getElementById('btn-combat-close');
+const combatModal       = document.getElementById('combat-modal');
+const combatShipList    = document.getElementById('combat-ship-list');
+const combatResult      = document.getElementById('combat-result');
+const btnFight          = document.getElementById('btn-fight');
+const btnAuto           = document.getElementById('btn-auto');
+const btnCombatClose    = document.getElementById('btn-combat-close');
+const actionsPending    = document.getElementById('combat-actions-pending');
+const actionsInProgress = document.getElementById('combat-actions-inprogress');
+const btnViewBattle     = document.getElementById('btn-view-battle');
+const btnCombatClose2   = document.getElementById('btn-combat-close2');
 
 let activeCombatEng = null;
+let _pollTimer      = null;
+
+function _stopPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+async function _checkAndApplyResult() {
+  const eng = activeCombatEng;
+  if (!eng || !eng.tactical_game_id) return;
+
+  let result;
+  try {
+    const r = await fetch(`/tactical/game/${eng.tactical_game_id}/result`);
+    result = await r.json();
+  } catch (e) { return; }
+
+  if (!result.is_complete) return;
+
+  _stopPolling();
+  combatResult.textContent = 'Battle over — applying result…';
+
+  let data;
+  try {
+    const r = await fetch(
+      `/campaign/engagement/${eng.engagement_id}/apply-tactical-result`,
+      { method: 'POST' }
+    );
+    data = await r.json();
+  } catch (e) {
+    combatResult.textContent = 'Error applying result.';
+    return;
+  }
+
+  if (data.error) { combatResult.textContent = `Error: ${data.error}`; return; }
+
+  const outcome = data.is_draw ? 'Draw — mutual destruction!' : `${data.winner} wins!`;
+  combatResult.textContent = `${outcome} Destroyed: ${data.destroyed.join(', ') || 'none'}.`;
+  await _refreshOrbital();
+  setTimeout(closeCombatModal, 2500);
+}
 
 function openCombatModal(eng) {
+  _stopPolling();
   activeCombatEng = eng;
   combatResult.textContent = '';
-  btnFight.disabled = false;
-  btnAuto.disabled  = false;
 
-  // List ships in this engagement
   const shipNames = eng.ship_ids.map(sid => {
     const s = (ORBITAL.ships || []).find(x => x.ship_id === sid);
     return s ? `${s.name} (${s.hull_type}, ${s.owner})` : sid;
   });
-  combatShipList.innerHTML = shipNames.map(n =>
-    `<div>&#9654; ${n}</div>`
-  ).join('');
+  combatShipList.innerHTML = shipNames.map(n => `<div>&#9654; ${n}</div>`).join('');
+
+  const inProgress = eng.status === 'in_progress';
+  actionsPending.style.display    = inProgress ? 'none' : '';
+  actionsInProgress.style.display = inProgress ? ''     : 'none';
+  btnFight.disabled = false;
+  btnAuto.disabled  = false;
+
+  if (inProgress && eng.tactical_game_id) {
+    btnViewBattle.href = `/tactical/game/${eng.tactical_game_id}/`;
+    combatResult.textContent = 'Battle in progress — waiting for result…';
+    _checkAndApplyResult();
+    _pollTimer = setInterval(_checkAndApplyResult, 4000);
+  }
 
   combatModal.classList.add('open');
 }
 
 function closeCombatModal() {
+  _stopPolling();
   combatModal.classList.remove('open');
   activeCombatEng = null;
 }
 
+async function _refreshOrbital() {
+  const resp = await fetch('/campaign/api/system/' + NODE_ID);
+  const data = await resp.json();
+  Object.assign(ORBITAL, data);
+  render(displayTime());
+  renderSystemPanel(ORBITAL, NODE_ID, tGame, document.getElementById('system-info-panel'));
+}
+
 btnCombatClose.addEventListener('click', closeCombatModal);
+btnCombatClose2.addEventListener('click', closeCombatModal);
 
 btnFight.addEventListener('click', async () => {
   if (!activeCombatEng) return;
@@ -1044,14 +1091,10 @@ btnFight.addEventListener('click', async () => {
     btnAuto.disabled  = false;
     return;
   }
-  // Open tactical view in new tab; mark engagement in-progress
   window.open(data.url, '_blank');
-  combatResult.textContent = `Tactical game launched (${data.game_id}). Resolve combat and return here.`;
-  // Refresh ORBITAL to reflect in_progress status
-  const refresh = await fetch('/campaign/api/system/' + NODE_ID);
-  const refreshData = await refresh.json();
-  Object.assign(ORBITAL, refreshData);
-  render(displayTime());
+  activeCombatEng = { ...activeCombatEng, status: 'in_progress', tactical_game_id: data.game_id };
+  await _refreshOrbital();
+  openCombatModal(activeCombatEng);
 });
 
 btnAuto.addEventListener('click', async () => {
@@ -1070,14 +1113,9 @@ btnAuto.addEventListener('click', async () => {
     btnAuto.disabled  = false;
     return;
   }
-  combatResult.textContent =
-    `${data.winner} wins! Destroyed: ${data.destroyed.join(', ') || 'none'}.`;
-  // Refresh orbital data (destroyed ships gone, engagement resolved)
-  const refresh = await fetch('/campaign/api/system/' + NODE_ID);
-  const refreshData = await refresh.json();
-  Object.assign(ORBITAL, refreshData);
-  render(displayTime());
-  // Close after brief pause so player can read the result
+  const outcome = data.winner ? `${data.winner} wins!` : 'Draw!';
+  combatResult.textContent = `${outcome} Destroyed: ${data.destroyed.join(', ') || 'none'}.`;
+  await _refreshOrbital();
   setTimeout(closeCombatModal, 2000);
 });
 
@@ -1088,6 +1126,7 @@ updateGameTimeDisplay();
 scrubberLabel.textContent = formatGameTime(tGame);
 scrubberBar.style.display = 'flex';
 render(tGame);
+renderSystemPanel(ORBITAL, NODE_ID, tGame, document.getElementById('system-info-panel'));
 
 // Show modal if there are already pending engagements in this system on load
 {
